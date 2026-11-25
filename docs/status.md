@@ -421,9 +421,20 @@ in the relevant section or issue and removes the entry.
    on Linux. Linux fresh verified 192-member runtime; 44 direct tests
    (including actual linked program 41 42 before/after passes),
    282 adjacent tests pass. Other hosted platforms not run.
-   Next: remaining shared frame registry/cross-module failures,
-   worker-prior/changed-module and Source; wait for the active
-   checkpoint's independent results before dispatching its successor.
+   #20 single-collector frame registry witnesses: removed three retired
+   exported symbol expectations, reconciled the exact TLS/storage and
+   raw import contracts. Owned object emission actually verified x86-64
+   ELF, AArch64 ELF, Mach-O and COFF symbol sets (including Windows TLS
+   index and x86 inline zero fill). Replaced retired GC4 pool/global
+   registry C harnesses with real PCC native single-collector probes:
+   verify unique archive owner, frame registration inactive, pool drain,
+   and four threads held inside frame scopes while a fifth observes
+   roots, then 512 mutations each. Fresh verified 192-member Linux
+   runtime: 30 focused tests pass; external LLVM/clang reference
+   test remains in the hosted job (clang unavailable on this host).
+   Next: remaining cross-module failures, worker-prior/changed-module
+   and Source; wait for the active checkpoint's independent wheel
+   evidence before dispatching its successor.
    #20 on the local Mac at `25a309945`: the named CI-contract files and the
    shared frame tests pass. `tests/test_ci_native_object_regressions.py`'s
    host-only model controls failed only on macOS, from the gate's
@@ -438,7 +449,7 @@ in the relevant section or issue and removes the entry.
    native callback evidence as recorded in Checkpoint above.
 
    Claims:
-   - #20 single collector frame registry witnesses: Codex, Linux, 2026-11-25T15:40Z, area runtime-gc
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State

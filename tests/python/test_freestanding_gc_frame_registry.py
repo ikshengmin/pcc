@@ -16,7 +16,6 @@ from pcc.frontends.python.codegen.runtime_abi import (
     FREESTANDING_GC_THREAD_LOCAL_GLOBALS,
     RUNTIME_SIGNATURES,
 )
-from tests.runtime_build_cache import cached_threaded_pcc_python_runtime
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -38,8 +37,6 @@ INTERNAL_SYMBOLS = {
     "pcc_gc_frame_node_alloc",
     "pcc_gc_frame_node_bucket",
     "pcc_gc_frame_node_create",
-    "pcc_gc_frame_node_pool_counts_get",
-    "pcc_gc_frame_node_pool_heads_get",
     "pcc_gc_frame_node_release",
     "pcc_gc_frame_node_size",
     "pcc_gc_frame_node_tls_pool_cached_count",
@@ -49,8 +46,6 @@ INTERNAL_SYMBOLS = {
     "pcc_gc_should_track_frame_roots",
     # Whether the precise stack walk roots a mapped frame's slots.
     "pcc_gc_frame_slots_walked",
-    # Whether a count-free collector's stack scan roots a frame's slots.
-    "pcc_gc_frame_slots_conservative",
     # Explicit activation-private scopes are owned by the same raw module.
     "pcc_gc_local_frame_find",
     "pcc_gc_local_frame_take",
@@ -89,6 +84,12 @@ OTHER_GC_TLS_STORAGE = {
     ),
     "pcc_gc_tls_live_bytes_delta": (
         "freestanding_gc_object_nodes", "define_thread_local_i32", (0,),
+    ),
+    "pcc_process_main_anchor": (
+        "freestanding_process_main", "define_thread_local_ptr_null", (),
+    ),
+    "pcc_tls_young_log_unbuffered": (
+        "freestanding_gc_tracking", "define_thread_local_i32", (0,),
     ),
 }
 
@@ -159,7 +160,6 @@ RAW_ONLY_CROSS_OBJECT_SYMBOLS = {
     "pcc_thread_is_running",
 }
 RAW_FUNCTION_IMPORTS = RAW_ONLY_CROSS_OBJECT_SYMBOLS | {
-    "pcc_gc_backend3_revoke_closed_young_domain",
     "free",
     "malloc",
     "memset",
@@ -178,13 +178,9 @@ RAW_FUNCTION_IMPORTS = RAW_ONLY_CROSS_OBJECT_SYMBOLS | {
 }
 RAW_GLOBAL_IMPORTS = {
     "pcc_gc_backend0_frame_roots_enabled",
-    # Count-free collectors scan stacks: their stack frames need no node.
-    "pcc_gc_backend4_no_refcounts",
     "pcc_gc_backend3_frame_root_scan_cursor",
     "pcc_gc_backend3_frame_root_scan_slot",
-    "pcc_gc_backend_selected",
     "pcc_gc_config_initialized",
-    "pcc_gc_explicit_collect_active",
     "pcc_gc_frame_head",
     # The cached final pcc_gc_stackmap_roots_mode answer.
     "pcc_gc_stackmap_walk_state",
@@ -205,21 +201,43 @@ def _compile_object(tmp_path: Path, emitter: str, target_triple: str) -> Path:
         target_triple=target_triple,
     )
     ir_text = llvm_ir.read_text(encoding="utf-8")
-    source = llvm_ir
+    obj = tmp_path / ("freestanding_gc_frame_registry_" + emitter + ".o")
     if emitter == "self":
         from pcc.backend.self_backend_dispatch import emit_self_asm
+        from pcc.backend.target_objects import encode_assembly_object
 
-        source = tmp_path / "freestanding_gc_frame_registry.s"
-        source.write_text(emit_self_asm(ir_text), encoding="utf-8")
-    obj = tmp_path / ("freestanding_gc_frame_registry_" + emitter + ".o")
-    result = subprocess.run(
-        ["clang", "-c", str(source), "-o", str(obj)],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
+        obj.write_bytes(encode_assembly_object(emit_self_asm(ir_text), target_triple))
+    else:
+        result = subprocess.run(
+            ["clang", "-c", str(llvm_ir), "-o", str(obj)],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
     return obj
+
+
+def _object_external_symbols(payload, target):
+    """Inspect real object tables with the compiler-owned target reader."""
+    if "linux" in target:
+        from pcc.backend.elf_x86_64 import parse_relocatable, STB_GLOBAL, STB_WEAK
+        rows = [(symbol.name, symbol.section_index)
+                for symbol in parse_relocatable(payload).symbols
+                if symbol.binding in (STB_GLOBAL, STB_WEAK)]
+    elif "windows" in target:
+        from pcc.backend.coff_x86_64 import parse_object
+        rows = [(symbol.name, symbol.section) for symbol in parse_object(payload).symbols
+                if symbol.external]
+    elif payload.startswith(b"\xcf\xfa\xed\xfe"):
+        from pcc.backend.macho_spec import parse_object, N_EXT, N_TYPE, N_UNDF
+        rows = [(symbol["name"].lstrip("_"),
+                 0 if symbol["n_type"] & N_TYPE == N_UNDF else 1)
+                for symbol in parse_object(payload).symbols() if symbol["n_type"] & N_EXT]
+    else:
+        from pcc.backend.native_object import decode_packed_native_object
+        rows = [(symbol.name.lstrip("_"), symbol.section_index)
+                for symbol in decode_packed_native_object(payload).symbols if symbol.external]
+    return ({name for name, section in rows if section != 0},
+            {name for name, section in rows if section == 0})
 
 
 def test_frame_registry_has_one_strict_source_owner():
@@ -271,10 +289,9 @@ def test_frame_registry_has_one_strict_source_owner():
     # Keep the complete current inventory, not the earlier pre-deferred-sweep set.
     assert FREESTANDING_GC_THREAD_LOCAL_GLOBALS == TLS_STORAGE_SYMBOLS | set(OTHER_GC_TLS_STORAGE) | {
         "pcc_gc_cms_worker_current", "pcc_gc_pressure_image_depth", "pcc_gc_pressure_owner",
-        "pcc_gc_trace_stack_owner", "pcc_gc_gray_local_batch",
+        "pcc_gc_gray_local_batch",
         # The allocation staging ring of freestanding_gc_alloc_stage.
         "pcc_gc_alloc_stage_local_ring",
-        "pcc_gc_scalar_sweep_producer_token",
         "pcc_gc_deferred_free_active", "pcc_gc_deferred_free_head",
         "pcc_gc_deferred_free_tail", "pcc_gc_deferred_free_pending_count",
         "pcc_gc_deferred_free_pending_bytes", "pcc_gc_deferred_free_local_attempts",
@@ -306,6 +323,8 @@ def test_other_gc_tls_storage_rejects_wrong_definitions(change):
     rows = [
         ("freestanding_gc_root_registry", 'define_thread_local_ptr_null("pcc_gc_scheduler_root_tls_cache")'),
         ("freestanding_gc_root_registry", 'define_thread_local_i32("pcc_gc_scheduler_root_tls_cache_count", 0)'),
+        ("freestanding_process_main", 'define_thread_local_ptr_null("pcc_process_main_anchor")'),
+        ("freestanding_gc_tracking", 'define_thread_local_i32("pcc_tls_young_log_unbuffered", 0)'),
         ("freestanding_gc_object_nodes", 'define_thread_local_i32("pcc_gc_tls_live_bytes_delta", 0)'),
     ]
     imports = ("from pcc.unsafe import define_thread_local_ptr_null, define_thread_local_i32, "
@@ -387,9 +406,14 @@ def _assert_exact_raw_imports(undefined, *, target_triple, emitter):
     darwin = target_triple.endswith("-apple-darwin")
     if darwin:
         expected = expected | {"tlv_bootstrap"}
+    elif "windows" in target_triple:
+        expected = expected | {"_tls_index"}
     zero_helpers = undefined & {"memset", "bzero"}
     assert undefined - zero_helpers == expected - {"memset"}
-    if darwin and emitter == "llvm":
+    if target_triple.startswith("x86_64") and emitter == "self":
+        # Owned x86 raw memset lowers to a machine repeat-store, no import.
+        assert zero_helpers == set()
+    elif darwin and emitter == "llvm":
         # Only the Darwin LLVM oracle may turn explicit zero-fill calls into
         # bzero. Keep the rest of its imports exact; owned lowering and Linux
         # still require memset, not an arbitrary libc helper.
@@ -400,6 +424,7 @@ def _assert_exact_raw_imports(undefined, *, target_triple, emitter):
 
 @pytest.mark.parametrize("target_triple", [
     "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "arm64-apple-darwin",
+    "x86_64-pc-windows-msvc",
 ])
 @pytest.mark.parametrize("emitter", ["llvm", "self"])
 def test_frame_registry_raw_import_expectations_are_target_qualified(target_triple, emitter):
@@ -407,8 +432,11 @@ def test_frame_registry_raw_import_expectations_are_target_qualified(target_trip
     darwin = target_triple.endswith("-apple-darwin")
     if darwin:
         expected = expected | {"tlv_bootstrap"}
+    elif "windows" in target_triple:
+        expected = expected | {"_tls_index"}
     kwargs = dict(target_triple=target_triple, emitter=emitter)
-    _assert_exact_raw_imports(expected, **kwargs)
+    actual_expected = expected - {"memset"} if target_triple.startswith("x86_64") and emitter == "self" else expected
+    _assert_exact_raw_imports(actual_expected, **kwargs)
     for zero_helpers in ({"bzero"}, {"memset", "bzero"}):
         actual = (expected - {"memset"}) | zero_helpers
         if darwin and emitter == "llvm":
@@ -416,11 +444,14 @@ def test_frame_registry_raw_import_expectations_are_target_qualified(target_trip
         else:
             with pytest.raises(AssertionError):
                 _assert_exact_raw_imports(actual, **kwargs)
-    for missing in ("memset", "pcc_thread_no_park_enter", "pcc_thread_no_park_exit"):
+    missing_candidates = ("memset", "pcc_thread_no_park_enter", "pcc_thread_no_park_exit")
+    for missing in missing_candidates:
+        if missing not in actual_expected:
+            continue
         with pytest.raises(AssertionError):
-            _assert_exact_raw_imports(expected - {missing}, **kwargs)
+            _assert_exact_raw_imports(actual_expected - {missing}, **kwargs)
     with pytest.raises(AssertionError):
-        _assert_exact_raw_imports(expected | {"py_incref"}, **kwargs)
+        _assert_exact_raw_imports(actual_expected | {"py_incref"}, **kwargs)
 
 
 @pytest.mark.parametrize("emitter", ["llvm", "self"])
@@ -428,332 +459,120 @@ def test_frame_registry_object_has_exact_raw_closure(tmp_path: Path, emitter: st
     target_triple = host_target_triple()
     obj = _compile_object(tmp_path, emitter, target_triple)
     assert RAW_GLOBAL_IMPORTS <= FREESTANDING_GC_RUNTIME_GLOBALS
-    undefined_result = subprocess.run(
-        ["nm", "-u", str(obj)], capture_output=True, text=True, timeout=30
-    )
-    assert undefined_result.returncode == 0, (
-        undefined_result.stdout + undefined_result.stderr
-    )
-    undefined = {
-        line.split()[-1].lstrip("_")
-        for line in undefined_result.stdout.splitlines()
-        if line.strip()
-    }
+    defined, undefined = _object_external_symbols(obj.read_bytes(), target_triple)
     _assert_exact_raw_imports(undefined, target_triple=target_triple, emitter=emitter)
-
-    symbols_result = subprocess.run(
-        ["nm", "-g", str(obj)], capture_output=True, text=True, timeout=30
-    )
-    assert symbols_result.returncode == 0, symbols_result.stdout + symbols_result.stderr
-    defined = {
-        line.split()[-1].lstrip("_")
-        for line in symbols_result.stdout.splitlines()
-        if line.strip() and " U " not in line
-    }
     expected = PUBLIC_SYMBOLS | INTERNAL_SYMBOLS | TLS_STORAGE_SYMBOLS
     tls_initializers = {symbol + "$tlv$init" for symbol in TLS_STORAGE_SYMBOLS}
     assert expected <= defined
     assert defined <= expected | tls_initializers
 
 
-def _frame_harness_source() -> str:
-    return r'''
-#include "py_runtime.h"
-#include <stdint.h>
-#include <stdio.h>
-
-extern void *pcc_gc_frame_index_find(void *slots);
-extern int64_t pcc_gc_frame_node_tls_pool_cached_count(void);
-extern void pcc_gc_frame_node_tls_pool_drain(void);
-extern int64_t pcc_gc_slot_is_runtime_root(PyObject **slot);
-
-/* Registered slots live in static storage: a count-free collector roots a
- * frame in the entering thread's own stack through its conservative scan
- * and links no node for it (pcc_gc_frame_slots_conservative), so a stack
- * frame would not exercise the registry. */
-static PyObject *slots[2];
-static PyObject *other[2];
-static PyObject *small_slots[16];
-static PyObject *wide_slots[17];
-static PyObject *cap_slots[1031][16];  /* POOL_PROBE_FRAMES below */
-
-int main(void) {
-    int64_t backend = pcc_gc_backend();
-    if (pcc_gc_set_backend(backend) != 0) return 2;
-    /* Only the relocating collector pools frame nodes. */
-    int pool_enabled = backend == 4;
-
-    int32_t owned_map[1] = {2};
-    int32_t borrowed_map[1] = {-2};
-    int32_t zero_map[1] = {0};
-    int32_t min_map[1] = {(int32_t)0x80000000u};
-    int32_t huge_map[1] = {100001};
-
-    pcc_gc_frame_enter(owned_map, slots);
-    void *first = pcc_gc_frame_index_find(slots);
-    pcc_gc_frame_enter(borrowed_map, slots);
-    void *second = pcc_gc_frame_index_find(slots);
-    printf("duplicate:%lld,%d,%d\n",
-           (long long)pcc_gc_frame_root_slot_count(),
-           first != NULL && second != NULL && first != second,
-           pcc_gc_slot_is_runtime_root(slots));
-    pcc_gc_frame_leave(slots);
-    printf("duplicate-pop:%lld,%d\n",
-           (long long)pcc_gc_frame_root_slot_count(),
-           pcc_gc_frame_index_find(slots) == first);
-    pcc_gc_frame_leave(slots);
-    printf("duplicate-empty:%lld\n",
-           (long long)pcc_gc_frame_root_slot_count());
-
-    pcc_gc_frame_enter_lifo(owned_map, slots);
-    pcc_gc_frame_enter_lifo(owned_map, other);
-    printf("lifo:%lld\n", (long long)pcc_gc_frame_root_slot_count());
-    pcc_gc_frame_leave_lifo(slots);
-    printf("lifo-nonhead:%lld\n",
-           (long long)pcc_gc_frame_root_slot_count());
-    pcc_gc_frame_leave_lifo(other);
-    printf("lifo-empty:%lld\n",
-           (long long)pcc_gc_frame_root_slot_count());
-
-    pcc_gc_frame_enter(zero_map, slots);
-    pcc_gc_frame_enter(min_map, slots);
-    pcc_gc_frame_enter(huge_map, slots);
-    printf("invalid:%lld\n", (long long)pcc_gc_frame_root_slot_count());
-
-    pcc_gc_frame_node_tls_pool_drain();
-    int small_pool_ok = 1;
-    int32_t small_map[1] = {0};
-    for (int root_count = 0; root_count <= 16; root_count++) {
-        small_map[0] = root_count;
-        pcc_gc_frame_enter(small_map, small_slots);
-        pcc_gc_frame_leave(small_slots);
-        int64_t expected = pool_enabled && root_count > 0 ? 1 : 0;
-        if (pcc_gc_frame_node_tls_pool_cached_count() != expected) {
-            small_pool_ok = 0;
-        }
-        pcc_gc_frame_node_tls_pool_drain();
-    }
-    printf("pool-small:%d\n", small_pool_ok);
-    if (!small_pool_ok) return 10;
-
-    int32_t wide_map[1] = {17};
-    pcc_gc_frame_enter(wide_map, wide_slots);
-    pcc_gc_frame_leave(wide_slots);
-    int64_t large_cached = pcc_gc_frame_node_tls_pool_cached_count();
-    printf("pool-large:%lld\n", (long long)large_cached);
-    if (large_cached != 0) return 11;
-
-    enum { POOL_LIMIT = 1024, POOL_PROBE_FRAMES = 1031 };
-    int32_t cap_maps[POOL_PROBE_FRAMES][1];
-    for (int i = 0; i < POOL_PROBE_FRAMES; i++) {
-        cap_maps[i][0] = (i % 16) + 1;
-        pcc_gc_frame_enter(cap_maps[i], cap_slots[i]);
-    }
-    for (int i = 0; i < POOL_PROBE_FRAMES; i++) {
-        pcc_gc_frame_leave(cap_slots[i]);
-    }
-    int64_t cap_cached = pcc_gc_frame_node_tls_pool_cached_count();
-    printf("pool-cap:%lld\n", (long long)cap_cached);
-    if (cap_cached != (pool_enabled ? POOL_LIMIT : 0)) return 12;
-    pcc_gc_frame_node_tls_pool_drain();
-    int64_t drain_cached = pcc_gc_frame_node_tls_pool_cached_count();
-    printf("pool-drain:%lld\n", (long long)drain_cached);
-    if (drain_cached != 0) return 13;
-    return 0;
-}
-'''
+@pytest.mark.parametrize("target", [
+    "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu",
+    "arm64-apple-darwin", "x86_64-pc-windows-msvc",
+])
+def test_frame_registry_owned_object_has_exact_cross_target_symbols(tmp_path, target):
+    obj = _compile_object(tmp_path, "self", target)
+    defined, undefined = _object_external_symbols(obj.read_bytes(), target)
+    _assert_exact_raw_imports(undefined, target_triple=target, emitter="self")
+    assert defined == PUBLIC_SYMBOLS | INTERNAL_SYMBOLS | TLS_STORAGE_SYMBOLS
 
 
-def _thread_harness_source() -> str:
-    return r'''
-#include "py_runtime.h"
-#include <pthread.h>
-#include <stdint.h>
-#include <stdio.h>
+_FRAME_PROGRAM = """
+from pcc.extern import extern, c_ptr, c_int64, c_void
+from pcc.unsafe import stack_alloc, store_i32, store_ptr, null
+import threading
 
-extern int64_t pcc_gc_frame_node_tls_pool_cached_count(void);
-extern void pcc_gc_thread_unregister_buffers(void);
+count: "extern" = extern("pcc_gc_frame_root_slot_count", (), c_int64)
+enter: "extern" = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
+leave: "extern" = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
+enter_local: "extern" = extern("pcc_gc_frame_enter_lifo_local", (c_ptr, c_ptr), c_void)
+leave_local: "extern" = extern("pcc_gc_frame_leave_lifo_local", (c_ptr,), c_void)
+pool_count: "extern" = extern("pcc_gc_frame_node_tls_pool_cached_count", (), c_int64)
+pool_drain: "extern" = extern("pcc_gc_frame_node_tls_pool_drain", (), c_void)
 
-enum { THREADS = 4, ROUNDS = 512 };
-static int32_t maps[THREADS][1] = {{-2}, {-2}, {-2}, {-2}};
-static PyObject *slots[THREADS][2];
-static PyObject *extra_slots_all[THREADS][THREADS][2];
-static pthread_mutex_t pool_gate_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t pool_gate_cond = PTHREAD_COND_INITIALIZER;
-static int pool_gate_arrived = 0;
+def mutate(rounds: int) -> None:
+    slots = stack_alloc(16)
+    store_ptr(slots, 0, null())
+    store_ptr(slots, 8, null())
+    frame_map = stack_alloc(4)
+    store_i32(frame_map, 0, 2)
+    for i in range(rounds):
+        enter(frame_map, slots)
+        enter_local(frame_map, slots)
+        leave_local(slots)
+        leave(slots)
+    assert pool_count() == 0
+    pool_drain()
+    assert pool_count() == 0
 
-static void pool_gate_wait(void) {
-    pthread_mutex_lock(&pool_gate_lock);
-    pool_gate_arrived++;
-    if (pool_gate_arrived == THREADS) {
-        pthread_cond_broadcast(&pool_gate_cond);
-    }
-    while (pool_gate_arrived < THREADS) {
-        pthread_cond_wait(&pool_gate_cond, &pool_gate_lock);
-    }
-    pthread_mutex_unlock(&pool_gate_lock);
-}
+def mutate_thread(ready, release) -> None:
+    slots = stack_alloc(16)
+    store_ptr(slots, 0, null())
+    store_ptr(slots, 8, null())
+    frame_map = stack_alloc(4)
+    store_i32(frame_map, 0, 2)
+    enter(frame_map, slots)
+    enter_local(frame_map, slots)
+    ready.set()
+    release.wait()
+    leave_local(slots)
+    leave(slots)
+    mutate(512)
 
-static void *mutate(void *raw) {
-    intptr_t index = (intptr_t)raw;
-    for (int i = 0; i < ROUNDS; i++) {
-        pcc_gc_frame_enter(maps[index], slots[index]);
-        pcc_gc_frame_leave(slots[index]);
-    }
-    int32_t extra_maps[THREADS][1];
-    /* Static, as the shared slots: a stack frame registers no node under a
-     * count-free collector. */
-    PyObject *(*extra_slots)[2] = extra_slots_all[index];
-    for (int i = 0; i <= index; i++) {
-        extra_maps[i][0] = 2;
-        pcc_gc_frame_enter(extra_maps[i], extra_slots[i]);
-    }
-    for (int i = 0; i <= index; i++) {
-        pcc_gc_frame_leave(extra_slots[i]);
-    }
-    pool_gate_wait();
-    int64_t backend = pcc_gc_backend();
-    int64_t expected = backend == 4 ? index + 1 : 0;
-    if (pcc_gc_frame_node_tls_pool_cached_count() != expected) {
-        return (void *)(intptr_t)101;
-    }
-    pcc_gc_thread_unregister_buffers();
-    if (pcc_gc_frame_node_tls_pool_cached_count() != 0) {
-        return (void *)(intptr_t)102;
-    }
-    return NULL;
-}
+def observe(ready, release) -> None:
+    for event in ready:
+        event.wait()
+    assert count() == 0
+    release.set()
+    for i in range(128):
+        assert count() == 0
 
-static void *observe(void *raw) {
-    (void)raw;
-    /* Worker i holds up to i + 1 two-slot frames at once in its extra-frame
-     * phase, so every worker there together is 2 * (1 + ... + THREADS). */
-    for (int i = 0; i < THREADS * ROUNDS; i++) {
-        int64_t count = pcc_gc_frame_root_slot_count();
-        if (count < 0 || count > THREADS * (THREADS + 1)) return (void *)1;
-    }
-    return NULL;
-}
+def main() -> None:
+    assert count() == 0
+    mutate(16)
+    assert count() == 0
+    if THREADED:
+        ready = [threading.Event() for i in range(4)]
+        release = threading.Event()
+        workers = [threading.Thread(target=mutate_thread, args=(ready[i], release)) for i in range(4)]
+        observer = threading.Thread(target=observe, args=(ready, release))
+        for worker in workers:
+            worker.start()
+        observer.start()
+        for worker in workers:
+            worker.join()
+        observer.join()
+    assert count() == 0
+    print("frame-registry-ok")
 
-int main(void) {
-    int64_t backend = pcc_gc_backend();
-    if (pcc_gc_set_backend(backend) != 0) return 2;
-    pthread_t workers[THREADS];
-    pthread_t observer;
-    for (intptr_t i = 0; i < THREADS; i++) {
-        if (pthread_create(&workers[i], NULL, mutate, (void *)i) != 0) return 3;
-    }
-    if (pthread_create(&observer, NULL, observe, NULL) != 0) return 4;
-    for (int i = 0; i < THREADS; i++) {
-        void *worker_result = NULL;
-        pthread_join(workers[i], &worker_result);
-        if (worker_result != NULL) return (int)(intptr_t)worker_result;
-    }
-    void *result = NULL;
-    pthread_join(observer, &result);
-    if (result != NULL) return 5;
-    printf("final:%lld\n", (long long)pcc_gc_frame_root_slot_count());
-    return 0;
-}
-'''
+main()
+"""
 
 
-def _link_harness(tmp_path: Path, name: str, source_text: str, archive: Path) -> Path:
-    source = tmp_path / (name + ".c")
-    executable = tmp_path / name
-    source.write_text(source_text, encoding="utf-8")
-    result = subprocess.run(
-        [
-            "clang",
-            "-std=c11",
-            f"-I{RUNTIME_DIR / 'include'}",
-            str(source),
-            str(archive),
-            "-pthread",
-            "-o",
-            str(executable),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    return executable
+def _run_single_collector_frame_probe(tmp_path, archive, *, threaded):
+    source = tmp_path / "frame_probe.py"
+    binary = tmp_path / ("frame_probe.exe" if os.name == "nt" else "frame_probe")
+    source.write_text(_FRAME_PROGRAM.replace("THREADED", "True" if threaded else "False"))
+    pipeline.compile_python(str(source), str(binary), backend="self", ir_scaffold_mode="on",
+                            runtime_archive=str(archive))
+    result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
+    assert (result.returncode, result.stdout, result.stderr) == (0, "frame-registry-ok\n", ""), result
 
 
-def _run_ok(implementation: Path, env: dict[str, str]) -> str:
-    result = subprocess.run(
-        [str(implementation)], env=env, capture_output=True, text=True, timeout=30
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    return result.stdout
+def test_archive_owns_frame_registry_single_collector(tmp_path: Path, pcc_runtime_archive: Path):
+    from pcc.backend.elf_x86_64 import read_archive_payloads
+    target = host_target_triple()
+    owners: dict[str, list[str]] = {symbol: [] for symbol in PUBLIC_SYMBOLS | INTERNAL_SYMBOLS}
+    for member, payload in read_archive_payloads(pcc_runtime_archive.read_bytes()):
+        defined, _ = _object_external_symbols(payload, target)
+        for symbol in defined & owners.keys():
+            owners[symbol].append(member)
+    assert all(names == ["freestanding_gc_frame_registry.o"] for names in owners.values())
+    # The old collector-specific global registration and relocation pool
+    # assertions are retired. Keep the actual exported ABI and no-op path.
+    _run_single_collector_frame_probe(tmp_path, pcc_runtime_archive, threaded=False)
 
 
-def _frame_expected(pool_cap: int) -> str:
-    # What the harness printed against the retired C runtime oracle; GC4
-    # keeps a thread-local pool of 1024 cached frame nodes.
-    return (
-        "duplicate:4,1,1\n"
-        "duplicate-pop:2,1\n"
-        "duplicate-empty:0\n"
-        "lifo:4\n"
-        "lifo-nonhead:2\n"
-        "lifo-empty:0\n"
-        "invalid:0\n"
-        "pool-small:1\n"
-        "pool-large:0\n"
-        f"pool-cap:{pool_cap}\n"
-        "pool-drain:0\n"
-    )
-
-
-def test_archive_owns_frame_registry_gc0_to_gc4(
-    tmp_path: Path,
-    pcc_runtime_archive: Path,
-):
-    symbols_result = subprocess.run(
-        ["nm", "-A", "-g", str(pcc_runtime_archive)],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    assert symbols_result.returncode == 0, symbols_result.stdout + symbols_result.stderr
-    owners: dict[str, list[str]] = {
-        symbol: [] for symbol in PUBLIC_SYMBOLS | INTERNAL_SYMBOLS
-    }
-    for line in symbols_result.stdout.splitlines():
-        symbol = line.split()[-1].lstrip("_") if line.strip() else ""
-        if symbol in owners and " U " not in line:
-            owners[symbol].append(line)
-    assert all(len(lines) == 1 for lines in owners.values())
-    assert all(
-        ":freestanding_gc_frame_registry.o:" in lines[0]
-        for lines in owners.values()
-    )
-
-    implementation = _link_harness(
-        tmp_path,
-        "frame_registry_pcc_python",
-        _frame_harness_source(),
-        pcc_runtime_archive,
-    )
-    for backend in (0,):
-        output = _run_ok(implementation, {**os.environ, "PCC_GC_BACKEND": str(backend)})
-        assert output == _frame_expected(1024 if backend == 4 else 0)
-
-
-def test_frame_registry_survives_threaded_mutation_and_observation(
-    tmp_path: Path,
-):
-    threaded_pcc_python_archive = (
-        cached_threaded_pcc_python_runtime() / "libpy_runtime_pcc_py.a"
-    )
-    implementation = _link_harness(
-        tmp_path,
-        "frame_registry_threads_pcc_python",
-        _thread_harness_source(),
-        threaded_pcc_python_archive,
-    )
-    for backend in (0,):
-        output = _run_ok(implementation, {**os.environ, "PCC_GC_BACKEND": str(backend)})
-        assert output == "final:0\n"
+def test_frame_registry_survives_threaded_mutation_and_observation(tmp_path: Path, pcc_runtime_archive: Path):
+    _run_single_collector_frame_probe(tmp_path, pcc_runtime_archive, threaded=True)
