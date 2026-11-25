@@ -57,8 +57,9 @@ def test_module_handler_uses_predeclared_global_and_checked_function_reads():
     assert str(slot.value_type) == 'ptr' or str(slot.value_type).endswith('*')
     assert 'error' in codegen._module_del_target_names
     assert '.modvar.module_binding.error_initialized' in text
-    assert 'except.global.current' in text
-    assert '@py_module_attr_del(' in text
+    # The handler deletes the module attribute, then clears the global root.
+    deletion = text.index('@py_module_attr_del(')
+    assert '@pcc_gc_store_root(ptr @.modvar.module_binding.error, ptr null)' in text[deletion:]
     assert '@pcc_gc_root_copy_lease(' in text
     assert len(emit_owned_object(text, 'x86_64-unknown-linux-gnu')) > 0
 

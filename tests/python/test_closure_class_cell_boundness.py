@@ -62,9 +62,6 @@ def test_owned_capture_root_handoffs_consume_each_source_once():
             obj.references -= 1
             assert obj.references > 0
 
-        def _extern_repin_root(self, _root):
-            assert value.references == 1
-
         def _as_gc_ptr(self, slot):
             return slot
 
