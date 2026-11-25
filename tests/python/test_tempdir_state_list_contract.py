@@ -389,7 +389,15 @@ def test_finalizer_state_initialization_in_actual_runtime_ir(tmp_path, monkeypat
         assert body.count('@py_list_len(') == 1
         assert body.count('@py_list_setitem(') == 1
         assert '@py_list_set(' not in body
-        assert body.index('@user_py_tempfile__td_register(') < body.index('@py_list_setitem(')
+        # The optimizer may inline _td_register and _td_hold (a plain
+        # registered-slot store since item 2 (d)); an inlined registration
+        # shows as its root-handle registration.
+        register = '@user_py_tempfile__td_register('
+        if text is not raw and register not in body:
+            register = '@pcc_gc_scheduler_root_register_handle('
+        assert body.count(register) == 1
+        assert body.index(register) < body.index('@py_list_setitem(')
         assert '@py_tls_exc_swap_slot(' in body
-        assert '@user_py_tempfile__td_hold(' in body
+        if text is raw:
+            assert '@user_py_tempfile__td_hold(' in body
         assert '@user_py_tempfile__td_windows_cleanup(' in body

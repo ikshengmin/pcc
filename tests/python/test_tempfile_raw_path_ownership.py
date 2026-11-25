@@ -71,10 +71,13 @@ def test_actual_tempfile_path_join_has_no_managed_ownership(tmp_path, monkeypatc
         # Windows path normalization still owns its real managed strings and
         # tuple explicitly; a raw return annotation must not erase this work.
         windows = _body(text, "user_py_tempfile__td_windows_path_template")
-        for call in (
-            "@malloc(", "@free(", "@pcc_gc_frame_enter(",
-            "@user_py_tempfile__td_hold(", "@user_py_tempfile__td_finish(",
-        ):
+        required = ["@malloc(", "@free(", "@pcc_gc_frame_enter(",
+                    "@user_py_tempfile__td_finish("]
+        if text is raw:
+            # _td_hold is a plain registered-slot store since item 2 (d);
+            # the optimizer may inline it.
+            required.append("@user_py_tempfile__td_hold(")
+        for call in required:
             assert call in windows, call
         assert "@pcc_gc_retain(" not in windows
 

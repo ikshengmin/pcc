@@ -28,11 +28,6 @@ SITES = (
     ("py_coroutine.py", "py_coroutine_class", IMMORTAL),
     ("py_coroutine.py", "py_continuation_class", IMMORTAL),
     ("py_os_path.py", "_path_clear_root_prefix", PINNED),
-    ("py_tempfile.py", "_td_drop", PINNED),
-    ("py_tempfile.py", "_td_init", PINNED),
-    ("py_tempfile.py", "_nt_finish", PINNED),
-    ("py_tempfile.py", "_nt_cleanup", PINNED),
-    ("py_tempfile.py", "_nt_cleanup_entry", PINNED),
 )
 
 
@@ -149,7 +144,8 @@ class MetadataRuntime(Runtime):
         n, obj, name = self.ns, self.target, self.site
         if name == "pcc_gc_immortalize":
             n[name](obj)
-            assert (self.pin_calls, self.unpin_calls, obj.pins) == (1, 0, 1)
+            # The one collector never moves it: immortalize pins nothing.
+            assert (self.pin_calls, self.unpin_calls, obj.pins) == (0, 0, 0)
             return
         if name in ("py_coroutine_class", "py_continuation_class"):
             n["py_class_new_builtin"] = lambda *args: obj
@@ -157,60 +153,19 @@ class MetadataRuntime(Runtime):
             assert n[name]() is obj  # Cached class must not rewrite its header.
             assert (self.pin_calls, self.unpin_calls, obj.pins) == (0, 0, 0)
             return
-        if name in ("_path_clear_root_prefix", "_td_drop"):
+        if name == "_path_clear_root_prefix":
             slots, pins = self.frame(24)
             obj.pins = 1
             n["store_ptr"](slots, 0, obj)
             n["store_i64"](pins, 0, PINNED)
-            n[name](slots, pins, 1 if name == "_path_clear_root_prefix" else 0)
+            n[name](slots, pins, 1)
             self.frames.remove(slots)
             assert (self.pin_calls, self.unpin_calls, obj.pins) == (0, 1, 0)
             assert self.events == ["unpin", "collector", "metadata", "clear"]
-        elif name == "_nt_finish":
-            slots, pins = self.frame(24)
-            # A pre-existing pin is independent of this scope's counted pin.
-            obj.flags |= PINNED
-            self.error = obj
-            assert n[name](slots, pins) is None
-            assert self.error is obj
-            assert self.events == ["swap", "pin", "unpin", "collector", "metadata", "swap"]
-        elif name == "_td_init":
-            obj.flags |= PINNED
-            manager = Obj("instance")
-            n["_td_mkdtemp"] = lambda *args: Obj("str", "/not-used")
-            def fail_state(size):
-                self.error = obj
-                return None
-            n["py_list_new"] = fail_state
-            n["_td_remove"] = lambda *args: None
-            args = Obj("tuple", [manager, self.none, self.none, self.none, self.false, self.true])
-            assert n[name](None, args) is None
-            assert self.error is obj
-        elif name == "_nt_cleanup":
-            obj.flags |= PINNED
-            manager = Obj("instance")
-            manager.attrs.update(_ready=self.true, _cleanup_file=Obj("file"),
-                _cleanup_name=self.none, _delete=self.false,
-                _delete_on_close=self.false, _removed=self.false)
-            def fail_close(file):
-                self.error = obj
-            n["py_file_close_checked"] = fail_close
-            assert n[name](manager, 0) is None
-            assert self.error is obj
-        elif name == "_nt_cleanup_entry":
-            obj.flags |= PINNED
-            self.error = obj
-            n["_nt_cleanup"] = lambda *args: None
-            assert n[name](Obj("tuple", [Obj("instance")]), 2) is None
-            assert self.error is obj
         else:
             raise AssertionError(name)
         assert not self.frames and not self.leases
-        assert obj.pins == 0 and self.pin_calls == self.unpin_calls - int(name in (
-            "_path_clear_root_prefix", "_td_drop"))
-        if name not in ("_path_clear_root_prefix", "_td_drop"):
-            index = self.events.index("metadata")
-            assert self.events[index - 2:index + 2] == ["unpin", "collector", "metadata", "swap"]
+        assert obj.pins == 0 and self.pin_calls == self.unpin_calls - 1
 
 
 @pytest.mark.parametrize("site", SITES, ids=lambda site: site[1])
@@ -234,9 +189,10 @@ def test_metadata_preserves_concurrent_header(site, transition, preset, legacy):
             assert bool(observed & GRAY) == bool(runtime.credit) == bool(runtime.tokens)
 
 
-def test_all_nine_metadata_sites_use_relaxed_atomic_or():
-    # os.mkdir's drop and finish no longer write a pin bit (item 2 (d)).
-    assert len(SITES) == 9
+def test_all_four_metadata_sites_use_relaxed_atomic_or():
+    # os.mkdir's and tempfile's drops and finishes no longer write a pin bit
+    # (item 2 (d)).
+    assert len(SITES) == 4
     for filename, name, bit in SITES:
         tree = ast.parse((RUNTIME / filename).read_text())
         node = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name)
@@ -253,7 +209,7 @@ def test_all_nine_metadata_sites_use_relaxed_atomic_or():
                        and call.func.id == "store_i32" for call in ast.walk(node)), name
 
 
-@pytest.mark.parametrize("name", ["_path_clear_root_prefix", "_td_drop"])
+@pytest.mark.parametrize("name", ["_path_clear_root_prefix"])
 def test_alias_pin_restoration_keeps_reverse_release_order(name):
     site = next(site for site in SITES if site[1] == name)
     runtime = MetadataRuntime(site, "shade", False)
@@ -266,11 +222,7 @@ def test_alias_pin_restoration_keeps_reverse_release_order(name):
     for index, prior in ((0, 0), (1, PINNED)):
         runtime.write(slots, index * 8, obj)
         runtime.write(pins, index * 8, prior)
-    if name == "_path_clear_root_prefix":
-        n[name](slots, pins, 2)
-    else:
-        n[name](slots, pins, 1)
-        n[name](slots, pins, 0)
+    n[name](slots, pins, 2)
     assert runtime.events == ["unpin", "clear", "unpin", "clear"]
     assert obj.pins == 0 and obj.flags & PINNED == 0
     assert (runtime.pin_calls, runtime.unpin_calls) == (0, 2)
@@ -279,7 +231,7 @@ def test_alias_pin_restoration_keeps_reverse_release_order(name):
 
 @pytest.mark.integration
 def test_metadata_atomic_or_executes_owned_runtime_all_collectors(tmp_path, pcc_runtime_archive):
-    """Execute the three IMMORTAL sites; eight pin-restore sites are host-only.
+    """Execute the three IMMORTAL sites; the pin-restore site is host-only.
 
     This is native ABI/bit preservation, not a native race reproducer.
     """

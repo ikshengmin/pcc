@@ -16,14 +16,15 @@ int main(void) {
     header->flags = prior | 0x80000000u;
     int64_t balance = pcc_gc_metric_pin_balance();
     int64_t refs = header->refcount;
+    /* The one collector never moves it: immortalize pins nothing. */
     pcc_gc_immortalize(object);
-    if (header->flags != (prior | 0x80000000u | 65u)) return 2;
+    if (header->flags != (prior | 0x80000000u | 1u)) return 2;
     if (header->refcount != refs) return 3;
-    if (pcc_gc_metric_pin_balance() != balance + 1) return 4;
+    if (pcc_gc_metric_pin_balance() != balance) return 4;
     pcc_gc_immortalize(object);
-    if (header->flags != (prior | 0x80000000u | 65u)) return 5;
-    if (pcc_gc_metric_pin_balance() != balance + 2) return 6;
-    header->flags = prior | 65u;
+    if (header->flags != (prior | 0x80000000u | 1u)) return 5;
+    if (pcc_gc_metric_pin_balance() != balance) return 6;
+    header->flags = prior | 1u;
     PyObject *coroutine = py_coroutine_class();
     PyObject *continuation = py_continuation_class();
     if (!coroutine || !continuation) return 7;

@@ -72,10 +72,8 @@ class Runtime:
             pcc_gc_store_ptr=self.store_field,
             pcc_gc_root_copy_borrowed_lease=self.borrow,
             pcc_gc_foreign_lease_acquire=self.acquire, pcc_gc_foreign_lease_release=self.release,
-            pcc_gc_pin=lambda v: self.flags.__setitem__(id(v),self.flags.get(id(v),0)|64),
-            pcc_gc_unpin=lambda v: self.flags.__setitem__(id(v),self.flags.get(id(v),0)&~64),
             atomic_rmw_i32=lambda op,v,o,b,order: self.flags.__setitem__(id(v), self.flags.get(id(v),0)|b),
-            pcc_gc_take_pinned_slot=self.take, pcc_platform_abort=lambda: pytest.fail('owner contract aborted'),
+            pcc_gc_take_slot=self.take_slot, pcc_platform_abort=lambda: pytest.fail('owner contract aborted'),
             py_tls_exc_swap_slot=self.swap, py_clear_exception=lambda: setattr(self,'error',None),
             py_current_exception=lambda: self.error, py_raise=lambda e: setattr(self,'error',e),
             py_raise_owned=lambda e: setattr(self,'error',e),
@@ -152,10 +150,9 @@ class Runtime:
             assert self.leases.pop(token) == ptr
         return 0
 
-    def take(self,ptr,prior):
+    def take_slot(self,ptr):
+        # pcc_gc_take_slot: transfer the owner; nothing pinned (item 2 (d)).
         result=self.load(ptr,0)
-        if result is not None:
-            self.flags[id(result)]=(self.flags.get(id(result),0)&~64)|max(prior,0)
         self.store(ptr,0,None)
         return result
 
