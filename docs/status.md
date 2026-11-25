@@ -532,8 +532,21 @@ in the relevant section or issue and removes the entry.
    selector negative witnesses and remaining backend correctness red.
    Production verifier/GC semantics unchanged.
 
+   Complete pytest overlap fixture (run 45643044565, artifact 15044643830):
+   the fixed 330 MiB allowance rejected a real child whose inherited host
+   high-water was 773,967,872 B (padded reservation 1,101,677,568 B).
+   The two-worker trim test now shares the measured cold-child pressure
+   fixture: one fixed scenario budget, verified small-pair fit, actual
+   bounded growth, one cancel/backoff/retire/exclusive retry, and the original
+   local accounting trim receipt. The added 256 MiB retired-history witness
+   executes the exact node in an isolated coordinator. Linux: the original
+   high-water reproduction failed before, passed after (381,505,536 B real
+   tree peak); whole affected file 85 ordinary passed, and all seven focused
+   nodes passed with six workers (884,301,824 B peak, unchanged 1 GiB guard).
+   No worker production policy, outer guard or CI worker count changed.
+   Windows/macOS execution remains hosted evidence.
+
    Claims:
-   - Complete pytest overlapping worker growth fixture: Codex, Linux x86_64, 2026-11-25T17:38Z, area selfhost (tests/python/test_worker_resource_plan.py only)
    - #20 runtime oracle exact checkout CLI entry: Codex, Linux, 2026-11-25T17:42Z, area runtime-codegen (test_runtime_oracle_diff only)
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has

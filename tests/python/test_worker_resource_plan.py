@@ -692,52 +692,55 @@ def test_failure_retires_running_peers_and_does_not_launch_tail(tmp_path, monkey
     assert pool._HOST_WORKERS == {}
 
 
-def test_overlapping_growth_cancels_and_requeues_one_peer_with_same_cap(tmp_path, monkeypatch, capsys):
-    monkeypatch.delenv(policy.TREE_STATE_ENV, raising=False)
+def _exercise_overlap_trim(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("PCC_PY_FRONTEND_WORKER_TIMING", "1")
-    ready = [tmp_path / "ready0", tmp_path / "ready1"]
-    counts = [tmp_path / "starts0", tmp_path / "starts1"]
-    commands = []
-    for index in range(2):
-        code = (
-            "import os,time;from pathlib import Path;"
-            "from pcc.frontends.python.worker_resource_plan import publish_worker_resource as report;"
-            + "Path(" + repr(str(ready[index])) + ").write_text(str(os.getpid()));"
-            + "count=Path(" + repr(str(counts[index])) + ");"
-            + "count.write_text(count.read_text()+'x' if count.exists() else 'x');"
-            + "deadline=time.monotonic()+3\n"
-            + "while not Path(" + repr(str(ready[1 - index])) + ").exists() and time.monotonic()<deadline: time.sleep(0.01)\n"
-            + "payload=bytearray(48*1024**2);report('allocated');time.sleep(0.3);report('complete')"
-        )
-        commands.append(command(code))
-    tasks = [task(tmp_path / ("rss" + str(index)), estimate=8 * MIB,
-                  inputs=(2 - index,)) for index in range(2)]
-    trace = tmp_path / "overlap.tsv"
-    budget = workers._coordinator_rss_bytes() + policy.RSS_HEADROOM_BYTES + 330 * MIB
-    pool.run_resource_worker_processes(commands, tasks, 2, budget,
-                                      observations=[], trace_path=str(trace))
-    rows = [line.split("\t") for line in trace.read_text().splitlines()]
-    cancelled = [row for row in rows if row[0] == "cancel"]
-    assert len(cancelled) == 1
-    assert cancelled[0][1] == "1"
-    first_retired = next(index for index, row in enumerate(rows) if row[:2] == ["retire", "0"])
-    second_starts = [index for index, row in enumerate(rows) if row[:2] == ["start", "1"]]
-    assert len(second_starts) == 2 and first_retired < second_starts[1]
-    assert counts[0].read_text() == "x" and counts[1].read_text() == "xx"
-    original_start = rows[second_starts[0]]
-    assert float(cancelled[0][6]) > float(original_start[6])
-    with pytest.raises(ProcessLookupError):
-        require_process_running(int(cancelled[0][2]))
-    assert pool._HOST_WORKERS == {}
-    # The same original, successfully completed real process run must also
-    # identify local accounting. Do not repeat this pressure fixture after
-    # a different test has deliberately inflated the parent's RSS history.
+    guard_cap = os.environ.get("PCC_WORKER_TREE_BUDGET_BYTES")
+    _exercise_progressive_retry_pressure(tmp_path, monkeypatch, 0, restore_peers=False)
+    assert os.environ.get("PCC_WORKER_TREE_BUDGET_BYTES") == guard_cap
+    # The original two-worker witness must still prove one actual local
+    # accounting trim, with the surviving reservation fitting the same cap.
     trims = [s for s in capsys.readouterr().err.splitlines() if s.startswith("pcc worker trim ")]
     assert len(trims) == 1
     r = {k: int(v) for k, v in (field.split("=") for field in trims[0].split()[3:])}
     assert (r["synchronized"], r["position"], r["count_before"], r["task"], r["previous_task"]) == (0, 0, 2, 1, 0)
     assert r["first_pid"] == r["pid"] and r["first_bytes"] == r["removed_bytes"]
     assert r["before_bytes"] > r["available_bytes"] >= r["after_bytes"]
+
+
+def test_overlapping_growth_cancels_and_requeues_one_peer_with_same_cap(tmp_path, monkeypatch, capsys):
+    _exercise_overlap_trim(tmp_path, monkeypatch, capsys)
+
+
+def test_overlapping_growth_with_retired_parent_rss(tmp_path):
+    # Replay the exact original node after a genuine retired allocation in
+    # an isolated pytest coordinator: do not inflate the six-worker suite's
+    # own permanent maxrss merely to establish this regression witness.
+    root = Path(__file__).resolve().parents[2]
+    launcher = (
+        "import sys,pytest\n"
+        "from pcc.frontends.python.pipeline_frontend_workers import _worker_peak_rss_bytes\n"
+        "history=bytearray(256*1024**2)\n"
+        "for offset in range(0,len(history),4096): history[offset]=1\n"
+        "del history\n"
+        "assert _worker_peak_rss_bytes()>=256*1024**2\n"
+        "raise SystemExit(pytest.main(sys.argv[1:]))\n"
+    )
+    environment = dict(os.environ)
+    for name in ("PYTEST_XDIST_WORKER", "PYTEST_XDIST_WORKER_COUNT", "PYTEST_XDIST_TESTRUNUID"):
+        environment.pop(name, None)
+    evidence = tmp_path / "retired-history"
+    result = run_process_tree_timeout(
+        [sys.executable, "-B", "-c", launcher, "-q", "-n0", "--override-ini=addopts=",
+         "--basetemp", str(tmp_path / "nested-pytest"),
+         "tests/python/test_worker_resource_plan.py::test_overlapping_growth_cancels_and_requeues_one_peer_with_same_cap"],
+        cwd=root, env=environment, evidence=evidence, timeout=30,
+    )
+    assert result.returncode == 0 and "1 passed" in result.stdout, (result.stdout, result.stderr)
+    traces = list((tmp_path / "nested-pytest").glob("test_overlapping_growth_cancel[0-9]*/progressive.tsv"))
+    assert len(traces) == 1
+    rows = [line.split("\t") for line in traces[0].read_text().splitlines()]
+    assert [row[:2] for row in rows if row[0] == "cancel"] == [["cancel", "1"]]
+    assert len([row for row in rows if row[:2] == ["start", "1"]]) == 2
 
 
 def _progressive_retry_pressure_plan(available, leader_peak, peer_peak):
@@ -782,13 +785,9 @@ def test_progressive_retry_pressure_uses_child_reports_not_parent_history(parent
         assert policy.peak_reservation(guessed_peak) + peer <= available
 
 
-@pytest.mark.pcc_gate(probe=lambda: os.name == "posix")
-@pytest.mark.parametrize(
-    "parent_history", [0, 128 * MIB], ids=["fresh-parent", "retired-parent-rss"],
-)
-def test_progressive_retry_drains_peers_then_restores_concurrency(
-    tmp_path, monkeypatch, parent_history,
-):
+def _exercise_progressive_retry_pressure(tmp_path, monkeypatch, parent_history, *, restore_peers):
+    task_count = 4 if restore_peers else 2
+    outer_cap = os.environ.get("PCC_WORKER_TREE_BUDGET_BYTES")
     monkeypatch.delenv(policy.TREE_STATE_ENV, raising=False)
     # Exercise a genuine parent high-water mark, not a fabricated RSS reader.
     # Release it before starting fresh children; no second full-sized copy.
@@ -798,6 +797,7 @@ def test_progressive_retry_drains_peers_then_restores_concurrency(
     for offset in range(0, len(history), 4096):
         history[offset] = 1
     del history
+    assert workers._worker_peak_rss_bytes() >= parent_history
     child = tmp_path / "progressive.py"
     child.write_text("""
 import json
@@ -816,6 +816,7 @@ for stream_name, descriptor in (("stdout", 1), ("stderr", 2)):
 from pcc.frontends.python.worker_resource_plan import (
     RESOURCE_REPORT_ENV, RESOURCE_TOKEN_ENV, peak_reservation, publish_worker_resource,
 )
+from tests.python.process_liveness import require_process_running
 
 root = Path(sys.argv[1])
 index = int(sys.argv[2])
@@ -869,7 +870,7 @@ def overlap(name, peers):
     wait_for(lambda: all(path.exists() for path in records), name + " peer starts")
     pids = [int(path.read_text().split("\\t")[0]) for path in records]
     for pid in pids:
-        os.kill(pid, 0)
+        require_process_running(pid)
     publish(name, " ".join(str(pid) for pid in pids))
 
 payloads = [bytearray(4 * 1024 ** 2)]
@@ -884,7 +885,7 @@ def grow_to_accepted_pressure():
     plan = json.loads(marker.read_text())
     assert plan["pid"] == os.getpid() and plan["token"] == os.environ[RESOURCE_TOKEN_ENV]
     allocated = 0
-    page_size = os.sysconf("SC_PAGE_SIZE")
+    page_size = os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 4096
     measured = max(_coordinator_rss_bytes(), _worker_peak_rss_bytes())
     while measured < plan["target_peak"]:
         assert time.monotonic() < deadline, (
@@ -960,11 +961,15 @@ publish("complete." + str(index) + "." + str(attempt),
     assert len(startup_observations) == 1 and startup_observations[0][2] > 0
     assert pool._HOST_WORKERS == {}
     available = 2 * policy.peak_reservation(startup_observations[0][2]) + 32 * MIB
-    budget = owner + policy.RSS_HEADROOM_BYTES + available
+    # The configured fixture budget is set exactly once from the real cold
+    # observation; it never follows growing workers or retries. The outer
+    # process-tree cap is not changed, and neither RSS reader is substituted.
+    budget = workers._coordinator_rss_bytes() + policy.RSS_HEADROOM_BYTES + available
     (tmp_path / "configured-budget").write_text(str(budget))
     tasks = [task(tmp_path / ("rss" + str(index)), estimate=8 * MIB,
-                  inputs=(4 - index,), execution_class="host:progressive:" + str(index))
-             for index in range(4)]
+                  inputs=(task_count - index,), execution_class=("host:progressive:" + str(index)
+                                                               if restore_peers else "host:test"))
+             for index in range(task_count)]
     # Executing a temporary script puts its directory, not the checkout, at
     # sys.path[0]. CI installs dependencies with --no-install-project, so give
     # each real worker the tested source explicitly and preserve caller paths.
@@ -973,12 +978,12 @@ publish("complete." + str(index) + "." + str(attempt),
     if inherited_pythonpath:
         pythonpath += os.pathsep + inherited_pythonpath
     commands = [shlex.join(["PYTHONPATH=" + pythonpath, sys.executable, "-B",
-                           str(child), str(tmp_path), str(index)]) for index in range(4)]
+                           str(child), str(tmp_path), str(index)]) for index in range(task_count)]
     trace = tmp_path / "progressive.tsv"
     observations = []
     reaped = set()
     original_retire = pool._retire_resource_worker
-    original_killpg = os.killpg
+    original_killpg = getattr(os, "killpg", None)
     original_read = policy.read_worker_resource
     initial_reports = {}
     pressure_plans = {}
@@ -1031,7 +1036,8 @@ publish("complete." + str(index) + "." + str(attempt),
         return original_killpg(pid, number)
 
     monkeypatch.setattr(pool, "_retire_resource_worker", record_retire)
-    monkeypatch.setattr(os, "killpg", reject_signal_after_reap)
+    if original_killpg is not None:
+        monkeypatch.setattr(os, "killpg", reject_signal_after_reap)
     monkeypatch.setattr(policy, "read_worker_resource", acknowledge_report)
     try:
         pool.run_resource_worker_processes(commands, tasks, 2, budget,
@@ -1057,12 +1063,15 @@ publish("complete." + str(index) + "." + str(attempt),
                float(cancelled[0][6]) < float(row[6]) < float(events["retire", "0"][6])
                for row in rows)
     assert int(retry_starts[1][3]) == int(retry_starts[1][4])
-    assert float(events["retire", "1"][6]) < float(events["start", "2"][6])
-    assert float(events["start", "3"][6]) < float(events["retire", "2"][6])
+    if restore_peers:
+        assert float(events["retire", "1"][6]) < float(events["start", "2"][6])
+        assert float(events["start", "3"][6]) < float(events["retire", "2"][6])
+    else:
+        assert set(events) == {("start", "0"), ("start", "1"), ("retire", "0"), ("retire", "1")}
     assert float(cancelled[0][6]) > float(retry_starts[0][6])
     assert float(retry_starts[1][6]) < float((tmp_path / "second-phase").read_text())
     assert [int((tmp_path / ("attempts" + str(index))).read_text())
-            for index in range(4)] == [1, 2, 1, 1]
+            for index in range(task_count)] == ([1, 2, 1, 1] if restore_peers else [1, 2])
     first_attempt = (tmp_path / "started.1.1").read_text().split("\t")
     retry_attempt = (tmp_path / "started.1.2").read_text().split("\t")
     leader_attempt = (tmp_path / "started.0.1").read_text().split("\t")
@@ -1088,9 +1097,13 @@ publish("complete." + str(index) + "." + str(attempt),
     assert tasks[1]["incomplete_peak_bytes"] == int(cancelled[0][5])
     assert tasks[1]["estimate_bytes"] == 8 * MIB
     assert tasks[1]["retry_calibration"] is False
-    assert len(observations) == 4
-    assert [sample[2] for sample in observations if sample[0] == tasks[1]["class"]] == [completed_report[2]]
-    for name, peers in (("initial-overlap", (0, 1)), ("restored-overlap", (2, 3))):
+    assert len(observations) == task_count
+    assert [sample[2] for sample in observations
+            if sample[:2] == (tasks[1]["class"], tasks[1]["inputs"])] == [completed_report[2]]
+    overlaps = [("initial-overlap", (0, 1))]
+    if restore_peers:
+        overlaps.append(("restored-overlap", (2, 3)))
+    for name, peers in overlaps:
         expected = [(tmp_path / ("started." + str(index) + ".1")).read_text().split("\t")[0]
                     for index in peers]
         for index in peers:
@@ -1099,9 +1112,18 @@ publish("complete." + str(index) + "." + str(attempt),
         pid = int(record.read_text().split("\t")[0])
         assert pid in reaped
         with pytest.raises(ProcessLookupError):
-            os.kill(pid, 0)
+            require_process_running(pid)
     assert (tmp_path / "configured-budget").read_text() == str(budget)
+    assert os.environ.get("PCC_WORKER_TREE_BUDGET_BYTES") == outer_cap
     assert pool._HOST_WORKERS == {}
+
+
+@pytest.mark.pcc_gate(probe=lambda: os.name == "posix")
+@pytest.mark.parametrize(
+    "parent_history", [0, 128 * MIB], ids=["fresh-parent", "retired-parent-rss"],
+)
+def test_progressive_retry_drains_peers_then_restores_concurrency(tmp_path, monkeypatch, parent_history):
+    _exercise_progressive_retry_pressure(tmp_path, monkeypatch, parent_history, restore_peers=True)
 
 
 @pytest.mark.pcc_gate(probe=lambda: os.name == "posix")
