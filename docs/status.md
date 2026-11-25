@@ -473,6 +473,16 @@ in the relevant section or issue and removes the entry.
    (42.37 s, 808,480,768 bytes peak); the complete original 216-node batch
    gave 214 passing calls, two independent failures, and a 90-s TIMEOUT,
    not whole-batch acceptance. See [shared compiler pool investigation](investigations/shared-compiler-admission-45619704293.md).
+   #20 newest hosted run 45663526933: the same native reader import-closure
+   assertion failed the separate Windows RSS publication job and all three
+   completed worker-prior default-xdist jobs (Linux x86 artifact
+   15047631327, 1262 passed / 1 failed). The reader must still exclude the
+   host-only WinAPI/ctypes descriptor adapter, but the separately owned
+   Windows pool lock legitimately imports msvcrt. Scoped that assertion to
+   the actual reader and verified the owned locking ABI with a real
+   x86-64 Windows COFF import. Exact preimage red; 33 reader/pool tests
+   passed on Linux. No production change; hosted Windows execution is
+   pending a later CI head.
    #20 on the local Mac at `25a309945`: the named CI-contract files and the
    shared frame tests pass. `tests/test_ci_native_object_regressions.py`'s
    host-only model controls failed only on macOS, from the gate's
@@ -513,7 +523,6 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Complete pytest overlapping worker growth fixture: Codex, Linux x86_64, 2026-11-25T17:38Z, area selfhost (tests/python/test_worker_resource_plan.py only)
-   - #20 owned Windows reader adapter import closure: Codex, Linux, 2026-11-25T17:39Z, area selfhost (worker_resource_reader test only)
    - #20 indexed lifecycle negative witness authoritative fixture values: Codex, Linux x86-64, 2026-11-25T17:40Z, area backend
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and

@@ -1,7 +1,8 @@
 """Bounded host reader controls; WinAPI/CRT are mocks, with no PCC imports.
 
-Load only the three leaf sources by file, never the pcc package or a compiler.
-The fd lifetime cases use ordinary CPython temporary-file I/O, not FFI.
+The reader controls load only leaf sources by file and use ordinary CPython
+temporary-file I/O, not FFI. The independent owned-locking control emits a
+real cross-target COFF object without executing Windows code.
 """
 
 import ast
@@ -221,8 +222,17 @@ def test_actual_dispatcher_keeps_windows_adapter_outside_native_import_closure()
     native = scan._without_inactive_runtime_imports(source)
     host = scan._without_inactive_implementation_imports(source, implementation="cpython")
     assert HOST_MODULE not in native and HOST_MODULE in host
-    assert "import ctypes" not in native and "import msvcrt" not in native
-    assert 'return open(path, "r", encoding="utf-8")' in native
+    assert "import ctypes" not in native
+    native_tree = ast.parse(native)
+    native_dispatch = next(node for node in native_tree.body
+                           if isinstance(node, ast.FunctionDef)
+                           and node.name == "_open_worker_resource")
+    native_reader = ast.unparse(native_dispatch)
+    # The host adapter's descriptor-conversion dependency must not leak into
+    # this reader. Do not prohibit the separately owned Windows locking API
+    # from other functions in the same module.
+    assert "import msvcrt" not in native_reader
+    assert "return open(path, 'r', encoding='utf-8')" in native_reader
     tree = ast.parse(source)
     dispatch = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
                     and node.name == "_open_worker_resource")
@@ -233,6 +243,49 @@ def test_actual_dispatcher_keeps_windows_adapter_outside_native_import_closure()
                   and node.name == "read_worker_resource")
     assert any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                and node.func.id == "_open_worker_resource" for node in ast.walk(reader))
+
+
+def test_native_pool_admission_uses_owned_windows_locking_not_the_host_reader():
+    scan = _load_leaf(SCAN_PATH)
+    native = scan._without_inactive_runtime_imports((ROOT / POLICY_PATH).read_text())
+    pool = next(node for node in ast.parse(native).body
+                if isinstance(node, ast.FunctionDef)
+                and node.name == "acquire_shared_pool_slot")
+    source = ast.unparse(pool)
+    assert "import msvcrt" in source and "msvcrt.locking" in source
+    assert HOST_MODULE not in source and "ctypes" not in source
+    owned = ast.parse((ROOT / "pcc/stdlib/msvcrt.py").read_text())
+    # The supported native operation is an owned runtime ABI, not the
+    # host-only open_osfhandle/WinAPI adapter used by the snapshot reader.
+    assert any(isinstance(node, ast.Call)
+               and isinstance(node.func, ast.Name) and node.func.id == "extern"
+               and node.args and isinstance(node.args[0], ast.Constant)
+               and node.args[0].value == "py_msvcrt_locking"
+               for node in ast.walk(owned))
+    assert "import ctypes" not in ast.unparse(owned)
+    runtime = ast.parse((ROOT / "pcc/runtime/py/py_file_lock.py").read_text())
+    assert any(isinstance(node, ast.FunctionDef) and node.name == "py_msvcrt_locking"
+               for node in runtime.body)
+
+
+def test_owned_windows_locking_emits_the_runtime_import(tmp_path):
+    from pcc.backend.coff_x86_64 import parse_object
+    from pcc.backend.owned_object_emit import emit_owned_object
+    from pcc.frontends.python.pipeline import compile_python
+
+    target = "x86_64-pc-windows-msvc"
+    output = tmp_path / "msvcrt.ll"
+    compile_python(
+        str(ROOT / "pcc/stdlib/msvcrt.py"), str(output),
+        python_library=True, emit_llvm_only=True, backend="self",
+        target_triple=target, ir_scaffold_mode="on",
+    )
+    ir = output.read_text()
+    assert any("call " in line and "@py_msvcrt_locking(" in line
+               for line in ir.splitlines())
+    obj = parse_object(emit_owned_object(ir, target))
+    assert any(symbol.name == "py_msvcrt_locking" and symbol.external
+               and symbol.section == 0 for symbol in obj.symbols)
 
 
 @pytest.mark.parametrize("change", ["compound", "rebound", "global"])
