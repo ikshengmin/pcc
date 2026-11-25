@@ -28,6 +28,7 @@ class ConsumerModel:
         self.sequence = 0
         self.pending = None
         self.moves = []
+        self.parks = []
         self.disposed = []
         self.calls = []
         self.callback = None
@@ -92,26 +93,9 @@ class ConsumerModel:
     def park(self, reason):
         if not self.relocate:
             return
-        for old, obj in list(self.objects.items()):
-            if obj['refs'] <= 0 or obj['leases'] or obj['pin'] or obj['immortal']:
-                continue
-            slots = [slot for slot, value in self.memory.items()
-                     if value == old and self.registered(slot)]
-            heap_slots = [(owner, offset) for owner, record in self.objects.items()
-                          for offset, value in record['fields'].items() if value == old]
-            if not slots and not heap_slots and self.pending != old:
-                continue
-            new = old + '@'
-            self.objects[new] = self.objects.pop(old)
-            self.current[obj['name']] = new
-            for slot in slots:
-                self.memory[slot] = new
-            for owner, offset in heap_slots:
-                owner = new if owner == old else owner
-                self.objects[owner]['fields'][offset] = new
-            if self.pending == old:
-                self.pending = new
-            self.moves.append((reason, old, new))
+        # One collector (item 2 (d)): the collection point is reached and
+        # moves nothing.
+        self.parks.append(reason)
 
     def inc(self, value):
         if value is not None:
@@ -372,7 +356,7 @@ def test_named_result_keeps_owner_through_argument_cleanup(relocate, result_kind
     assert m.obj(m.current['argument'])['refs']==1+(result_kind in ('arg','args'))
     m.assert_clean()
     if relocate:
-        assert m.moves
+        assert m.parks and not m.moves
 
 
 @pytest.mark.parametrize('kind', ['absent','none','error','silent','input-copy','args','result-lease'])

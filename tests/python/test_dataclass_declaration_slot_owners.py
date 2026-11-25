@@ -32,7 +32,6 @@ class DefaultsMemory(DictMemory):
                        global_addr=lambda name: name,
                        pcc_gc_frame_enter=self.frame_enter,
                        pcc_gc_frame_leave=self.frame_leave,
-                       pcc_gc_unpin=self.unpin,
                        py_tls_exc_swap_slot=self.swap_error,
                        py_obj_call=lambda *_: pytest.fail('copy invoked a factory'))
         names = {'_checked_func', '_is_tuple', '_func_runtime_error_if_unset',
@@ -152,11 +151,6 @@ class DefaultsMemory(DictMemory):
         for handle in reversed(handles):
             self.unregister(handle)
 
-    def unpin(self, value):
-        assert value.alive and value.leases > 0
-        value.leases -= 1
-        self.collect('unpin')
-
     def run(self):
         return self.ns['py_func_copy_signature_defaults_slots'](self.caller, self.output)
 
@@ -255,14 +249,15 @@ def test_declaration_output_cannot_overwrite_its_source_owner():
     memory.discard_outputs()
 
 
-@pytest.mark.parametrize('phase', ('register', 'lock', 'unpin', 'drop', 'unregister'))
+@pytest.mark.parametrize('phase', ('register', 'lock', 'drop', 'unregister'))
 @pytest.mark.parametrize('keep_alias', (False, True))
-def test_prepared_snapshot_release_roots_owner_before_unpin(phase, keep_alias):
+def test_prepared_snapshot_release_roots_owner_before_release(phase, keep_alias):
+    # One collector (item 2 (d)): the caller transfers the NEW owner alone;
+    # no pin comes with it and the release unpins nothing.
     memory = DefaultsMemory()
     assert memory.run() == 0
     snapshot = memory.read(memory.output, 0)
-    snapshot.leases += 1
-    memory.write(memory.output, 0, None)  # transfer the pinned NEW owner
+    memory.write(memory.output, 0, None)  # transfer the NEW owner
     if keep_alias:
         snapshot.refs += 1
         memory.write(memory.value_output, 0, snapshot)

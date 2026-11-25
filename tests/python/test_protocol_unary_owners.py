@@ -34,6 +34,7 @@ class UnaryOwnerModel:
         self.pending = None
         self.result = None
         self.moves = []
+        self.parks = []
         self.disposed = []
         self.observed_result_during_disposal = False
         self.callback_count = 0
@@ -57,31 +58,9 @@ class UnaryOwnerModel:
     def park(self, reason):
         if not self.relocate:
             return
-        # Only currently registered roots and actual heap fields get updated.
-        # A C/Python local copied before this operation must not be reused.
-        for old, obj in list(self.objects.items()):
-            if obj['refs'] <= 0 or obj['pin'] or obj['leases'] or obj.get('immortal'):
-                continue
-            slots = [address for address, value in self.memory.items()
-                     if value == old and self.registered(address)]
-            if not slots:
-                continue
-            new = obj['name'] + '@' + str(len(self.moves) + 1)
-            self.objects[new] = self.objects.pop(old)
-            self.current[obj['name']] = new
-            for slot in slots:
-                self.memory[slot] = new
-            for items in self.items.values():
-                for index, value in list(items.items()):
-                    if value == old:
-                        items[index] = new
-            if old in self.items:
-                self.items[new] = self.items.pop(old)
-            if self.pending == old:
-                self.pending = new
-            if self.result == old:
-                self.result = new
-            self.moves.append((reason, old, new))
+        # One collector (item 2 (d)): the collection point is reached and
+        # moves nothing.
+        self.parks.append(reason)
 
     def new(self, name):
         self.park('allocation-' + name)
@@ -221,12 +200,9 @@ class UnaryOwnerModel:
         def swap(slot):
             self.park('tls-swap')
             self.pending, self.memory[slot] = self.load(slot, 0), self.pending
-        def pin(value):
-            self.objects[value]['pin'] = 64
-        def take(slot, prior):
+        def take_slot(slot):
+            # pcc_gc_take_slot: transfer the owner; nothing pinned.
             value = self.load(slot, 0)
-            if value is not None and not isinstance(value, int):
-                self.objects[value]['pin'] = prior
             self.store(slot, 0, None)
             return value
         def load_gc(owner, slot):
@@ -251,8 +227,8 @@ class UnaryOwnerModel:
                    pcc_py_gc_minor_graph_unlock=lambda: None,
                    pcc_gc_note_root_slot_barrier=lambda slot: locked_root_slot_barrier(env)(slot),
                    pcc_gc_note_slot_write_barrier=lambda owner, slot, value: None,
-                   pcc_gc_load_ptr=load_gc, pcc_gc_pin=pin,
-                   pcc_gc_take_pinned_slot=take, py_tls_exc_swap_slot=swap,
+                   pcc_gc_load_ptr=load_gc,
+                   pcc_gc_take_slot=take_slot, py_tls_exc_swap_slot=swap,
                    py_clear_exception=lambda: setattr(self, 'pending', None),
                    py_runtime_error_if_unset=lambda helper, message: require(None, helper, message),
                    py_err_occurred=lambda: int(self.pending is not None),
@@ -287,7 +263,7 @@ def _runtime_helpers():
         'pcc_protocol_unary_owned_map': counts['_PROTOCOL_UNARY_SLOT_COUNT'],
     }
     names = {'_protocol_unary_adopt', '_protocol_unary_drop', '_protocol_unary_body',
-             '_protocol_unary_pin_result', '_call_unary_function', '_call_unary'}
+             '_call_unary_function', '_call_unary'}
     selected = ast.Module(body=[node for node in tree.body
                                if isinstance(node, ast.FunctionDef) and node.name in names],
                           type_ignores=[])
@@ -300,7 +276,7 @@ def _runtime_helpers():
     assert all(argument.annotation is None for argument in managed.args.args)
     for name, pointer_count in (
         ('_protocol_unary_adopt', 2), ('_protocol_unary_drop', 2),
-        ('_protocol_unary_body', 3), ('_protocol_unary_pin_result', 1),
+        ('_protocol_unary_body', 3),
     ):
         assert all(isinstance(argument.annotation, ast.Name)
                    and argument.annotation.id == 'c_ptr'
@@ -323,9 +299,9 @@ def test_unary_callback_registered_owner_aliases(result_kind, relocate, prior_pi
     assert model.objects[model.current['method']]['pin'] == prior_pin
     assert model.observed_result_during_disposal
     if relocate:
-        assert any(reason == 'owning-frame-registration' for reason, _, _ in model.moves)
+        assert 'owning-frame-registration' in model.parks and not model.moves
         if result_kind == 'new':
-            assert any(reason == 'lease-acquire' and old == 'result' for reason, old, _ in model.moves)
+            assert 'lease-acquire' in model.parks
 
 
 @pytest.mark.parametrize('result_kind', ('new', 'method', 'args'))
@@ -488,23 +464,20 @@ def _call_unary(method, self_obj):
 '''
 
 
-@pytest.mark.parametrize('previous', (True, False))
-def test_receiver_finalizer_relocation_exposes_previous_raw_result(previous):
+def test_receiver_finalizer_collection_keeps_current_result():
+    # One collector (item 2 (d)): the finalizer's collection moves nothing.
+    # The moving-collector negative control (the previous body returning a
+    # stale raw result) is gone with relocation.
     model = FinalizerRelocationModel()
     env = model.environment()
-    exec(compile(_PREVIOUS_UNARY, '<previous production unary body>', 'exec')
-         if previous else _runtime_helpers(), env)
+    exec(_runtime_helpers(), env)
     result = env['_call_unary']('method', 'self')
     assert model.finalizers == 1
     assert model.tokens == {} and model.frames == {model.external_result_slot: -1}
-    if previous:
-        assert result == 'result' and result != model.current['result']
-        assert model.moves == [('receiver-finalizer-collection', 'result', 'result@1')]
-        assert model.pending == 'finalizer-error'
-    else:
-        assert result == model.current['result']
-        assert model.objects[result]['refs'] == 2
-        assert model.pending is None
+    assert 'receiver-finalizer-collection' in model.parks and not model.moves
+    assert result == model.current['result']
+    assert model.objects[result]['refs'] == 2
+    assert model.pending is None
 
 
 @pytest.mark.parametrize('previous', (True, False))

@@ -42,6 +42,7 @@ class PercentMemory:
     def __init__(self, source, relocate=True, failure=None, alias=False, lease_failure=None, copy_failure=None, custom_tag=ABI['PY_TYPE_BYTES']):
         self.source = source
         self.relocate = relocate
+        self.collections = 0
         self.failure = failure
         self.alias = alias
         self.lease_failure = lease_failure
@@ -113,22 +114,9 @@ class PercentMemory:
         assert self.pending_new is None, ('unpublished NEW crossed a call', self.pending_new)
         if not self.relocate:
             return
-        protected = {self.load(slot).identity for slot in self.leases
-                     if isinstance(self.load(slot), Handle)}
-        protected.update(i for i, obj in self.objects.items() if obj['pinned'])
-        # Move every live unleased object, including tuple/dict children.
-        # Traced heap references are logical IDs; raw local handles become
-        # stale and must never be reused across this simulated parking point.
-        moved = {identity for identity, obj in self.objects.items()
-                 if self.frames and obj['refs'] > 0 and identity not in protected}
-        for identity in moved:
-            self.objects[identity]['generation'] += 1
-        for frame, count in self.frames.items():
-            for offset in range(abs(count)):
-                slot = frame + offset * 8
-                value = self.memory.get(slot)
-                if isinstance(value, Handle) and value.identity in moved:
-                    self.memory[slot] = self.current(value.identity)
+        # One collector (item 2 (d)): the collection point is reached and
+        # moves nothing.
+        self.collections += 1
 
     def acquire(self, slot):
         self.park()
@@ -264,16 +252,16 @@ class PercentMemory:
         def swap(slot):
             self.park()
             self.pending, self.memory[slot] = self.load(slot), self.pending
-        def pin(slot):
-            self.park()
+        def take_slot(slot):
+            # pcc_gc_take_slot: transfer the owner; nothing pinned.
             value = self.load(slot)
-            if value is None:
-                return 0
-            obj = self.object(value)
-            prior = int(obj['pinned'])
-            obj['pinned'] = True
-            return prior
-        def take(slot, prior):
+            if value is not None:
+                self.pending_new = value.identity
+            self.memory[slot] = None
+            return value
+        def take_pinned(slot, prior):
+            # The legacy take, for users of this model whose runtime module
+            # has not dropped its pins yet (py_obj_ops_dispatch, item 2 (d)).
             value = self.load(slot)
             if value is not None:
                 self.object(value)['pinned'] = bool(prior)
@@ -357,7 +345,7 @@ class PercentMemory:
             pcc_py_gc_minor_graph_unlock=lambda: None,
             pcc_gc_note_root_slot_barrier=lambda slot: locked_root_slot_barrier(self.env)(slot),
             pcc_gc_note_slot_write_barrier=lambda *args: None,
-            pcc_gc_take_pinned_slot=take, _unicode_format_pin=pin,
+            pcc_gc_take_slot=take_slot, pcc_gc_take_pinned_slot=take_pinned,
             pcc_platform_abort=lambda: pytest.fail('owner protocol abort'),
             py_clear_exception=lambda: setattr(self, 'pending', None),
             py_err_occurred=lambda: int(self.pending is not None),
@@ -460,6 +448,7 @@ def test_percent_text_actual_bodies_publish_each_conversion(runtime_source, relo
     status = model.env['_percent_text'](output, argument, Payload(b'%s'), cursor, conversion, 0, 0, -1, bytes_mode)
     model.finish()
     assert status == 0 and bytes(model.load(output).value) == expected
+    assert (model.collections > 0) == relocate
     assert model.objects[argument.identity]['refs'] == 1
     assert model.pending is None
     assert all(obj['refs'] == 0 for identity, obj in model.objects.items() if identity != argument.identity)

@@ -34,6 +34,7 @@ class TupleMemory(Memory):
             'pcc_gc_note_relocation_read':lambda obj:obj,
             'pcc_capi_is_cext_type_tag':lambda tag:0,
             'pcc_gc_pin':self.pin, 'pcc_gc_take_pinned_slot':self.take,
+            'pcc_gc_take_slot':self.take_slot,
             'py_tuple_new':self.new_tuple, 'py_tuple_len':lambda obj:self.read(obj,16),
             'py_tuple_set_item':self.tuple_set,
             'py_list_new':self.new_list, 'py_list_append':self.list_append,
@@ -102,6 +103,13 @@ class TupleMemory(Memory):
     def pin(self,obj):
         if isinstance(obj,Object):
             assert obj.alive;obj.leases+=1;obj.fields[12]=(obj.fields.get(12) or 0)|64
+
+    def take_slot(self,slot):
+        # pcc_gc_take_slot: transfer the owner; nothing pinned (item 2 (d)).
+        value=self.read(slot,0);self.write(slot,0,None)
+        if isinstance(value,Object):
+            assert value.alive
+        return value
 
     def take(self,slot,prior):
         value=self.read(slot,0);self.write(slot,0,None)

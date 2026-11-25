@@ -90,7 +90,7 @@ class ModuloProtocolMemory(SelectionMemory):
         for node in tree.body:
             if isinstance(node, ast.FunctionDef) and (
                 node.name.startswith('_named_') or node.name in {
-                    '_write_handled', '_protocol_unary_pin_result',
+                    '_write_handled',
                     'py_user_binop_dispatch',
                 }
             ):

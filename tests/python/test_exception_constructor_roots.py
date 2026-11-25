@@ -173,8 +173,10 @@ class _Memory:
             "pcc_gc_publish_initialized": self.publish,
             "pcc_gc_note_write_barrier": lambda _owner, _value: self.gc("barrier"),
             "pcc_py_gc_minor_graph_lock": lock, "pcc_py_gc_minor_graph_unlock": unlock,
-            "pcc_gc_pin": self.pin, "pcc_gc_take_pinned_slot": self.take,
             "pcc_gc_take_slot": self.take_slot,
+            # Legacy pin/take for users of this model whose runtime module has
+            # not dropped its pins yet (item 2 (d)).
+            "pcc_gc_pin": self.pin, "pcc_gc_take_pinned_slot": self.take,
             "py_incref": self.incref, "py_decref": self.decref,
             "pcc_diagnostics_runtime_log_event_code": lambda *_args: self.gc("log"),
         }
@@ -271,7 +273,7 @@ def test_exception_constructor_roots_reach_owned_emitter(tmp_path, monkeypatch, 
     text = output.read_text()
     assert "@pcc_exc_construct_borrowed_frame_map" in text
     assert "@pcc_exc_construct_owned_frame_map" in text
-    assert "@pcc_gc_take_pinned_slot(" in text
+    assert "@pcc_gc_take_slot(" in text
     payload = emit_owned_object(text, triple)
     assert len(payload) > 64
     (tmp_path / "py_exc_objects.o").write_bytes(payload)

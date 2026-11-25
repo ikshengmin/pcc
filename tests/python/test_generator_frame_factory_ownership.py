@@ -16,6 +16,23 @@ from tests.python.test_foreign_address_leases import _functions
 
 
 class FrameFactoryModel(ListFactoryModel):
+    def boundary(self):
+        # One collector (item 2 (d)): the boundary is a collection point
+        # that moves nothing, so a private result needs no pin.
+        relocate, self.relocate = self.relocate, False
+        try:
+            super().boundary()
+        finally:
+            self.relocate = relocate
+        if relocate:
+            self.collections += 1
+
+    def take_slot(self, slot):
+        # pcc_gc_take_slot: transfer the owner; nothing pinned.
+        obj = self.load(slot, 0)
+        self.store(slot, 0, None)
+        return obj
+
     def __init__(self, count, failure=None, pending=None, relocate=False):
         self.count = count
         self.none = 4000
@@ -35,7 +52,9 @@ class FrameFactoryModel(ListFactoryModel):
             'pcc_gc_frame_leave_local': self.local_leave,
             'pcc_gc_frame_enter': self.legacy_registration,
             'pcc_gc_frame_leave': self.legacy_registration,
+            'pcc_gc_take_slot': self.take_slot,
         })
+        self.collections = 0
         _functions(
             RUNTIME / 'py_gen.py',
             {'_require_result', '_gen_frame_factory_finish', '_gen_frame_factory_oom', 'py_gen_frame_new'},
@@ -142,6 +161,7 @@ def test_frame_factory_success_transfers_filled_current_owner(count, relocate):
     assert result in model.objects and model.refs[result] == 1
     model.check_shape(result)
     assert model.memory[result + 16] == count
+    assert (model.collections > 0) == relocate
     assert model.pending is None and model.disposals == 0
     assert not model.frames and not model.leases and not model.pins
     model.assert_local_pair()
@@ -152,12 +172,8 @@ def test_frame_factory_handoff_reuses_live_address_lease(relocate):
     model = FrameFactoryModel(7, relocate=relocate)
     def forbidden_lock():
         pytest.fail('a private leased factory result needs no graph transaction')
-    def leased_pin(obj):
-        assert any(model.load(slot, 0) == obj for slot in model.leases)
-        model.pin(obj)
     model.ns['pcc_py_gc_minor_graph_lock'] = forbidden_lock
     model.ns['pcc_py_gc_minor_graph_unlock'] = forbidden_lock
-    model.ns['pcc_gc_pin'] = leased_pin
     result = model.ns['py_gen_frame_new'](7)
     assert result in model.objects and model.refs[result] == 1
     model.check_shape(result)

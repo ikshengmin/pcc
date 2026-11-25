@@ -263,7 +263,7 @@ def test_py_func_call_kwargs_fail_closed_contract_is_mirrored():
     py_binding_guard = py_source.index(
         '"native function argument binding returned NULL without exception"'
     )
-    py_binding_cleanup = py_source.index("_func_clear_call_root(slots, pins, 32)", py_binding_guard)
+    py_binding_cleanup = py_source.index("_func_clear_call_root(slots, 32)", py_binding_guard)
     assert py_binding_guard < py_binding_cleanup
 
     py_entry_call = py_source.index("result = call_ptr2(")

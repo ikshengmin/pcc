@@ -45,7 +45,7 @@ class CurrentModel(Model):
             pcc_gc_root_copy_lease=self.copy_lease,
             py_exc_traceback_format_exc_abi=self.format_current,
             py_exc_traceback_print_exc_abi=self.print_current,
-            pcc_gc_pin=self.pin, pcc_gc_take_pinned_slot=self.take,
+            pcc_gc_take_slot=self.take_slot,
             is_tagged_int=lambda value: False,
             global_load_ptr=lambda name: self.none,
             py_cleanup_one_root_preserving_exception=self.clear_owned,
@@ -117,21 +117,10 @@ class CurrentModel(Model):
         if exc:
             assert exc in {self.load(s) for s, count in self.leases.items() if count}
 
-    def pin(self, value):
-        self.check(value)
-        slot = next(root for root in self.roots if self.load(root) == value)
-        self.leases[slot] += 1
-        self.pinned.add(slot)
-
-    def take(self, result, prior):
+    def take_slot(self, result):
+        # pcc_gc_take_slot: transfer the owner; nothing pinned (item 2 (d)).
         value = self.load(result)
         self.check(value)
-        matching = [slot for slot in self.pinned if self.load(slot) == value]
-        assert matching or not value
-        if value:
-            pinned_slot = matching[0]
-            self.leases[pinned_slot] -= 1
-            self.pinned.remove(pinned_slot)
         self.memory[result] = 0
         return value
 

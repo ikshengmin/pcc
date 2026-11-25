@@ -27,7 +27,6 @@ SITES = (
     ("py_obj.py", "pcc_gc_immortalize", IMMORTAL),
     ("py_coroutine.py", "py_coroutine_class", IMMORTAL),
     ("py_coroutine.py", "py_continuation_class", IMMORTAL),
-    ("py_os_path.py", "_path_clear_root_prefix", PINNED),
 )
 
 
@@ -153,19 +152,7 @@ class MetadataRuntime(Runtime):
             assert n[name]() is obj  # Cached class must not rewrite its header.
             assert (self.pin_calls, self.unpin_calls, obj.pins) == (0, 0, 0)
             return
-        if name == "_path_clear_root_prefix":
-            slots, pins = self.frame(24)
-            obj.pins = 1
-            n["store_ptr"](slots, 0, obj)
-            n["store_i64"](pins, 0, PINNED)
-            n[name](slots, pins, 1)
-            self.frames.remove(slots)
-            assert (self.pin_calls, self.unpin_calls, obj.pins) == (0, 1, 0)
-            assert self.events == ["unpin", "collector", "metadata", "clear"]
-        else:
-            raise AssertionError(name)
-        assert not self.frames and not self.leases
-        assert obj.pins == 0 and self.pin_calls == self.unpin_calls - 1
+        raise AssertionError(name)
 
 
 @pytest.mark.parametrize("site", SITES, ids=lambda site: site[1])
@@ -189,10 +176,10 @@ def test_metadata_preserves_concurrent_header(site, transition, preset, legacy):
             assert bool(observed & GRAY) == bool(runtime.credit) == bool(runtime.tokens)
 
 
-def test_all_four_metadata_sites_use_relaxed_atomic_or():
-    # os.mkdir's and tempfile's drops and finishes no longer write a pin bit
-    # (item 2 (d)).
-    assert len(SITES) == 4
+def test_all_three_metadata_sites_use_relaxed_atomic_or():
+    # No runtime drop or finish writes a pin bit any more (item 2 (d)); the
+    # IMMORTAL sites remain.
+    assert len(SITES) == 3
     for filename, name, bit in SITES:
         tree = ast.parse((RUNTIME / filename).read_text())
         node = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name)
@@ -209,29 +196,9 @@ def test_all_four_metadata_sites_use_relaxed_atomic_or():
                        and call.func.id == "store_i32" for call in ast.walk(node)), name
 
 
-@pytest.mark.parametrize("name", ["_path_clear_root_prefix"])
-def test_alias_pin_restoration_keeps_reverse_release_order(name):
-    site = next(site for site in SITES if site[1] == name)
-    runtime = MetadataRuntime(site, "shade", False)
-    # This test observes two reverse-order aliases without injecting a race.
-    runtime.site = "no_interference"
-    n, obj = runtime.ns, runtime.target
-    slots, pins = runtime.frame(24)
-    obj.flags |= PINNED
-    obj.pins = 2
-    for index, prior in ((0, 0), (1, PINNED)):
-        runtime.write(slots, index * 8, obj)
-        runtime.write(pins, index * 8, prior)
-    n[name](slots, pins, 2)
-    assert runtime.events == ["unpin", "clear", "unpin", "clear"]
-    assert obj.pins == 0 and obj.flags & PINNED == 0
-    assert (runtime.pin_calls, runtime.unpin_calls) == (0, 2)
-    assert runtime.read(slots, 0) is None and runtime.read(slots, 8) is None
-
-
 @pytest.mark.integration
 def test_metadata_atomic_or_executes_owned_runtime_all_collectors(tmp_path, pcc_runtime_archive):
-    """Execute the three IMMORTAL sites; the pin-restore site is host-only.
+    """Execute the three IMMORTAL sites.
 
     This is native ABI/bit preservation, not a native race reproducer.
     """

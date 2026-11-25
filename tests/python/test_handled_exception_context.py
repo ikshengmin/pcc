@@ -269,10 +269,14 @@ def test_c_api_explicit_cause_sets_suppression_preserving_gc_bits():
         assert error[12] == flags | PY_FLAG_EXC_SUPPRESS_CONTEXT
 
 
-def test_generator_close_result_reload_is_locked_before_pinning():
-    """Exercise the actual close handoff with movement on graph-lock entry."""
+def test_generator_close_result_handoff_takes_slot_without_lock_or_pin():
+    """Exercise the actual close handoff of a StopIteration value.
+
+    One collector (item 2 (d)): nothing moves, so the handoff neither
+    reloads under the graph lock nor pins; it clears the generator root and
+    takes the value's slot owner with pcc_gc_take_slot.
+    """
     import copy
-    import pytest
 
     source = SOURCE.with_name("py_gen.py")
     tree = ast.parse(source.read_text())
@@ -287,76 +291,39 @@ def test_generator_close_result_reload_is_locked_before_pinning():
                        and isinstance(node.value.func, ast.Name)
                        and node.value.func.id == "py_clear_exception")
     handoff = stopped.body[clear_index + 1:]
+    value = {12: 0}
+    exc_slot = [value]
+    gen_slot = [object()]
+    events = []
 
-    def execute(body, prior_pin):
-        old = {12: prior_pin}
-        moved = {12: prior_pin}
-        slot = [old]
-        state = {"locked": False, "pins": 0}
+    def forbidden(*_args):
+        raise AssertionError("the close handoff needs no graph lock or pin")
 
-        def lock():
-            assert not state["locked"]
-            # The lock's entry safepoint moves the traced root first.
-            slot[0] = moved
-            state["locked"] = True
+    def store_root(slot, new):
+        assert new is None
+        events.append(("store_root", slot is gen_slot))
+        slot[0] = None
 
-        def unlock():
-            assert state["locked"] and moved[12] & 64
-            state["locked"] = False
+    def take_slot(slot):
+        assert slot is exc_slot
+        events.append(("take",))
+        taken, slot[0] = slot[0], None
+        return taken
 
-        def load(_owner, incoming):
-            value = incoming[0]
-            if not state["locked"]:
-                # GC4 read-barrier root introspection may park on unlock.
-                incoming[0] = moved
-            return value
-
-        def header(value, offset):
-            assert state["locked"] and value is moved, "stale close result"
-            return value[offset]
-
-        def pin(value):
-            assert state["locked"] and value is moved
-            value[12] |= 64
-            state["pins"] += 1
-
-        def cleanup(*_args):
-            assert not state["locked"] and slot[0] is moved and moved[12] & 64
-
-        def take(incoming, saved_pin):
-            cleanup()
-            assert saved_pin == prior_pin
-            value = incoming[0]
-            value[12] = (value[12] & ~64) | saved_pin
-            incoming[0] = None
-            return value
-
-        namespace = {
-            "exc_slot": slot, "gen_slot": [object()], "gen_root": object(),
-            "exc_root": object(), "null": lambda: None,
-            "pcc_py_gc_minor_graph_lock": lock, "pcc_py_gc_minor_graph_unlock": unlock,
-            "pcc_gc_load_ptr": load, "load_i32": header, "pcc_gc_pin": pin,
-            "store_ptr": lambda target, offset, value: target.__setitem__(offset // 8, value),
-            "is_tagged_int": lambda _value: False,
-            "pcc_gc_store_root": cleanup,
-            "pcc_gc_scheduler_root_unregister_handle": cleanup,
-            "pcc_gc_take_pinned_slot": take,
-        }
-        function = ast.FunctionDef(name="handoff", args=ast.arguments(
-            posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[]),
-            body=copy.deepcopy(body), decorator_list=[])
-        unit = ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[]))
-        exec(compile(unit, str(source), "exec"), namespace)
-        assert namespace["handoff"]() is moved
-        assert state == {"locked": False, "pins": 1}
-        assert moved[12] == prior_pin and old[12] == prior_pin and slot[0] is None
-
-    for prior_pin in (0, 64):
-        execute(handoff, prior_pin)
-    unlocked = [node for node in handoff if not (
-        isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
-        and isinstance(node.value.func, ast.Name)
-        and node.value.func.id in {"pcc_py_gc_minor_graph_lock", "pcc_py_gc_minor_graph_unlock"}
-    )]
-    with pytest.raises(AssertionError, match="stale close result"):
-        execute(unlocked, 0)
+    namespace = {
+        "exc_slot": exc_slot, "gen_slot": gen_slot, "gen_root": object(),
+        "exc_root": object(), "null": lambda: None,
+        "pcc_py_gc_minor_graph_lock": forbidden,
+        "pcc_py_gc_minor_graph_unlock": forbidden, "pcc_gc_pin": forbidden,
+        "pcc_gc_store_root": store_root,
+        "pcc_gc_scheduler_root_unregister_handle": lambda _root: events.append(("unregister",)),
+        "pcc_gc_take_slot": take_slot,
+    }
+    function = ast.FunctionDef(name="handoff", args=ast.arguments(
+        posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[]),
+        body=copy.deepcopy(handoff), decorator_list=[])
+    unit = ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[]))
+    exec(compile(unit, str(source), "exec"), namespace)
+    assert namespace["handoff"]() is value
+    assert exc_slot[0] is None and gen_slot[0] is None
+    assert events[-1] == ("take",) and ("store_root", True) in events

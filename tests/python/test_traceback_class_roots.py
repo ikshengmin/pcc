@@ -36,6 +36,7 @@ class Model:
         self.fail_allocation = False
         self.fail_lock = False
         self.moves = 0
+        self.collections = 0
         self.ns = dict(
             C_POINTER_SIZE=8, PY_FLAG_IMMORTAL=1, _TB_VALUE=8,
             null=lambda: 0, ptr_is_null=lambda x: int(x == 0),
@@ -92,17 +93,9 @@ class Model:
     def move(self):
         if self.depth:
             return
-        pinned = {self.load(slot) for slot, count in self.leases.items() if count}
-        for old in list(self.objects):
-            if old in pinned:
-                continue
-            new = self.alloc()
-            self.objects[new] = self.objects.pop(old)
-            self.memory[new + 12] = self.memory.pop(old + 12)
-            for slot in self.roots:
-                if self.load(slot) == old:
-                    self.memory[slot] = new
-            self.moves += 1
+        # One collector (item 2 (d)): the collection point is reached and
+        # moves nothing.
+        self.collections += 1
 
     def graph_lock(self):
         self.move()
@@ -215,7 +208,7 @@ def test_cache_survives_relocation_and_registers_once():
     assert m.load(destination) == m.load(700)
     assert m.registrations == {700: 1}
     assert len(m.constructed) == 1 and not m.destroyed
-    assert not m.mutex and m.depth == 0 and m.moves > 0
+    assert not m.mutex and m.depth == 0 and m.collections > 0 and m.moves == 0
 
 
 def test_reentrant_constructor_publishes_once_and_retires_loser():

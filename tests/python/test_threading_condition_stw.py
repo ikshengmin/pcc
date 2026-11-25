@@ -174,8 +174,8 @@ class _ConditionOracle:
     def exited(self):
         """A collector acts while this thread is exited in a kernel wait."""
         assert not self.mutex.held, "exited while holding Condition"
-        if self.carrier_pins:
-            assert self.current.slots[12] & PY_FLAG_GC_PINNED
+        # A carrier-pinned virtual thread needs no GC pin bit: the one
+        # collector never moves it (item 2 (d)).
         if self.relocate:
             self._relocate()
 
@@ -205,8 +205,6 @@ class _ConditionOracle:
     def safepoint(self):
         assert not self.mutex.held, "STW acknowledged while holding Condition"
         self.safepoints += 1
-        if self.carrier_pins:
-            assert self.current.slots[12] & PY_FLAG_GC_PINNED
         if self.relocate:
             self._relocate()
 

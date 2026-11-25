@@ -43,8 +43,7 @@ class CacheMemory(_Memory):
             "py_current_exception": lambda: self.error.fields[0],
             "py_err_occurred": lambda: self.error.fields[0] is not None,
             "py_runtime_error_if_unset": self.raise_error,
-            "pcc_gc_unpin": self.unpin,
-            "pcc_gc_take_pinned_slot": self.take_slot,
+            "pcc_gc_take_slot": self.take_slot,
         })
         tree = ast.parse(PORT.read_text())
         names = {"_func_keep_call_error", "_func_clear_call_root", "_func_runtime_error_if_unset", "py_builtin_function_value"}
@@ -122,19 +121,11 @@ class CacheMemory(_Memory):
             self.error.fields[0] = self.make(12)
         return None
 
-    def unpin(self, value):
-        if value is not None:
-            assert value.alive
-            value.flags &= ~64
-            self.pin_metric -= 1
-
-    def take_slot(self, slot, prior):
+    def take_slot(self, slot):
+        # pcc_gc_take_slot: transfer the owner; nothing pinned (item 2 (d)).
         base, offset = self.pointer(slot)
         value = base.fields[offset]
         base.fields[offset] = None
-        self.unpin(value)
-        if value is not None:
-            value.flags |= prior
         return value
 
 
