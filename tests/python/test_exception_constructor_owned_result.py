@@ -39,7 +39,6 @@ def _producer_contract(module, symbol, has_argument):
     # Import at use time: both newer modules reuse this file's _emit.
     from test_exception_module_live_callee import (
         _DirectRoots,
-        _must_precede,
         _position,
         _reaches,
         _successors,
@@ -63,20 +62,20 @@ def _producer_contract(module, symbol, has_argument):
         consumer = next(row for row in addresses.rows
                         if addresses.called(row[2], "user_exception_owner_consume"))
         argument = addresses.args(consumer[2])[0]
-        pins = [row for row in addresses.rows
-                if addresses.called(row[2], "pcc_gc_pin")
-                and addresses.args(row[2]) == [argument]]
-        assert len(pins) == 1, "direct argument needs its exact pre-call pin"
-        _must_precede(addresses, _position(pins[0]), _position(consumer))
+        # One collector: the direct argument is not pinned (item 2 (d)); its
+        # owner alone keeps it alive until the consumer has run.
+        assert not any(
+            (addresses.called(row[2], "pcc_gc_pin") or addresses.called(row[2], "pcc_gc_unpin"))
+            and addresses.args(row[2]) == [argument]
+            for row in addresses.rows
+        ), "direct argument must not be pinned"
         for row in addresses.rows:
             ins = row[2]
-            if (addresses.called(ins, "pcc_gc_unpin")
-                    or addresses.called(ins, "pcc_gc_release")
+            if (addresses.called(ins, "pcc_gc_release")
                     or addresses.called(ins, "pcc_gc_release_known")):
                 if addresses.args(ins) == [argument]:
-                    assert not (_reaches(addresses, (pins[0][0].name, pins[0][1] + 1), _position(row))
-                                and _reaches(addresses, (row[0].name, row[1] + 1), _position(consumer))), (
-                        "direct argument protection ended before consumer"
+                    assert not _reaches(addresses, (row[0].name, row[1] + 1), _position(consumer)), (
+                        "direct argument owner released before consumer"
                     )
         comparisons = [ins for ins in consumer[0].instructions
                        if ins.kind == "icmp" and ins.data[0] == "eq"
@@ -86,22 +85,19 @@ def _producer_contract(module, symbol, has_argument):
         assert branch.kind == "br_cond" and branch.data[0] == comparisons[0].data[1]
         assert branch.data[1] != branch.data[2]
         by_name = {block.name: block for block in blocks}
-        pending = [(consumer[0].name, consumer[1] + 1, 0, 0, None)]
+        pending = [(consumer[0].name, consumer[1] + 1, 0, None)]
         seen, exits = set(), set()
         while pending:
             state = pending.pop()
             if state in seen:
                 continue
             seen.add(state)
-            name, offset, unpinned, released, lane = state
+            name, offset, released, lane = state
             block = by_name[name]
             for ins in block.instructions[offset:]:
-                if addresses.called(ins, "pcc_gc_unpin") and addresses.args(ins) == [argument]:
-                    assert unpinned == released == 0, "direct argument unpinned twice or after release"
-                    unpinned = 1
                 if (addresses.called(ins, "pcc_gc_release") or addresses.called(ins, "pcc_gc_release_known")):
                     if addresses.args(ins) == [argument]:
-                        assert unpinned == 1 and released == 0, "direct argument owner must be released exactly once after unpin"
+                        assert released == 0, "direct argument owner must be released exactly once"
                         released = 1
             successors = _successors(block)
             if successors:
@@ -109,9 +105,9 @@ def _producer_contract(module, symbol, has_argument):
                     next_lane = lane
                     if name == consumer[0].name:
                         next_lane = "error" if target == branch.data[1] else "normal"
-                    pending.append((target, 0, unpinned, released, next_lane))
+                    pending.append((target, 0, released, next_lane))
             elif block.terminator.kind in ("ret", "ret_void"):
-                assert unpinned == released == 1, "direct argument owner must be released exactly once on every exit"
+                assert released == 1, "direct argument owner must be released exactly once on every exit"
                 exits.add(lane)
         assert exits == {"normal", "error"}, "direct consumer needs checked normal/error exits"
         # This proves disposal of the transferred input owner. It does not

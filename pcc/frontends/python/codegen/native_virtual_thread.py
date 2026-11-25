@@ -489,12 +489,7 @@ class NativeVirtualThreadLoweringMixin:
                     kwargs=tuple(keywords),
                 )
                 # The hidden frame slot becomes the child's single local owner.
-                self.builder.call(self.runtime["pcc_gc_pin"], [child])
                 self.builder.call(self.runtime["pcc_gc_store_root"], [child_root_ptr, child])
-                self.builder.call(
-                    self.runtime["pcc_gc_unpin"],
-                    [self._value_available_at_insertion_point(child)],
-                )
                 self._gc_release(child)
                 self.builder.branch(stored_bb)
                 self.builder.position_at_end(dynamic_bb)

@@ -190,7 +190,6 @@ class ModuleLifecycleLoweringMixin:
                 gv,
                 name=self._fresh("mod.fini.value"),
             )
-            self._gc_unpin(value)
             self.builder.call(
                 self.runtime["pcc_gc_store_root"],
                 [
@@ -205,7 +204,6 @@ class ModuleLifecycleLoweringMixin:
                 gv,
                 name=self._fresh("mod.attr.fini.value"),
             )
-            self._gc_unpin(value)
             self.builder.call(
                 self.runtime["pcc_gc_store_root"],
                 [

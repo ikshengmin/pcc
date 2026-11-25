@@ -1289,8 +1289,6 @@ class ExceptionLoweringMixin:
                     self.runtime["py_module_attr_del"],
                     [module_name, self._attr_name_ptr(name)],
                 )
-                value = self.builder.load(slot, name=self._fresh("except.global.current"))
-                self._gc_unpin(value)
                 self.builder.call(
                     self.runtime["pcc_gc_store_root"],
                     [self._as_gc_ptr(slot), ir.Constant(_CSTR, None)],
@@ -1797,7 +1795,6 @@ class ExceptionLoweringMixin:
             # the former; this drops the latter on the exceptional edge.
             self.builder.call(self.runtime["pcc_gc_release"], [current])
         for value, release_owned in pinned_release_on_error:
-            self._gc_unpin(value)
             if release_owned and not self._value_is_never_gc_object(value):
                 self.builder.call(self.runtime["pcc_gc_release"], [value])
         for value in release_on_error:

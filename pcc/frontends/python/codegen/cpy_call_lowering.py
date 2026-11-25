@@ -218,7 +218,6 @@ class CpyCallLoweringMixin:
             self._leave_container_temp_root(root_slot)
             self._gc_release(pcc_value)
         for pcc_value, release_owned in pinned_pcc:
-            self._gc_unpin(pcc_value)
             if release_owned:
                 self._gc_release(pcc_value)
         self._release_rooted_pcc_lifetimes(rooted_pcc_lifetimes)
@@ -389,7 +388,6 @@ class CpyCallLoweringMixin:
                 self._leave_container_temp_root(root_slot)
                 self._gc_release(pcc_value)
             for pcc_value, release_owned in pinned_pcc_on_error:
-                self._gc_unpin(pcc_value)
                 if release_owned:
                     self._gc_release(pcc_value)
             for pcc_value in pcc_release_on_error:
@@ -439,7 +437,6 @@ class CpyCallLoweringMixin:
                 self._leave_container_temp_root(root_slot)
                 self._gc_release(pcc_value)
             for pcc_value, release_owned in pinned_pcc_on_error:
-                self._gc_unpin(pcc_value)
                 if release_owned:
                     self._gc_release(pcc_value)
             for pcc_value in pcc_release_on_error:

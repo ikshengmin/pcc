@@ -233,7 +233,6 @@ class CpyBridgeLoweringMixin:
                         self._leave_container_temp_root(root_slot)
                         self._gc_release(pcc_value)
                     for pcc_value, release_owned in pinned_pcc_on_error:
-                        self._gc_unpin(pcc_value)
                         if release_owned:
                             self._gc_release(pcc_value)
                     for pcc_value in pcc_release_on_error:
@@ -330,7 +329,6 @@ class CpyBridgeLoweringMixin:
                     self._leave_container_temp_root(root_slot)
                     self._gc_release(pcc_value)
                 for pcc_value, release_owned in reversed(pinned_pcc_on_error):
-                    self._gc_unpin(pcc_value)
                     if release_owned:
                         self._gc_release(pcc_value)
                 for pcc_value in reversed(pcc_release_on_error):
@@ -597,15 +595,12 @@ class CpyBridgeLoweringMixin:
             source_pinned
             and self._pcc_pointer_source_is_owned(source_expr)
         )
-        if source_pinned:
-            self._gc_pin(value)
         cpy_value, cpy_owned = self._marshal_to_cpython(value, value_ty)
         if not source_pinned:
             return cpy_value, cpy_owned
         if cpy_value is value:
             # A passthrough does not create an independent reference, so keep
             # the original ownership for the caller to consume.
-            self._gc_unpin(value)
             return cpy_value, source_owned
         self._guard_cpy_value_not_null(
             cpy_value,
@@ -614,7 +609,6 @@ class CpyBridgeLoweringMixin:
             pinned_pcc_on_error + ((value, source_owned),),
             pcc_release_on_error,
         )
-        self._gc_unpin(value)
         if source_owned:
             self._gc_release(value)
         return cpy_value, cpy_owned

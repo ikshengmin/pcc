@@ -22,7 +22,9 @@ def test_publication_takes_no_address_lease():
     for expression in ("None", "'static'", "b'static'", "1267650600228229401496703205376"):
         body = _probe_function(emit_operand("def probe():\n    return slot_operand_probe(" + expression + ")\n"))
         assert "call.slot.publish.lease" not in body
-        assert "@pcc_gc_note_slot_write_barrier(" in body
+        # One collector: publication is the slot store; no store barrier.
+        assert re.search(r"store ptr [^\n]*, ptr %probe\.operand", body)
+        assert not re.search(r"\bcall\b[^\n]*@pcc_gc_note_slot_write_barrier\(", body)
     heap = _probe_function(emit_operand("def probe():\n    return slot_operand_probe(1.5)\n"))
     assert "call.slot.publish.lease" not in heap
     dynamic = _probe_function(emit_operand("def probe(value: str):\n    return slot_operand_probe(value)\n"))
@@ -57,7 +59,7 @@ def test_literal_append_has_no_input_root_but_dynamic_fallback_remains():
     ("value['key']", (".key.operand",), "py_obj_subscript"),
     ("(1 << 100) + 7", (".left.left.operand", ".left.right.operand", ".right.operand"),
      "py_int_add"),
-    ("+1267650600228229401496703205376", (".left.operand",), "pcc_gc_note_slot_write_barrier"),
+    ("+1267650600228229401496703205376", (".left.operand",), ".pyint.obj"),
     ("+True", (".left.operand", ".right.operand"), "py_int_add"),
 ))
 def test_permanent_runtime_inputs_do_not_materialize_roots(expression, absent, helper):
@@ -65,10 +67,12 @@ def test_permanent_runtime_inputs_do_not_materialize_roots(expression, absent, h
     body = _probe_function(emit_operand(
         "def probe(value):\n    return slot_operand_probe(" + expression + ")\n",
     ))
-    assert "@" + helper + "(" in body
+    assert re.search("@" + re.escape(helper) + r"\b", body)
     assert all(label not in body for label in absent)
-    # The owned result still crosses the ordinary publication boundary.
-    assert "@pcc_gc_note_slot_write_barrier(" in body
+    # The owned result still crosses the ordinary publication boundary, the
+    # slot store; the one collector owes it no store barrier (item 2 (d)).
+    assert re.search(r"store ptr [^\n]*, ptr %probe\.operand", body)
+    assert not re.search(r"\bcall\b[^\n]*@pcc_gc_note_slot_write_barrier\(", body)
 
 
 @pytest.mark.parametrize("expression,label", (

@@ -559,7 +559,6 @@ class SetLoweringMixin:
             # (the dyn tag guard releases its own) takes one here as well.
             if recv_borrowed or not self._owned_release_needed(recv, attr.obj):
                 recv = self._gc_retain(recv, name=self._fresh("set.predicate.receiver"))
-            self._gc_pin(recv)
             other = self._emit_expr_with_cpy_operand_cleanup(
                 expr.args[0], (), pinned_pcc=((recv, True),), as_object=True,
             )
@@ -569,7 +568,6 @@ class SetLoweringMixin:
                 name=self._fresh(f"set.{name}"),
             )
             self._gc_release_if_owned(other, expr.args[0])
-            self._gc_unpin(recv)
             self._gc_release(recv)
             self._emit_post_call_err_check(expr.span)
             return self.builder.icmp_signed(
@@ -683,7 +681,6 @@ class SetLoweringMixin:
             arg = expr.args[0]
             src = self._emit_as_object(arg)
             owned = self._owned_release_needed(src, arg)
-            self._gc_pin(src)
             result = self.builder.call(
                 self.runtime["py_set_from_iterable"], [src],
                 name=self._fresh("set.from.iterable"),
@@ -694,7 +691,6 @@ class SetLoweringMixin:
             # Releasing a temporary iterator may run its finalizer. Keep the
             # new set alive while balancing that argument's owner.
             root = self._enter_container_temp_root(result, self._fresh("set.result"))
-            self._gc_unpin(src)
             self._gc_release_if_owned(src, arg)
             self._leave_container_temp_root(root)
             self._note_owned_object_value(result)

@@ -688,7 +688,6 @@ class CallExpressionLoweringMixin:
                 if provenance[1]:
                     if not provenance[3]:
                         raw = self._gc_retain(raw, name=self._fresh("ctor.arg.retain"))
-                    self._gc_pin(raw)
                     pinned.append((raw, True))
             name = self._fresh("__pcc_ctor_arg")
             alloca = self._alloca_in_entry(
@@ -725,14 +724,11 @@ class CallExpressionLoweringMixin:
             self._cpy_operand_cleanup_block = old_cpy
         # Releasing an argument can run a finalizer that collects. The new
         # instance has not reached its caller's rooted assignment yet.
-        self._gc_pin(result)
         for value, _owned in reversed(pinned):
-            self._gc_unpin(value)
             self._gc_release(value)
         for value in reversed(cpy_owned):
             self.builder.call(self.runtime["py_cpy_decref"], [value])
             self._forget_owned_cpy_value(value)
-        self._gc_unpin(result)
         return result
 
     def _maybe_emit_known_dunder_class_constructor(self, expr: Call):
@@ -2838,7 +2834,6 @@ class CallExpressionLoweringMixin:
                         and direct_call_argument_reads_stable_root(self, ast_arg, target_ty)):
                     rooted_arg_values.append(v)
                 else:
-                    self._gc_pin(v)
                     pinned_arg_temps.append((v, owned))
             args_ir.append(v)
             i += 1
@@ -2895,7 +2890,6 @@ class CallExpressionLoweringMixin:
             null_signals_error=null_signals_error,
         )
         for arg_value, owned in pinned_arg_temps:
-            self._gc_unpin(arg_value)
             if owned:
                 self._gc_release(
                     arg_value,

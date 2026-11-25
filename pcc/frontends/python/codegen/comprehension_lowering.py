@@ -381,8 +381,6 @@ class ComprehensionLoweringMixin:
             output_lease = ir.Constant(_I64, 0)
             self._slot_call_check_status(output_lease, "comprehension result lease", expr.span)
             container = self.builder.load(output_slot, name=self._fresh("comp.result.current"))
-        else:
-            self._gc_pin(container)
         outer_error = self._current_try_err_block()
         outer_cpy_error = getattr(self, "_cpy_operand_cleanup_block", None)
         error_target = outer_error if outer_error is not None else self._ensure_fn_err_exit()
@@ -484,8 +482,6 @@ class ComprehensionLoweringMixin:
             # One collector: an address lease is token 0 and its release answers 0.
             released = ir.Constant(_I64, 0)
             self._slot_call_check_status(released, "comprehension result lease release", expr.span)
-        else:
-            self._gc_unpin(container)
         self._note_owned_object_value(container)
         return container
 
@@ -752,7 +748,6 @@ class ComprehensionLoweringMixin:
             name=self._fresh("enum.pair.new"),
         )
         _for_store_owned_target(self, target.ident, target_slot, pair)
-        self._gc_pin(pair)
         idx_box = self.builder.call(
             self.runtime["py_int_from_i64"],
             [cur],
@@ -768,7 +763,6 @@ class ComprehensionLoweringMixin:
             [iter_obj, cur],
             name=self._fresh("enum.elem"),
         )
-        self._gc_unpin(pair)
         self._emit_post_call_err_check(getattr(inner_iter, "span", None))
         self.builder.call(
             self.runtime["py_tuple_set_item"],

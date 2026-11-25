@@ -530,12 +530,10 @@ class AssignmentStoreLoweringMixin:
             # behind makes the next Name load reinterpret this pcc pointer as
             # a CPython PyObject*.
             self._cpy_env_flags.pop(target.ident, None)
-            self._gc_pin(incoming)
             self.builder.call(
                 self.runtime["pcc_gc_store_root"],
                 [self._as_gc_ptr(alloca), incoming],
             )
-            self._gc_unpin(incoming)
             # Root-store retained the replacement for the local slot and
             # released its previous owner.  Consume the owned temporary
             # supplied by the unpack expression (or the retain above).

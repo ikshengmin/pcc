@@ -172,7 +172,6 @@ class NativeSystemLoweringMixin:
             [cls_obj],
             name=self._fresh("subprocess.CalledProcessError"),
         )
-        self._gc_pin(exc)
         self._emit_post_call_err_check(
             span, pinned_release_on_error=((exc, True),)
         )
@@ -189,7 +188,6 @@ class NativeSystemLoweringMixin:
             pinned_release_on_error=((exc, True),),
         )
         self._extern_release_roots(argument_roots)
-        self._gc_unpin(exc)
         self._try_err_block = previous_err
         return exc
 

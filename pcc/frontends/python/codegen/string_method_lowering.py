@@ -394,7 +394,6 @@ class StringMethodLoweringMixin:
     def _emit_bytes_decode_call(self, recv, receiver_expr, operands, span):
         if not self._owned_release_needed(recv, receiver_expr):
             recv = self._gc_retain(recv, name=self._fresh("decode.receiver.retain"))
-        self._gc_pin(recv)
         pinned = [(recv, True)]
         encoding = self._emit_str_literal("utf-8")
         errors = self._emit_str_literal("strict")
@@ -404,7 +403,6 @@ class StringMethodLoweringMixin:
             )
             if not self._owned_release_needed(value, operand):
                 value = self._gc_retain(value, name=self._fresh("decode.argument.retain"))
-            self._gc_pin(value)
             pinned.append((value, True))
             if key == "encoding":
                 encoding = value
@@ -424,11 +422,8 @@ class StringMethodLoweringMixin:
         finally:
             self._try_err_block = old_target
         self._note_owned_object_value(result)
-        self._gc_pin(result)
         for value, _owned in pinned:
-            self._gc_unpin(value)
             self._gc_release(value)
-        self._gc_unpin(result)
         return result
 
     def _emit_str_tailmatch_range(self, expr: Call, recv: ir.Value):
@@ -441,7 +436,6 @@ class StringMethodLoweringMixin:
             )
             if not self._owned_release_needed(value, arg):
                 value = self._gc_retain(value, name=self._fresh("str.tailmatch.retain"))
-            self._gc_pin(value)
             arguments.append(value)
             pinned.append((value, True))
         old_target = self._current_try_err_block()
@@ -472,7 +466,6 @@ class StringMethodLoweringMixin:
         finally:
             self._try_err_block = old_target
         for value in arguments:
-            self._gc_unpin(value)
             self._gc_release(value)
         return self.builder.icmp_signed("!=", result, ir.Constant(_I64, 0),
                                         name=self._fresh("str.tailmatch.bit"))
@@ -523,17 +516,13 @@ class StringMethodLoweringMixin:
         owned argument is released.
         """
         items = _str_method_arg(self, arg_expr)
-        self._gc_pin(items)
         result = self.builder.call(
             self.runtime["py_str_join"],
             [recv, items],
             name=self._fresh(prefix + ".join"),
         )
         self._note_owned_object_value(result)
-        self._gc_pin(result)
-        self._gc_unpin(items)
         self._gc_release_if_owned(items, arg_expr)
-        self._gc_unpin(result)
         return result
 
     def _emit_native_bytes_join(self, recv: ir.Value, arg_expr: Expr, prefix: str):
@@ -544,17 +533,13 @@ class StringMethodLoweringMixin:
         overlap and a runtime tag split is not owned here.
         """
         items = _str_method_arg(self, arg_expr)
-        self._gc_pin(items)
         result = self.builder.call(
             self.runtime["py_bytes_join"],
             [recv, items],
             name=self._fresh(prefix + ".join"),
         )
         self._note_owned_object_value(result)
-        self._gc_pin(result)
-        self._gc_unpin(items)
         self._gc_release_if_owned(items, arg_expr)
-        self._gc_unpin(result)
         self._emit_post_call_err_check(getattr(arg_expr, "span", None))
         return result
 
@@ -996,7 +981,6 @@ class StringMethodLoweringMixin:
         old_pcc = self._current_try_err_block()
         old_cpy = getattr(self, "_cpy_operand_cleanup_block", None)
         if owned:
-            self._gc_pin(recv)
             pcc_target = old_pcc if old_pcc is not None else self._ensure_fn_err_exit()
             cpy_target = old_cpy if old_cpy is not None else pcc_target
             pcc_cleanup = self._make_cpy_operand_cleanup_block(
@@ -1024,7 +1008,6 @@ class StringMethodLoweringMixin:
             if owned:
                 root = self._enter_container_temp_root(result, self._fresh("str.result"))
         if owned:
-            self._gc_unpin(recv)
             self._gc_release(recv)
         if root is not None:
             result = self.builder.call(

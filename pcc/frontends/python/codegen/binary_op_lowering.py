@@ -531,14 +531,10 @@ class BinaryOpLoweringMixin:
                 pinned_pcc_on_error=pinned_pcc_on_error,
                 slow_pins=slow_pins,
             )
-        for pinned in slow_pins:
-            self._gc_pin(pinned)
         result = self._emit_binop_value_routed(
             op, lhs, lhs_ty, rhs, rhs_ty, result_ty,
             pinned_pcc_on_error=pinned_pcc_on_error,
         )
-        for pinned in reversed(slow_pins):
-            self._gc_unpin(pinned)
         return result
 
     def _emit_binop_value_routed(
@@ -1518,8 +1514,6 @@ class BinaryOpLoweringMixin:
         )
         if inline is not None:
             return inline
-        for pinned in slow_pins:
-            self._gc_pin(pinned)
         result = self.builder.call(
             self.runtime[fn_name],
             [lhs_obj, rhs_obj],
@@ -1542,8 +1536,6 @@ class BinaryOpLoweringMixin:
                 result,
                 pinned_pcc_on_error=pinned_pcc_on_error,
             )
-        for pinned in reversed(slow_pins):
-            self._gc_unpin(pinned)
         return result
     def _emit_negative_shift_count_check(
         self,
@@ -1581,7 +1573,6 @@ class BinaryOpLoweringMixin:
         self.builder.cbranch(is_negative, err_bb, ok_bb)
         self.builder.position_at_end(err_bb)
         for value, release_owned in pinned_release_on_error:
-            self._gc_unpin(value)
             if release_owned:
                 self._gc_release(value)
         self._emit_builtin_exception_and_branch(
@@ -1613,7 +1604,6 @@ class BinaryOpLoweringMixin:
         self.builder.cbranch(is_zero, err_bb, ok_bb)
         self.builder.position_at_end(err_bb)
         for value, release_owned in pinned_release_on_error:
-            self._gc_unpin(value)
             if release_owned:
                 self._gc_release(value)
         self._emit_builtin_exception_and_branch(
@@ -1698,8 +1688,6 @@ class BinaryOpLoweringMixin:
             slow_err_cleanup=pinned_pcc_on_error,
         )
         if result is None:
-            for pinned in slow_pins:
-                self._gc_pin(pinned)
             result = self.builder.call(
                 self.runtime[runtime_fn],
                 [lhs_obj, rhs_obj],
@@ -1709,8 +1697,6 @@ class BinaryOpLoweringMixin:
                 None,
                 pinned_release_on_error=pinned_pcc_on_error,
             )
-            for pinned in reversed(slow_pins):
-                self._gc_unpin(pinned)
         return result
 
     def _emit_inline_tagged_int_binop_or_call(
@@ -1750,8 +1736,6 @@ class BinaryOpLoweringMixin:
         self.builder.branch(join_bb)
 
         self.builder.position_at_end(slow_bb)
-        for pinned in slow_pins:
-            self._gc_pin(pinned)
         slow_result = self.builder.call(
             self.runtime[fn_name],
             [lhs_obj, rhs_obj],
@@ -1766,8 +1750,6 @@ class BinaryOpLoweringMixin:
                 slow_result,
                 pinned_pcc_on_error=slow_err_cleanup,
             )
-        for pinned in reversed(slow_pins):
-            self._gc_unpin(pinned)
         slow_exit = self.builder._block
         self.builder.branch(join_bb)
 

@@ -112,7 +112,6 @@ def emit_resumable_await(host, expr):
         # Retain and first publication are under one graph lock. The borrowed
         # payload remains owned by the registered exception throughout.
         host.builder.store(owned, output)
-        host.builder.call(host.runtime["pcc_gc_note_slot_write_barrier"], [null, host._as_gc_ptr(output), owned])
         host._slot_call_note_published(output)
         host.builder.call(host.runtime["pcc_py_gc_minor_graph_unlock"], [])
         host._release_slot_call_roots(tuple(roots[1:]) if sink is None else tuple(roots))

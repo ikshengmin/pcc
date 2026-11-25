@@ -827,13 +827,11 @@ class ModuleGlobalLoweringMixin:
             # receive a boxed result, e.g. ``global n; n += 1`` whose add took
             # the tagged/bignum object path. Store its native value; rooting
             # the pointer would put object bits in the scalar cell.
-            self._gc_pin(value)
             native = marshal.marshal_from_object(
                 self.builder, self.module, self.runtime, value, declared_ty,
             )
             # An int beyond the cell's lane raises OverflowError here.
             self._emit_post_call_err_check()
-            self._gc_unpin(value)
             if not self._ir_type_matches(native.type, gv.value_type):
                 raise L1CodegenError(
                     "module global " + gv.name + " stores " + str(gv.value_type)
@@ -844,12 +842,6 @@ class ModuleGlobalLoweringMixin:
             if value_is_owned:
                 self._gc_release(value, self._release_context_label("module_store_tmp"))
             return
-        old_value = self.builder.load(
-            gv,
-            name=self._fresh("mod.global.old"),
-        )
-        self._gc_unpin(old_value)
-        self._gc_pin(value)
         self.builder.call(
             self.runtime["pcc_gc_store_root"],
             [

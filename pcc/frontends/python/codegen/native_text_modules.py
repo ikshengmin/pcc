@@ -553,11 +553,7 @@ class NativeTextModulesLoweringMixin:
             self._emit_post_call_err_check(getattr(expr, "span", None))
             # `py_file_read_all` returns a new string that nothing else owns
             # and `py_json_loads` borrows it, so this frame has to release it.
-            # Pin the parsed result first: a moving backend can collect inside
-            # the release and relocate it. Mirrors the re.sub lowering.
-            self._gc_pin(result)
             self._gc_release(text_obj, "json.load.text")
-            self._gc_unpin(result)
             # Both json ABIs return a NEW reference. Record the owner at
             # emission: the shape classifier sees only a DynType Call for a
             # module-level function and answers "not owned", so no release was
@@ -1141,7 +1137,6 @@ class NativeTextModulesLoweringMixin:
             )
             if not self._owned_release_needed(value, arg):
                 value = self._gc_retain(value, name=self._fresh("re.finditer.retain"))
-            self._gc_pin(value)
             values.append(value)
             pinned.append((value, True))
         old_target = self._current_try_err_block()
@@ -1162,11 +1157,8 @@ class NativeTextModulesLoweringMixin:
         finally:
             self._try_err_block = old_target
         self._note_owned_object_value(result)
-        self._gc_pin(result)
         for value in values:
-            self._gc_unpin(value)
             self._gc_release(value)
-        self._gc_unpin(result)
         return result
 
     def _emit_native_re_findall_call(

@@ -588,9 +588,7 @@ class ExactIntLoweringMixin:
                     # The release may run a finalizer or a collection; a
                     # relocating backend must not move the field object held
                     # only in this register.
-                    self._gc_pin(got)
                     self._gc_release_if_owned(container, expr.obj)
-                    self._gc_unpin(got)
                 return got
         if isinstance(expr, Call) and self._call_is_int_builtin(expr):
             # `int(<str>)` has an object-returning form.  Taking it here keeps a
@@ -706,12 +704,10 @@ class ExactIntLoweringMixin:
                         lhs_generator_slot,
                         name=self._fresh("exact.int.lhs.frame.ptr"),
                     )
-                    self._gc_pin(lhs)
                     self.builder.call(
                         self.runtime["pcc_gc_store_root"],
                         [lhs_generator_root, lhs],
                     )
-                    self._gc_unpin(lhs)
                     if lhs_owned:
                         self._gc_release(lhs)
 
@@ -785,7 +781,6 @@ class ExactIntLoweringMixin:
                         [resumed_lhs_root, self._emit_none_literal()],
                     )
                     lhs_owned = True
-                    self._gc_pin(lhs)
                     lhs_cleanup = ((lhs, True),)
                 elif self._exact_int_operand_is_gc_quiet(expr.rhs):
                     # The rhs is a local/global load or a literal: nothing
@@ -835,7 +830,6 @@ class ExactIntLoweringMixin:
                 )
                 lhs, lhs_owned = self._keep_rooted_exact_int_lhs(lhs, lhs_owned)
                 self._release_rooted_pcc_lifetimes(((lhs_root_slot, False),))
-                self._gc_pin(lhs)
                 lhs_cleanup = ((lhs, lhs_owned),)
             if lhs_quiet_unpinned:
                 lhs_cleanup = ((lhs, lhs_owned),)
@@ -860,11 +854,6 @@ class ExactIntLoweringMixin:
                     slow_pins = slow_pins + (lhs,)
                 if rhs_pinned:
                     slow_pins = slow_pins + (rhs,)
-            else:
-                if lhs_quiet_unpinned:
-                    self._gc_pin(lhs)
-                if rhs_pinned:
-                    self._gc_pin(rhs)
             operand_cleanup = lhs_cleanup
             if rhs_pinned:
                 operand_cleanup = operand_cleanup + ((rhs, rhs_owned),)
@@ -882,8 +871,6 @@ class ExactIntLoweringMixin:
                     slow_err_cleanup=operand_cleanup,
                 )
                 if inline is not None:
-                    if lhs_pinned and not lhs_quiet_unpinned:
-                        self._gc_unpin(lhs)
                     if lhs_owned:
                         self._gc_release(lhs)
                     if rhs_owned:
@@ -892,10 +879,6 @@ class ExactIntLoweringMixin:
                     # returns one heap owner. The merged SSA is safe to take.
                     self._note_owned_object_value(inline)
                     return inline
-                # No inline shape after all: the unconditional call below
-                # needs the deferred pins in place.
-                for pinned in slow_pins:
-                    self._gc_pin(pinned)
             result = self.builder.call(
                 self.runtime[fn_name],
                 [lhs, rhs],
@@ -918,12 +901,8 @@ class ExactIntLoweringMixin:
                     result,
                     pinned_pcc_on_error=operand_cleanup,
                 )
-            if lhs_pinned:
-                self._gc_unpin(lhs)
             if lhs_owned:
                 self._gc_release(lhs)
-            if rhs_pinned:
-                self._gc_unpin(rhs)
             if rhs_owned:
                 self._gc_release(rhs)
             self._note_owned_object_value(result)
@@ -963,7 +942,6 @@ class ExactIntLoweringMixin:
             )
             operand_cleanup = ()
             if operand_pinned:
-                self._gc_pin(operand)
                 operand_cleanup = ((operand, operand_owned),)
             if expr.op == "~":
                 result = self.builder.call(
@@ -985,8 +963,6 @@ class ExactIntLoweringMixin:
                 result,
                 pinned_pcc_on_error=operand_cleanup,
             )
-            if operand_pinned:
-                self._gc_unpin(operand)
             if operand_owned:
                 self._gc_release(operand)
             self._note_owned_object_value(result)
@@ -1240,12 +1216,10 @@ class ExactIntLoweringMixin:
                     lhs_generator_slot,
                     name=self._fresh("exact.int.compare.lhs.frame.ptr"),
                 )
-                self._gc_pin(lhs)
                 self.builder.call(
                     self.runtime["pcc_gc_store_root"],
                     [lhs_generator_root, lhs],
                 )
-                self._gc_unpin(lhs)
                 if lhs_owned:
                     self._gc_release(lhs)
 
@@ -1321,7 +1295,6 @@ class ExactIntLoweringMixin:
                     [resumed_lhs_root, self._emit_none_literal()],
                 )
                 lhs_owned = True
-                self._gc_pin(lhs)
                 lhs_cleanup = ((lhs, True),)
             elif self._exact_int_operand_is_gc_quiet(expr.rhs):
                 lhs_quiet_unpinned = True
@@ -1357,7 +1330,6 @@ class ExactIntLoweringMixin:
             )
             lhs, lhs_owned = self._keep_rooted_exact_int_lhs(lhs, lhs_owned)
             self._release_rooted_pcc_lifetimes(((lhs_root_slot, False),))
-            self._gc_pin(lhs)
             lhs_cleanup = ((lhs, lhs_owned),)
         rhs_owned = (
             isinstance(rhs.type, ir.PointerType)
@@ -1387,8 +1359,6 @@ class ExactIntLoweringMixin:
             rhs,
             slow_pins=slow_pins,
         )
-        if lhs_pinned and not lhs_quiet_unpinned:
-            self._gc_unpin(lhs)
         if lhs_owned:
             self._gc_release(lhs)
         if rhs_owned:
@@ -1498,15 +1468,11 @@ class ExactIntLoweringMixin:
         self.builder.branch(join_bb)
 
         self.builder.position_at_end(slow_bb)
-        for pinned in slow_pins:
-            self._gc_pin(pinned)
         cmp_i32 = self.builder.call(
             self.runtime["py_int_cmp"],
             [lhs, rhs],
             name=self._fresh("exact.int.cmp"),
         )
-        for pinned in reversed(slow_pins):
-            self._gc_unpin(pinned)
         slow = self.builder.icmp_signed(
             pred,
             cmp_i32,

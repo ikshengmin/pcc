@@ -247,7 +247,6 @@ class UnaryCallLoweringMixin:
                 )
                 operand_cleanup = ()
                 if operand_pinned:
-                    self._gc_pin(operand)
                     operand_cleanup = ((operand, operand_owned),)
                 result = self.builder.call(
                     self.runtime["py_int_neg"],
@@ -262,8 +261,6 @@ class UnaryCallLoweringMixin:
                     result,
                     pinned_pcc_on_error=operand_cleanup,
                 )
-                if operand_pinned:
-                    self._gc_unpin(operand)
                 if operand_owned:
                     self._gc_release(operand)
                 return result
@@ -291,7 +288,6 @@ class UnaryCallLoweringMixin:
                 )
                 operand_cleanup = ()
                 if operand_pinned:
-                    self._gc_pin(operand)
                     operand_cleanup = ((operand, operand_owned),)
                 result = self.builder.call(
                     self.runtime["py_int_xor"],
@@ -306,8 +302,6 @@ class UnaryCallLoweringMixin:
                     result,
                     pinned_pcc_on_error=operand_cleanup,
                 )
-                if operand_pinned:
-                    self._gc_unpin(operand)
                 if operand_owned:
                     self._gc_release(operand)
                 return result
@@ -329,7 +323,6 @@ class UnaryCallLoweringMixin:
         operand_pinned = operand not in self._cpy_values
         operand_cleanup = ()
         if operand_pinned:
-            self._gc_pin(operand)
             operand_cleanup = ((operand, operand_owned),)
         result = self.builder.call(
             self.runtime[runtime_name],
@@ -344,8 +337,6 @@ class UnaryCallLoweringMixin:
             result,
             pinned_pcc_on_error=operand_cleanup,
         )
-        if operand_pinned:
-            self._gc_unpin(operand)
         if operand_owned:
             self._gc_release(operand)
         return result

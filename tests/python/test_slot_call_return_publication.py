@@ -47,7 +47,7 @@ def test_list_pop_transfer_publishes_before_error_check(element_type, index):
     assert "@py_cpy_" not in body
 
 
-def test_boxed_dunder_len_publishes_before_receiver_unpin():
+def test_boxed_dunder_len_publishes_without_receiver_pin():
     body = _probe_function(_emit(
         "class Sized:\n"
         "    def __len__(self) -> int:\n        return 7\n"
@@ -55,7 +55,8 @@ def test_boxed_dunder_len_publishes_before_receiver_unpin():
         "    return slot_operand_probe(len(value))\n"
     ))
     _assert_immediate_publication(body, r"call ptr (?:\([^\n]*?\) )?@user_slot_operand_Sized___len__\(")
-    assert body.index("@user_slot_operand_Sized___len__(") < body.index("@pcc_gc_unpin(")
+    # One collector: the receiver is not pinned around the call (item 2 (d)).
+    assert not re.search(r"\bcall\b[^\n]*@pcc_gc_(?:un)?pin\(", body)
     assert "@py_int_to_i64(" not in body
 
 

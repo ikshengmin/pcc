@@ -433,7 +433,6 @@ class CompareMembershipLoweringMixin:
             )
             lhs_cleanup = ()
             if lhs_pinned:
-                self._gc_pin(lhs)
                 lhs_cleanup = ((lhs, lhs_owned),)
             rhs = self._emit_expr_with_cpy_operand_cleanup(
                 expr.rhs,
@@ -446,12 +445,6 @@ class CompareMembershipLoweringMixin:
                 and rhs not in self._cpy_values
                 and self._pcc_pointer_source_is_owned(expr.rhs)
             )
-            rhs_pinned = (
-                isinstance(rhs.type, ir.PointerType)
-                and rhs not in self._cpy_values
-            )
-            if rhs_pinned:
-                self._gc_pin(rhs)
             lhs_obj = marshal.marshal_to_object(
                 self.builder,
                 self.module,
@@ -477,12 +470,8 @@ class CompareMembershipLoweringMixin:
                 ir.Constant(_I32, 0),
                 name=self._fresh("int.obj.cmp.i1"),
             )
-            if lhs_pinned:
-                self._gc_unpin(lhs)
             if lhs_owned:
                 self._gc_release(lhs)
-            if rhs_pinned:
-                self._gc_unpin(rhs)
             if rhs_owned:
                 self._gc_release(rhs)
             return result
@@ -1201,7 +1190,6 @@ class CompareMembershipLoweringMixin:
             # A borrowed global/field may lose its original owner when the
             # RHS runs. A pin prevents movement, but does not replace a ref.
             lhs = self._gc_retain(lhs, name=self._fresh("str.lhs.retain"))
-        self._gc_pin(lhs)
         rhs = self._emit_expr_with_cpy_operand_cleanup(
             expr.rhs, (), pinned_pcc=((lhs, True),), as_pcc_object=object_compare,
         )
@@ -1209,8 +1197,6 @@ class CompareMembershipLoweringMixin:
         if object_compare and not rhs_owned:
             rhs = self._gc_retain(rhs, name=self._fresh("str.rhs.retain"))
             rhs_owned = True
-        if rhs_owned:
-            self._gc_pin(rhs)
         cleanup = ((lhs, True),)
         if rhs_owned:
             cleanup = ((lhs, True), (rhs, True))
@@ -1226,10 +1212,8 @@ class CompareMembershipLoweringMixin:
                 result = self._emit_runtime_object_compare(
                     expr, lhs, rhs, "str.predicate", pinned_release_on_error=cleanup,
                 )
-            self._gc_unpin(lhs)
             self._gc_release(lhs)
             if rhs_owned:
-                self._gc_unpin(rhs)
                 self._gc_release(rhs)
             return result
         operands = [rhs, lhs] if contains else [lhs, rhs]
@@ -1244,10 +1228,8 @@ class CompareMembershipLoweringMixin:
         result = self.builder.icmp_signed(
             "!=", status, ir.Constant(status.type, 0), name=self._fresh("str.predicate.i1"),
         )
-        self._gc_unpin(lhs)
         self._gc_release(lhs)
         if rhs_owned:
-            self._gc_unpin(rhs)
             self._gc_release(rhs)
         if expr.op in ("!=", "not in"):
             result = self.builder.not_(result, name=self._fresh("str.predicate.not"))
@@ -1764,7 +1746,6 @@ class CompareMembershipLoweringMixin:
                 )
             if lhs is lhs_raw and not self._owned_release_needed(lhs, expr.lhs):
                 lhs = self._gc_retain(lhs, name=self._fresh("membership.lhs.retain"))
-            self._gc_pin(lhs)
             pcc_live = ((lhs, True),)
         borrowed_container = None
         if (not lhs_is_cpy and self._strict_no_libpython
@@ -1788,7 +1769,6 @@ class CompareMembershipLoweringMixin:
             self._emit_post_call_err_check(
                 getattr(expr, "span", None), pinned_release_on_error=pcc_live,
             )
-            self._gc_unpin(lhs)
             self._gc_release(lhs)
             contains = self.builder.icmp_signed(
                 "!=", status, ir.Constant(status.type, 0), name=self._fresh("in.i1"),
@@ -1813,7 +1793,6 @@ class CompareMembershipLoweringMixin:
                 self._guard_cpy_value_not_null(
                     lhs_cpy, (rhs_raw,), pinned_pcc_on_error=pcc_live,
                 )
-                self._gc_unpin(lhs)
                 self._gc_release(lhs)
             result = self._emit_cpy_method_call1_value(
                 rhs_raw, "__contains__", lhs_cpy,
@@ -1833,13 +1812,11 @@ class CompareMembershipLoweringMixin:
             )
             if rhs is rhs_raw and not self._owned_release_needed(rhs, expr.rhs):
                 rhs = self._gc_retain(rhs, name=self._fresh("membership.rhs.retain"))
-            self._gc_pin(rhs)
             if lhs_is_cpy:
                 lhs = self._emit_value_as_pcc_object_or_bridge(
                     lhs, expr.lhs.ty, "membership.cpy.needle",
                     pinned_pcc_on_error=((rhs, True),),
                 )
-                self._gc_pin(lhs)
             if weak_dict_kind == "value":
                 helper = "py_weak_value_dict_contains"
             elif isinstance(container_ty, StrType):
@@ -1860,9 +1837,7 @@ class CompareMembershipLoweringMixin:
                 getattr(expr, "span", None),
                 pinned_release_on_error=((lhs, True), (rhs, True)),
             )
-            self._gc_unpin(rhs)
             self._gc_release(rhs)
-            self._gc_unpin(lhs)
             self._gc_release(lhs)
         contains = self.builder.icmp_signed(
             "!=", status, ir.Constant(status.type, 0), name=self._fresh("in.i1"),
@@ -2001,8 +1976,6 @@ class CompareMembershipLoweringMixin:
                 acc = self.builder.or_(acc, eq_i1, name=self._fresh("tup.or"))
         else:
             cleanup = ((lhs_obj, True),) if owned else ()
-            if owned:
-                self._gc_pin(lhs_obj)
             fn = self.current_function
             found_bb = fn.append_basic_block(name=self._fresh("tup.in.found"))
             done_bb = fn.append_basic_block(name=self._fresh("tup.in.done"))
@@ -2030,8 +2003,6 @@ class CompareMembershipLoweringMixin:
             result.add_incoming(ir.Constant(_I1, 1), found_bb)
             result.add_incoming(ir.Constant(_I1, 0), miss_end)
             acc = result
-            if owned:
-                self._gc_unpin(lhs_obj)
         if owned and lhs_obj not in self._cpy_values:
             self._gc_release(lhs_obj)
         if negate:
@@ -2074,7 +2045,6 @@ class CompareMembershipLoweringMixin:
         """Keep the operand live through truth callbacks and their error edge."""
         if not pcc_owned:
             return self._truthy(value, source_ty)
-        self._gc_pin(value)
         old_error = self._current_try_err_block()
         target = old_error if old_error is not None else self._ensure_fn_err_exit()
         self._try_err_block = self._make_cpy_operand_cleanup_block(
@@ -2088,13 +2058,11 @@ class CompareMembershipLoweringMixin:
             result = self._truthy(value, DynType(name="dyn"))
         finally:
             self._try_err_block = old_error
-        self._gc_unpin(value)
         return result
 
     def _coerce_boolexpr_operand(self, value, source, result_ty, pcc_owned: bool):
         old_error = self._current_try_err_block()
         if pcc_owned:
-            self._gc_pin(value)
             target = old_error if old_error is not None else self._ensure_fn_err_exit()
             self._try_err_block = self._make_cpy_operand_cleanup_block(
                 (),
@@ -2108,7 +2076,6 @@ class CompareMembershipLoweringMixin:
         finally:
             self._try_err_block = old_error
         if pcc_owned:
-            self._gc_unpin(value)
             if isinstance(coerced.type, ir.PointerType):
                 # Native pointer-to-pointer coercions preserve the object;
                 # a representation alias transfers the same single owner.
@@ -2136,7 +2103,6 @@ class CompareMembershipLoweringMixin:
         # This is a proven native object, including a borrowed Name promoted
         # above. The source-shape bridge cannot consume that new owner, and a
         # scalar-typed pointer must not take its foreign-pointer passthrough.
-        self._gc_pin(value)
         converted, converted_owned = self._marshal_to_cpython(
             value,
             DynType(name="dyn"),
@@ -2145,7 +2111,6 @@ class CompareMembershipLoweringMixin:
             converted,
             pinned_pcc_on_error=((value, True),),
         )
-        self._gc_unpin(value)
         self._gc_release(value)
         return converted, converted_owned
 

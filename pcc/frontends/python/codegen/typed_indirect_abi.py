@@ -143,8 +143,6 @@ def emit_call(owner, expr):
     for root, _owned in roots:
         current = owner.builder.call(owner.runtime["pcc_gc_load_ptr"],
             [ir.Constant(pointer, None), owner._as_gc_ptr(root)])
-        owner._gc_unpin(current)
-        owner._gc_pin(current)
     for root, semantic_type, slot in pointer_updates:
         current = owner.builder.call(owner.runtime["pcc_gc_load_ptr"],
             [ir.Constant(pointer, None), owner._as_gc_ptr(root)])

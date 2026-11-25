@@ -58,7 +58,6 @@ def _retire_module_function_caches(host, name: str) -> None:
             host.builder.store(value, root)
             host.builder.store(ir.Constant(_CSTR, None), cache)
             host._slot_call_note_published(root)
-            host._slot_call_runtime_call("pcc_gc_unpin", (root,))
             host._release_slot_call_roots((root,))
         finally:
             host._try_err_block = previous
@@ -145,7 +144,6 @@ class DeleteLoweringMixin:
                 value = self.builder.load(
                     gv, name=self._fresh(f"del.global.value.{name}")
                 )
-                self._gc_unpin(value)
                 self.builder.call(
                     self.runtime["pcc_gc_store_root"],
                     [

@@ -357,9 +357,7 @@ class ExprDispatchLoweringMixin:
         span = getattr(lhs_expr, "span", None)
         lhs = self._emit_as_object(lhs_expr)
         lhs_owned = self._pcc_pointer_source_is_owned(lhs_expr)
-        # The rhs may allocate or raise: keep the lhs in place meanwhile and
-        # let the rhs error edge unpin (and release) it.
-        self._gc_pin(lhs)
+        # The rhs may allocate or raise: its error edge releases an owned lhs.
         rhs = self._emit_expr_with_cpy_operand_cleanup(
             rhs_expr,
             (),
@@ -368,7 +366,6 @@ class ExprDispatchLoweringMixin:
             as_object=True,
         )
         rhs_owned = self._pcc_pointer_source_is_owned(rhs_expr)
-        self._gc_pin(rhs)
         if op == "%":
             result = self.builder.call(
                 self.runtime["py_obj_mod"],
@@ -397,18 +394,10 @@ class ExprDispatchLoweringMixin:
             span,
             pinned_release_on_error=((lhs, lhs_owned), (rhs, rhs_owned)),
         )
-        # Releasing an owned operand can run a finalizer or a collection.
-        result_pin = lhs_owned or rhs_owned
-        if result_pin:
-            self._gc_pin(result)
-        self._gc_unpin(lhs)
         if lhs_owned:
             self._gc_release(lhs)
-        self._gc_unpin(rhs)
         if rhs_owned:
             self._gc_release(rhs)
-        if result_pin:
-            self._gc_unpin(result)
         return result
 
     def _emit_owned_complex_constant(self, expr, real, imag) -> ir.Value:
@@ -665,12 +654,6 @@ class ExprDispatchLoweringMixin:
                 )
             )
             lhs_pinned_early = lhs_pin and not rhs_quiet and not defer_pins
-            if lhs_pinned_early:
-                # The RHS is evaluated before binary dispatch.  Pin even a
-                # borrowed native lhs: a moving collector updates its rooted
-                # slot, not this already-loaded SSA pointer.  Cleanup releases
-                # only fresh values; borrowed pointers are merely unpinned.
-                self._gc_pin(lhs)
             lhs_pinned_cleanup = (
                 ((lhs, lhs_release_owned),) if lhs_pinned_early else ()
             )
@@ -717,11 +700,6 @@ class ExprDispatchLoweringMixin:
                     slow_pins = slow_pins + (lhs,)
                 if rhs_pin:
                     slow_pins = slow_pins + (rhs,)
-            else:
-                if lhs_pin and not lhs_pinned_early:
-                    self._gc_pin(lhs)
-                if rhs_pin:
-                    self._gc_pin(rhs)
             pinned_pcc_on_error: tuple[tuple[ir.Value, bool], ...] = ()
             if lhs_pin:
                 pinned_pcc_on_error = pinned_pcc_on_error + ((lhs, lhs_release_owned),)
@@ -739,32 +717,14 @@ class ExprDispatchLoweringMixin:
                 pinned_pcc_on_error=pinned_pcc_on_error,
                 slow_pins=slow_pins,
             )
-            # The result pin guards the fresh result only while an owned
-            # operand is released below (a release may run a finalizer or a
-            # collection); without a release there is nothing to guard.
-            result_pin = False
-            if (
-                (lhs_release_owned or rhs_release_owned)
-                and isinstance(result.type, ir.PointerType)
-                and result not in self._cpy_values
-                and self._pcc_pointer_source_is_owned(expr)
-            ):
-                self._gc_pin(result)
-                result_pin = True
-            if lhs_pin and not defer_pins:
-                self._gc_unpin(lhs)
             if lhs_release_owned:
                 self._gc_release(lhs)
             elif not lhs_pin:
                 self._gc_release_if_owned(lhs, expr.lhs)
-            if rhs_pin and not defer_pins:
-                self._gc_unpin(rhs)
             if rhs_release_owned:
                 self._gc_release(rhs)
             elif not rhs_pin:
                 self._gc_release_if_owned(rhs, expr.rhs)
-            if result_pin:
-                self._gc_unpin(result)
             return result
         if _expr_is_unary(expr, expr_kind):
             if self._int_expr_needs_exact_object_boundary(expr):

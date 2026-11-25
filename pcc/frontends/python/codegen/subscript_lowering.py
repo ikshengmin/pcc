@@ -360,14 +360,11 @@ class SubscriptLoweringMixin:
             # Nothing is released between here and the caller's use of the
             # result, so nothing can run a collector on this thread.
             return got, elem_ty, None, None
-        # Pin the NEW result while the operand temporaries are released: a
-        # release may run a finalizer or a collection, and a relocating
-        # backend must not move an object held only in this register.
-        self._gc_pin(got)
+        # Release the operand temporaries; the one collector never moves the
+        # NEW result held in this register.
         if release_key:
             self._gc_release_if_owned(key_obj, expr.idx)
         self._gc_release_if_owned(obj, expr.obj)
-        self._gc_unpin(got)
         return got, elem_ty, None, None
 
     def _emit_subscript_store(self, target: Subscript, value_expr: Expr) -> None:
@@ -748,7 +745,6 @@ class SubscriptLoweringMixin:
         # later bounds can replace that binding or run a collector.
         if not self._owned_release_needed(obj, expr.obj):
             obj = self._gc_retain(obj, name=self._fresh("slice.receiver.retain"))
-        self._gc_pin(obj)
         pinned = [(obj, True)]
 
         def _bound(e: Optional[Expr]) -> ir.Value:
@@ -772,7 +768,6 @@ class SubscriptLoweringMixin:
             # immortal/tagged value). Pointer passthrough can still borrow.
             if value is v and not self._owned_release_needed(value, e):
                 value = self._gc_retain(value, name=self._fresh("slice.bound.retain"))
-            self._gc_pin(value)
             pinned.append((value, True))
             return value
 
@@ -813,11 +808,8 @@ class SubscriptLoweringMixin:
         )
         # A user __getitem__ may return the receiver itself. Preserve its NEW
         # result reference across operand finalizers and moving collections.
-        self._gc_pin(result)
         for value, _owned in reversed(pinned):
-            self._gc_unpin(value)
             self._gc_release(value)
-        self._gc_unpin(result)
         return result
 
     def _maybe_emit_runtime_dict_lookup(
@@ -1015,11 +1007,9 @@ class SubscriptLoweringMixin:
             release_on_error=release_on_error,
         )
         if release_key or release_receiver:
-            self._gc_pin(result)
             if release_key:
                 self._gc_release_if_owned(key_obj, expr.idx)
             self._gc_release_if_owned(obj, expr.obj)
-            self._gc_unpin(result)
         return result
 
     def _emit_subscript_key_object(self, expr: Expr) -> ir.Value:

@@ -411,12 +411,10 @@ class StmtMiscLoweringMixin:
                 # A plain pointer store does not retain or register a local.
                 # Use the shared replaceable-owner slot protocol so consuming
                 # the surrounding truth test cannot destroy this binding.
-                self._gc_pin(value)
                 slot = _for_prepare_owned_object_target(self, target.ident, value_ty)
                 binding = self._gc_retain(value, name=self._fresh("walrus.binding"))
                 _for_store_owned_target(self, target.ident, slot, binding)
                 mark_local_bound(self, target.ident)
-                self._gc_unpin(value)
                 return
             self._store_value_at_name(
                 target,

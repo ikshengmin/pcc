@@ -448,7 +448,7 @@ def _for_store_owned_target(host, target_ident: str, slot, value: ir.Value) -> N
             suffix_args=(module_name, host._attr_name_ptr(target_ident)),
             argument_order=(1, 2, 0),
         )
-        retire_live_import_staging(host, target_ident, unpin=False)
+        retire_live_import_staging(host, target_ident)
         return
     owned_flag = host._ensure_owned_local_flag(target_ident, alloca)
     host.builder.store(ir.Constant(_I1, 1), owned_flag)

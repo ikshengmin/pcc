@@ -224,8 +224,10 @@ class Host:
         self.ast_module = SimpleNamespace(name="test.module")
         self.builder = Builder(self.current_function.append_basic_block("entry"))
         self.module = SimpleNamespace(globals={})
+        # One collector (item 2 (d)): cleanup emits no pcc_gc_unpin, so the
+        # model has none; a pinned root is cleared by pcc_gc_store_root.
         self.runtime = {name: name for name in (
-            "pcc_gc_unpin", "pcc_gc_store_root", "pcc_gc_load_ptr",
+            "pcc_gc_store_root", "pcc_gc_load_ptr",
             # The shared return slot roots its value without owning it.
             "pcc_gc_store_return_root",
         )}
@@ -383,6 +385,12 @@ def static_calls(host, callee):
                for block in host.current_function.blocks for instruction in block._instrs)
 
 
+def clears(events):
+    """The slots a cleanup path clears, in execution order."""
+    return [event[1][0][1] for event in events
+            if event[0] == "pcc_gc_store_root" and event[1][1] is None]
+
+
 @pytest.mark.parametrize("rooted", [False, True])
 @pytest.mark.parametrize("count", [0, 1, 8, 32])
 def test_return_paths_match_inline_and_share_suffix_calls(rooted, count):
@@ -393,7 +401,7 @@ def test_return_paths_match_inline_and_share_suffix_calls(rooted, count):
             host.register("root" + str(index))
         entries = [host.new_return(rooted=rooted, value="result") for _ in range(5)]
         runs.append([trace(entry) for entry in entries])
-        assert static_calls(host, "pcc_gc_unpin") == count * (5 if inline else 1)
+        assert static_calls(host, "pcc_gc_store_root") == count * (5 if inline else 1)
         cleanup_blocks = [block for block in host.current_function.blocks
                           if block.name.startswith("ret.shared.unpin.")]
         assert len(cleanup_blocks) == (0 if inline else count)
@@ -425,14 +433,11 @@ def test_aliases_filters_skip_and_late_eligibility_match_inline():
         second = host.new_return(skip_name="skip")
         pair = trace(first), trace(second)
         traces.append(pair)
-        assert [event for event in pair[0] if event[0] == "pcc_gc_unpin"] == [
-            ("pcc_gc_unpin", ("first:live",)), ("pcc_gc_unpin", (None,)),
-        ]
+        # The alias shares the first root's slot, cleared once per name.
+        assert clears(pair[0]) == ["first", "first"]
         assert ("owned", "owned", "owned") in pair[0]
         assert not any(event[0] == "owned" and event[1] == "skip" for event in pair[0])
-        assert [event for event in pair[1] if event[0] == "pcc_gc_unpin"] == [
-            ("pcc_gc_unpin", ("new:live",)),
-        ]
+        assert clears(pair[1]) == ["new"]
     assert traces[0] == traces[1]
 
 
@@ -450,8 +455,8 @@ def test_late_root_snapshots_and_real_retro_patch_keep_old_cleanup_unchanged():
         assert host._fn_gc_root_exit_sites["f"] == sites
         paths = trace(first), trace(second)
         traces.append(paths)
-        assert [event[1] for event in paths[0] if event[0] == "pcc_gc_unpin"] == [("old:live",)]
-        assert [event[1] for event in paths[1] if event[0] == "pcc_gc_unpin"] == [("late:live",), ("old:live",)]
+        assert clears(paths[0]) == ["old"]
+        assert clears(paths[1]) == ["late", "old"]
         for path in paths:
             last_clear = max(index for index, event in enumerate(path) if event[0] == "pcc_gc_store_root")
             first_leave = min(index for index, event in enumerate(path) if event[0] == "frame_leave")
@@ -465,10 +470,11 @@ def test_same_suffix_distinct_targets_and_runtime_reloads():
     slot = host.register("root")
     plain = host.new_return(value="plain")
     rooted = host.new_return(rooted=True, value="rooted")
-    assert static_calls(host, "pcc_gc_unpin") == 2
+    assert static_calls(host, "pcc_gc_store_root") == 2
     assert len(host._shared_return_exits["f"][3]) == 2
-    assert ("pcc_gc_unpin", ("first-run",)) in trace(plain, {id(slot): "first-run"})
-    assert ("pcc_gc_unpin", ("second-run",)) in trace(plain, {id(slot): "second-run"})
+    # The shared suffix clears the slot itself, whatever it holds at run time.
+    assert clears(trace(plain, {id(slot): "first-run"})) == ["root"]
+    assert clears(trace(plain, {id(slot): "second-run"})) == ["root"]
     assert trace(plain)[-1] == ("return", "plain")
     assert trace(rooted)[-1] == ("return", "rooted")
 
@@ -506,7 +512,7 @@ def test_partial_node_is_not_published_and_failure_restores_builder(position):
     host.builder.fail_callee = None
     head = host._shared_return_pinned_cleanup([slot], target)
     assert len(host._shared_return_exits["f"][3]) == 1
-    assert [event[0] for event in trace(head)] == ["pcc_gc_unpin", "pcc_gc_store_root", "frame_leave", "return"]
+    assert [event[0] for event in trace(head)] == ["pcc_gc_store_root", "frame_leave", "return"]
 
 
 def test_function_name_reuse_does_not_reuse_previous_function_nodes():
@@ -528,8 +534,8 @@ def test_function_name_reuse_does_not_reuse_previous_function_nodes():
     assert host._shared_return_exits["f"][0] is host.current_function
     assert host._shared_return_exits["f"][3] is not old_cache
     assert all(record[2].parent is old_function for record in old_cache.values())
-    assert ("pcc_gc_unpin", ("first-root:live",)) in trace(old_entry)
-    assert ("pcc_gc_unpin", ("second-root:live",)) in trace(new_entry)
+    assert clears(trace(old_entry)) == ["first-root"]
+    assert clears(trace(new_entry)) == ["second-root"]
 
 
 def test_cache_records_retain_both_identity_key_owners():
@@ -575,9 +581,9 @@ def test_none_target_retains_the_original_inline_cleanup(shared_flag):
     host.register("root")
     entry = host.builder._block
     assert host._emit_owned_local_cleanup(shared_exit_leaves=shared_flag) is None
-    assert static_calls(host, "pcc_gc_unpin") == 1
+    assert static_calls(host, "pcc_gc_store_root") == 1
     assert host._shared_return_exits == {}
-    assert ("pcc_gc_unpin", ("root:live",)) in trace(entry)
+    assert clears(trace(entry)) == ["root"]
 
 
 def test_finally_handoff_path_remains_nonshared_in_source():
@@ -653,7 +659,7 @@ def test_rooted_return_selects_early_abi_and_pairs_each_actual_enter(inline, map
         events = trace(entry)
         assert events[-1] == ("return", "result")
         labels = [event[0] for event in events]
-        assert labels.index("frame_enter_lifo") < labels.index("pcc_gc_unpin")
+        assert labels.index("frame_enter_lifo") < labels.index("pcc_gc_store_root")
         assert labels.index("frame_leave") < labels.index("pcc_gc_load_ptr")
         assert labels.index("pcc_gc_load_ptr") < labels.index("frame_leave_lifo")
         assert events[labels.index("frame_leave_lifo") - 1] == (

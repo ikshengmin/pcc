@@ -267,7 +267,6 @@ def direct_call_argument_is_managed(host, expr, value, target_ty) -> bool:
 def pin_rooted_direct_call_arguments(host, rooted, pinned_arg_temps) -> None:
     """Pin the rooted arguments read so far: a later one may reach a gate."""
     for value in rooted:
-        host._gc_pin(value)
         pinned_arg_temps.append((value, False))
     rooted.clear()
 
@@ -906,26 +905,8 @@ class CallObjectLoweringMixin:
         # No runtime call, pin, registration, header probe or lock acquisition
         # may be inserted between a producer's return and this first store.
         self.builder.store(value, slot)
+        # One collector: publication owes no store barrier and no lease.
         self._slot_call_note_published(slot)
-        if nonmoving:
-            # The exact producer proves this address cannot move. Keep the
-            # root publication barrier, without an address lease around it.
-            self.builder.call(
-                self.runtime["pcc_gc_note_slot_write_barrier"],
-                [ir.Constant(_CSTR, None), self._as_gc_ptr(slot), value],
-            )
-            return
-        token = self._slot_call_lease_acquire(
-            "pcc_gc_foreign_lease_acquire", slot, "call.slot.publish.lease",
-        )
-        self._slot_call_check_status(token, "owned-result lease")
-        current = self.builder.load(slot, name=self._fresh("call.slot.published"))
-        self.builder.call(
-            self.runtime["pcc_gc_note_slot_write_barrier"],
-            [ir.Constant(_CSTR, None), self._as_gc_ptr(slot), current],
-        )
-        released = self._slot_call_lease_release(slot, token, "call.slot.publish.release")
-        self._slot_call_check_status(released, "owned-result lease release")
 
     def _slot_call_builtin_power_expr(self, expr):
         """Recognize only an unshadowed two-argument builtin power call."""
@@ -2813,15 +2794,11 @@ class CallObjectLoweringMixin:
             reuse_exit = self.builder.block
             self.builder.branch(done_bb)
             self.builder.position_at_end(convert_bb)
-            self._gc_pin(seq)
             converted = self.builder.call(
                 self.runtime["py_tuple_from_splat"], [seq],
                 name=self._fresh("call.splat.normalized"),
             )
-            self._gc_pin(converted)
-            self._gc_unpin(seq)
             self._gc_release_if_owned(seq, source)
-            self._gc_unpin(converted)
             self._emit_post_call_err_check(source.span)
             convert_exit = self.builder.block
             self.builder.branch(done_bb)

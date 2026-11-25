@@ -449,10 +449,14 @@ def test_c_string_arguments_execute_all_collectors(tmp_path, pcc_runtime_archive
 
 
 class _PinModel:
-    """Run actual extern release methods against a moving-root/pin model."""
+    """Run actual extern release methods against a root and pin-flag model.
+
+    One collector (item 2 (d)): code generation emits no pin or unpin, and
+    the fused runtime's take drops its unpin, so the model has neither; a
+    call to either fails with AttributeError.
+    """
     def __init__(self):
         from pcc.frontends.python.codegen.extern_lowering import ExternScaffoldMixin
-        self._extern_repin_root = ExternScaffoldMixin._extern_repin_root.__get__(self)
         self._extern_load_root = ExternScaffoldMixin._extern_load_root.__get__(self)
         self._extern_take_root = ExternScaffoldMixin._extern_take_root.__get__(self)
         self._extern_release_roots = ExternScaffoldMixin._extern_release_roots.__get__(self)
@@ -463,7 +467,6 @@ class _PinModel:
         self.builder = self
         self.slots = {}
         self.events = []
-        self.metric = 0
 
     def _fresh(self, name):
         return name
@@ -471,27 +474,7 @@ class _PinModel:
     def _as_gc_ptr(self, slot):
         return slot
 
-    def _emit_root_pin_lock(self):
-        # Outside container mode the root pin takes the graph lock.
-        self.call("pcc_py_gc_minor_graph_lock", [])
-        return True
-
-    def _emit_root_pin_unlock(self, locked):
-        assert locked is True
-        self.call("pcc_py_gc_minor_graph_unlock", [])
-
-    def _gc_pin(self, value):
-        if value is not None:
-            value["pinned"] = True
-            self.metric += 1
-
-    def _gc_unpin(self, value):
-        if value is not None:
-            value["pinned"] = False
-            self.metric -= 1
-
     def _emit_gc_frame_leave_lifo_for_slot(self, slot):
-        assert self.slots[slot] is None or self.slots[slot]["pinned"]
         self.events.append(("leave", slot))
 
     def _gc_release(self, value, known_object):
@@ -506,23 +489,21 @@ class _PinModel:
             slot, prior = args
             value = self.slots[slot]
             self.slots[slot] = None
-            self._gc_unpin(value)
             if value is not None and prior:
                 value["pinned"] = True
             self.events.append(("take", slot))
             return value
-        assert function in ("pcc_py_gc_minor_graph_lock", "pcc_py_gc_minor_graph_unlock")
+        raise AssertionError("unexpected runtime call " + function)
 
     def acquire(self, slot, value, owned=False):
         prior = 64 if value["pinned"] else 0
-        self._gc_pin(value)
         value["refs"] += 1  # pcc_gc_store_root retains its own reference
         self.slots[slot] = value
         return (slot, owned, prior)
 
 
 @pytest.mark.parametrize("initial_pin", [False, True])
-def test_extern_root_cleanup_restores_alias_lease_and_metric(initial_pin):
+def test_extern_root_cleanup_restores_alias_pin_flag(initial_pin):
     model = _PinModel()
     obj = {"name": "object", "pinned": initial_pin, "refs": 2}
     first = model.acquire("first", obj)
@@ -532,7 +513,6 @@ def test_extern_root_cleanup_restores_alias_lease_and_metric(initial_pin):
     model._extern_release_roots((first, second))
     assert obj["pinned"] is initial_pin
     assert obj["refs"] == 1  # caller's borrowed owner survives; temporary is consumed
-    assert model.metric == 0
     assert model.slots == {"first": None, "second": None}
     assert [item for item in model.events if item[0] == "take"] == [("take", "second"), ("take", "first")]
     assert ("release", "object") in model.events
@@ -547,7 +527,6 @@ def test_extern_root_cleanup_uses_relocated_slot_value():
     model._extern_release_roots((root,))
     assert ("release", "moved") in model.events
     assert ("release", "old") not in model.events
-    assert model.metric == 0
     assert moved["pinned"] is False
     assert moved["refs"] == 0
 
@@ -601,7 +580,6 @@ def test_extern_operand_releases_root_reference_and_only_owned_source(owned):
     assert obj["refs"] == 2
     model._extern_release_roots((root,))
     assert obj["refs"] == (0 if owned else 1)
-    assert model.metric == 0
 
 
 @pytest.mark.parametrize("alias", [False, True])
@@ -619,7 +597,6 @@ def test_extern_managed_result_transfers_exactly_one_reference(alias):
     assert transferred is result
     assert result["refs"] == (2 if alias else 1)
     assert argument["refs"] == (2 if alias else 1)
-    assert model.metric == 0
     assert result["pinned"] is False
     model._gc_release(transferred, known_object=True)
     assert result["refs"] == (1 if alias else 0)

@@ -412,16 +412,6 @@ class LiteralLoweringMixin:
                 _CSTR,
                 name=self._fresh(label + ".tmp.ptr"),
             )
-        if persistent_thread_root:
-            old_rooted_value = self.builder.load(
-                slot,
-                name=self._fresh(label + ".tmp.old"),
-            )
-            self.builder.call(
-                self.runtime["pcc_gc_unpin"],
-                [old_rooted_value],
-            )
-        self._gc_pin(rooted_value)
         self.builder.call(
             self.runtime["pcc_gc_store_root"],
             [
@@ -535,11 +525,6 @@ class LiteralLoweringMixin:
             ):
                 self._emit_gc_frame_leave_lifo_for_slot(slot)
             return
-        pinned = self.builder.call(
-            self.runtime["pcc_gc_load_ptr"],
-            [ir.Constant(_CSTR, None), slot_ptr],
-            name=self._fresh("container.tmp.unpin"),
-        )
         if (
             self.current_func_def is not None
             and getattr(self, "_runtime_threads_enabled", False)
@@ -547,7 +532,7 @@ class LiteralLoweringMixin:
             # Thread-enabled functions register this entry-block slot for the
             # whole function so the epilogue remains responsible for the
             # balancing frame_leave.  The temporary value itself is no longer
-            # live, though: clear and unpin it before its owner releases the
+            # live, though: clear it before its owner releases the
             # container, otherwise the persistent slot becomes a dangling GC
             # root until function exit.
             self.builder.call(
@@ -557,7 +542,6 @@ class LiteralLoweringMixin:
                     ir.Constant(_CSTR, None),
                 ],
             )
-            self._gc_unpin(pinned)
             return
         self.builder.call(
             self.runtime["pcc_gc_store_root"],
@@ -567,7 +551,6 @@ class LiteralLoweringMixin:
             ],
         )
         self._emit_gc_frame_leave_lifo_for_slot(slot)
-        self._gc_unpin(pinned)
 
     def _emit_native_splat_sequence_at_source_position(
         self,
@@ -627,8 +610,6 @@ class LiteralLoweringMixin:
                 isinstance(value_obj.type, ir.PointerType)
                 and self._pcc_pointer_source_needs_pin(source_expr)
             )
-            if value_pinned:
-                self._gc_pin(value_obj)
 
             runtime_name = "py_list_extend" if is_splat else "py_list_append"
             self.builder.call(self.runtime[runtime_name], [lst, value_obj])
@@ -642,8 +623,6 @@ class LiteralLoweringMixin:
                     ((value_obj, value_owned),) if value_pinned else ()
                 ),
             )
-            if value_pinned:
-                self._gc_unpin(value_obj)
             if value_owned:
                 self._gc_release(
                     value_obj,
@@ -829,8 +808,6 @@ class LiteralLoweringMixin:
                     isinstance(v_obj.type, ir.PointerType)
                     and self._pcc_pointer_source_needs_pin(el)
                 )
-                if temp_pinned:
-                    self._gc_pin(v_obj)
                 self.builder.call(
                     self.runtime["py_list_append"],
                     [lst, v_obj],
@@ -843,8 +820,6 @@ class LiteralLoweringMixin:
                         ((v_obj, release_temp),) if temp_pinned else ()
                     ),
                 )
-                if temp_pinned:
-                    self._gc_unpin(v_obj)
                 if release_temp:
                     self._gc_release(
                         v_obj,
@@ -892,7 +867,6 @@ class LiteralLoweringMixin:
                     and not is_cpy
                     and self._pcc_pointer_source_needs_pin(el.args[0])
                 ):
-                    self._gc_pin(inner)
                     pinned = True
                     live_pinned_pcc.append(
                         (
@@ -951,7 +925,6 @@ class LiteralLoweringMixin:
                 and not is_cpy
                 and self._pcc_pointer_source_needs_pin(el)
             ):
-                self._gc_pin(v)
                 pinned = True
                 live_pinned_pcc.append(
                     (
@@ -981,7 +954,6 @@ class LiteralLoweringMixin:
             )
             for _op_kind, value, _value_ty, _is_cpy, src_expr, pinned in ops:
                 if pinned:
-                    self._gc_unpin(value)
                     self._gc_release_if_owned(value, src_expr)
             return result
         n_val = ir.Constant(_I64, len(expr.elems))
@@ -1017,7 +989,6 @@ class LiteralLoweringMixin:
                     pinned_release_on_error=tuple(pending_pins),
                 )
                 if pinned:
-                    self._gc_unpin(value)
                     if pin_entry is not None and pin_entry[1]:
                         self._gc_release(value)
                     pending_pins.remove(pin_entry)
@@ -1061,8 +1032,6 @@ class LiteralLoweringMixin:
                 rooted_release_on_error=rooted_on_error,
                 pinned_release_on_error=tuple(pending_pins),
             )
-            if pinned:
-                self._gc_unpin(value)
             if temp_needs_release:
                 self._gc_release(
                     v_obj,
@@ -1109,7 +1078,6 @@ class LiteralLoweringMixin:
                 )
                 mapping_pin_cleanup = ()
                 if mapping_pinned:
-                    self._gc_pin(m_obj)
                     mapping_pin_cleanup = ((m_obj, mapping_owned),)
                 self.builder.call(
                     self.runtime["py_dict_update"],
@@ -1124,8 +1092,6 @@ class LiteralLoweringMixin:
                     rooted_release_on_error=((d, dict_root),),
                     pinned_release_on_error=mapping_pin_cleanup,
                 )
-                if mapping_pinned:
-                    self._gc_unpin(m_obj)
                 if mapping_owned:
                     self._gc_release(
                         m_obj,
@@ -1149,8 +1115,6 @@ class LiteralLoweringMixin:
                     isinstance(k_obj.type, ir.PointerType)
                     and self._pcc_pointer_source_needs_pin(k_expr)
                 )
-                if key_pinned:
-                    self._gc_pin(k_obj)
                 key_pin_cleanup = ((k_obj, key_owned),) if key_pinned else ()
                 if not _expr_cannot_raise(k_expr):
                     # Evaluating a constant operand cannot set an exception, so
@@ -1185,8 +1149,6 @@ class LiteralLoweringMixin:
                     isinstance(v_obj.type, ir.PointerType)
                     and self._pcc_pointer_source_needs_pin(v_expr)
                 )
-                if value_pinned:
-                    self._gc_pin(v_obj)
                 pinned_on_error = key_pin_cleanup
                 if value_pinned:
                     pinned_on_error = pinned_on_error + ((v_obj, value_owned),)
@@ -1213,15 +1175,11 @@ class LiteralLoweringMixin:
                 )
                 # py_dict_set borrows (balanced store); owned key/value
                 # temps must be released here, mirroring py_list_append.
-                if key_pinned:
-                    self._gc_unpin(k_obj)
                 if key_owned:
                     self._gc_release(
                         k_obj,
                         self._release_expr_label("container", k_expr),
                     )
-                if value_pinned:
-                    self._gc_unpin(v_obj)
                 if value_owned:
                     self._gc_release(
                         v_obj,
@@ -1512,8 +1470,6 @@ class LiteralLoweringMixin:
                     isinstance(k_obj.type, ir.PointerType)
                     and self._pcc_pointer_source_needs_pin(k_expr)
                 )
-                if key_pinned:
-                    self._gc_pin(k_obj)
                 key_pin_cleanup = (
                     ((k_obj, key_owned),) if key_pinned else ()
                 )
@@ -1550,8 +1506,6 @@ class LiteralLoweringMixin:
                     isinstance(v_obj.type, ir.PointerType)
                     and self._pcc_pointer_source_needs_pin(v_expr)
                 )
-                if value_pinned:
-                    self._gc_pin(v_obj)
                 pinned_on_error = key_pin_cleanup
                 if value_pinned:
                     pinned_on_error = pinned_on_error + (
@@ -1587,15 +1541,11 @@ class LiteralLoweringMixin:
                     )
                 # py_dict_set borrows (balanced store); owned key/value
                 # temps must be released here, mirroring py_list_append.
-                if key_pinned:
-                    self._gc_unpin(k_obj)
                 if key_owned:
                     self._gc_release(
                         k_obj,
                         self._release_expr_label("container", k_expr),
                     )
-                if value_pinned:
-                    self._gc_unpin(v_obj)
                 if value_owned:
                     self._gc_release(
                         v_obj,
@@ -1652,7 +1602,6 @@ class LiteralLoweringMixin:
                 and not k_is_cpy
                 and self._pcc_pointer_source_needs_pin(k_expr)
             ):
-                self._gc_pin(k)
                 k_pinned = True
                 live_pinned_pcc.append(
                     (
@@ -1700,7 +1649,6 @@ class LiteralLoweringMixin:
                 and not v_is_cpy
                 and self._pcc_pointer_source_needs_pin(v_expr)
             ):
-                self._gc_pin(v)
                 v_pinned = True
                 live_pinned_pcc.append(
                     (
@@ -1762,10 +1710,8 @@ class LiteralLoweringMixin:
                 v_expr,
             ) in items:
                 if k_pinned:
-                    self._gc_unpin(k)
                     self._gc_release_if_owned(k, k_expr)
                 if v_pinned:
-                    self._gc_unpin(v)
                     self._gc_release_if_owned(v, v_expr)
             return result
         if len(items) > 1 and any(
@@ -1907,10 +1853,6 @@ class LiteralLoweringMixin:
             )
             # py_dict_set borrows (balanced store); owned key/value temps
             # must be released here, mirroring the list-literal path.
-            if k_pinned:
-                self._gc_unpin(k)
-            if v_pinned:
-                self._gc_unpin(v)
             if key_temp_needs_release:
                 self._gc_release(
                     k_obj,
@@ -2453,8 +2395,6 @@ class LiteralLoweringMixin:
                         isinstance(v_obj.type, ir.PointerType)
                         and self._pcc_pointer_source_needs_pin(el)
                     )
-                    if temp_pinned:
-                        self._gc_pin(v_obj)
                     self.builder.call(
                         self.runtime["py_tuple_set_item"],
                         [tup, idx, v_obj],
@@ -2475,11 +2415,6 @@ class LiteralLoweringMixin:
                             pinned_release_on_error=(
                                 ((v_obj, release_temp),) if temp_pinned else ()
                             ),
-                        )
-                    if temp_pinned:
-                        self.builder.call(
-                            self.runtime["pcc_gc_unpin"],
-                            [v_obj],
                         )
                     if release_temp:
                         self._gc_release(
@@ -2522,7 +2457,6 @@ class LiteralLoweringMixin:
                     and not is_cpy
                     and self._pcc_pointer_source_needs_pin(el)
                 ):
-                    self._gc_pin(v)
                     pinned = True
                     live_pinned_pcc.append(
                         (
@@ -2600,8 +2534,6 @@ class LiteralLoweringMixin:
                     rooted_release_on_error=rooted_on_error,
                     pinned_release_on_error=tuple(pending_pins),
                 )
-                if pinned:
-                    self._gc_unpin(value)
                 if temp_needs_release:
                     self._gc_release(
                         v_obj,
@@ -2652,7 +2584,6 @@ class LiteralLoweringMixin:
                     and not is_cpy
                     and self._pcc_pointer_source_needs_pin(el.args[0])
                 ):
-                    self._gc_pin(inner)
                     pinned = True
                     live_pinned_pcc.append(
                         (
@@ -2695,7 +2626,6 @@ class LiteralLoweringMixin:
                 and not is_cpy
                 and self._pcc_pointer_source_needs_pin(el)
             ):
-                self._gc_pin(v)
                 pinned = True
                 live_pinned_pcc.append(
                     (
@@ -2711,7 +2641,6 @@ class LiteralLoweringMixin:
             )
             for _op_kind, value, _value_ty, _is_cpy, pinned, src_expr in ops:
                 if pinned:
-                    self._gc_unpin(value)
                     self._gc_release_if_owned(value, src_expr)
             return result
         lst = self.builder.call(
@@ -2746,7 +2675,6 @@ class LiteralLoweringMixin:
                     pinned_release_on_error=tuple(pending_pins),
                 )
                 if pinned:
-                    self._gc_unpin(value)
                     if pin_entry is not None and pin_entry[1]:
                         self._gc_release(value)
                     pending_pins.remove(pin_entry)
@@ -2788,8 +2716,6 @@ class LiteralLoweringMixin:
                 rooted_release_on_error=rooted_on_error,
                 pinned_release_on_error=tuple(pending_pins),
             )
-            if pinned:
-                self._gc_unpin(value)
             if temp_needs_release:
                 self._gc_release(v_obj)
             elif pin_entry is not None and pin_entry[1]:

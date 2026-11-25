@@ -662,7 +662,6 @@ class TypeAbiLoweringMixin:
         for index, root in enumerate(roots):
             current = self.builder.call(self.runtime["pcc_gc_load_ptr"], [ir.Constant(_CSTR, None), self._as_gc_ptr(root)])
             prior = self._extern_prior_pin(current)
-            self._gc_pin(current)
             pins.append((root, prior, paths[index]))
         self._emit_root_pin_unlock(pin_locked)
         for root in reversed(roots):

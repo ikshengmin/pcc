@@ -148,7 +148,6 @@ def emit_i64_buffer_constructor(host, expr: Call):
             True,
         )
         value_owned = _value_is_owned_after_object_projection(host, arg, value)
-        host.builder.call(host.runtime["pcc_gc_pin"], [value])
         host.builder.call(
             host.runtime["py_i64_buffer_set_item"],
             [buffer, ir.Constant(_I64, index), value],
@@ -159,7 +158,6 @@ def emit_i64_buffer_constructor(host, expr: Call):
             rooted_release_on_error=((buffer, buffer_root),),
             pinned_release_on_error=((value, value_owned),),
         )
-        host.builder.call(host.runtime["pcc_gc_unpin"], [value])
         if value_owned:
             host._gc_release(value)
 
@@ -186,10 +184,8 @@ def _input_value(host, expr: Expr, cleanup=()):
 
 
 def _cleanup_inputs(host, left, left_owned: bool, right, right_owned: bool) -> None:
-    host.builder.call(host.runtime["pcc_gc_unpin"], [right])
     if right_owned:
         host._gc_release(right)
-    host.builder.call(host.runtime["pcc_gc_unpin"], [left])
     if left_owned:
         host._gc_release(left)
 
@@ -355,13 +351,11 @@ def emit_guarded_i64_dot(host, expr: Call):
         )
 
     left, left_owned = _input_value(host, expr.args[0])
-    host.builder.call(host.runtime["pcc_gc_pin"], [left])
     right, right_owned = _input_value(
         host,
         expr.args[1],
         ((left, left_owned),),
     )
-    host.builder.call(host.runtime["pcc_gc_pin"], [right])
     input_cleanup = ((left, left_owned), (right, right_owned))
     _bump_counter(host, "candidate")
 

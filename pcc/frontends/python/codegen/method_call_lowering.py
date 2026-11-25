@@ -176,8 +176,6 @@ def _method_pin_arg_provenance(host, provenance):
         raise L1CodegenError("raw method argument cannot carry pcc ownership")
     if owned and not managed:
         raise L1CodegenError("owned method argument must be GC-managed")
-    if managed:
-        host.builder.call(host.runtime["pcc_gc_pin"], [value])
     return (value, managed, raw, owned)
 
 
@@ -262,10 +260,6 @@ def _method_emit_ast_args(
 def _method_release_arg_provenance(host, provenance) -> None:
     for value, managed, raw, owned in provenance:
         if managed:
-            host.builder.call(
-                host.runtime["pcc_gc_unpin"],
-                [host._value_available_at_insertion_point(value)],
-            )
             if owned:
                 host._gc_release(
                     value,

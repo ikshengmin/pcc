@@ -34,7 +34,7 @@ def live_import_name_slot(host, name):
     return slot
 
 
-def retire_live_import_staging(host, name, unpin=True):
+def retire_live_import_staging(host, name):
     staging = live_import_global_slot(host, name)
     if staging is None:
         return
@@ -44,9 +44,6 @@ def retire_live_import_staging(host, name, unpin=True):
     # Keep its ABI contents and retire only an actual object staging slot.
     if not isinstance(staging.value_type, ir.PointerType):
         return
-    if unpin:
-        current = host.builder.load(staging, name=host._fresh("import.publish.current"))
-        host._gc_unpin(current)
     host.builder.call(
         host.runtime["pcc_gc_store_root"],
         [host._as_gc_ptr(staging), ir.Constant(_CSTR, None)],

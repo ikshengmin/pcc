@@ -2067,12 +2067,10 @@ class IrScaffoldLoweringMixin:
             # An imprecisely typed expression can still produce a machine
             # integer. Adapt that already-evaluated value once; reevaluating
             # its AST would duplicate side effects.
-            self._gc_pin(ty)
             boxed = isinstance(fn.args[1].type, ir.PointerType)
             cleanup = ((ty, False),)
             if boxed:
                 value = self.builder.call(self.runtime["py_int_from_i64"], [value])
-                self._gc_pin(value)
                 cleanup = cleanup + ((value, True),)
                 self._emit_post_call_err_check(expr.span, pinned_release_on_error=cleanup)
             # This known Constant producer returns an object owner, unless
@@ -2110,9 +2108,7 @@ class IrScaffoldLoweringMixin:
                     result_slot=output,
                 )
                 if boxed:
-                    self._gc_unpin(value)
                     self._gc_release(value)
-                self._gc_unpin(ty)
                 if managed_result:
                     if sink is None:
                         return self._take_slot_call_root(output)

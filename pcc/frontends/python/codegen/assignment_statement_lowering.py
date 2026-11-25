@@ -1666,20 +1666,6 @@ class AssignmentStatementLoweringMixin:
                 name=self._fresh(target.ident + ".owned.resolve"),
             )
         if (
-            not exact_root_store
-            and
-            (
-                manages_owned_local
-                or target.ident in getattr(self, "_gc_rooted_local_names", set())
-            )
-            and isinstance(value.type, ir.PointerType)
-            and value not in self._cpy_values
-        ):
-            self.builder.call(
-                self.runtime["pcc_gc_note_write_barrier"],
-                [ir.Constant(_CSTR, None), value],
-            )
-        if (
             isinstance(value.type, ir.IntType)
             and isinstance(ir_ty, ir.IntType)
             and value.type.width != ir_ty.width

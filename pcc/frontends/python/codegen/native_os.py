@@ -286,12 +286,10 @@ class NativeOsLoweringMixin:
                 name=self._fresh("os.environ.pop.value"),
             )
             self._emit_post_call_err_check(getattr(expr, "span", None))
-            self._gc_pin(value)
             self.builder.call(self.runtime["py_os_unsetenv"], [key_obj])
             self._emit_post_call_err_check(
                 getattr(expr, "span", None), pinned_release_on_error=((value, True),),
             )
-            self._gc_unpin(value)
             if default_obj is None:
                 return value
             present_exit = self.builder._block
@@ -697,13 +695,11 @@ class NativeOsLoweringMixin:
             # The owned digest result is not in a Python local yet.  Keep this
             # fresh string immobile while earlier operand roots are unwound
             # and while the post-call error flag is inspected.
-            self._gc_pin(result)
             self._release_rooted_pcc_lifetimes((path_lifetime,))
             self._emit_post_call_err_check(
                 getattr(expr, "span", None),
                 pinned_release_on_error=((result, True),),
             )
-            self._gc_unpin(result)
             return result
         return None
 

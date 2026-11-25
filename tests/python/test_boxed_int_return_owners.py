@@ -651,17 +651,17 @@ def probe(owner: dict[int, int], key: int) -> bool:
         for label in targets.groups()
     )
     # Both paths drop the temporary key; only the success path publishes
-    # the returned value, with the protection around the key release intact.
+    # the returned value, after the key release.
     release = r"@pcc_gc_release(?:_known)?\(ptr " + key + r"\)"
     assert re.search(release, error)
     assert "@pcc_gc_store_return_root(" not in error
     steps = (
-        r"@pcc_gc_pin\(ptr " + result + r"\)",
         release,
-        r"@pcc_gc_unpin\(ptr " + result + r"\)",
         r"@pcc_gc_store_return_root\(ptr [^,]+, ptr " + result + r"\)",
     )
     assert re.search(r".*?".join(steps), success, re.S)
+    # One collector: the result is not pinned around the release (item 2 (d)).
+    assert not re.search(r"\bcall\b[^\n]*@pcc_gc_(?:un)?pin\(", callee)
     assert "result.local.borrowed.retain" not in _body(text)
 
 

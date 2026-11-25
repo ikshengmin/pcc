@@ -445,7 +445,6 @@ class DictLoweringMixin:
             self._emit_post_call_err_check(expr.span)
         finally:
             self._try_err_block = old_err
-        self._gc_pin(result)
         self.builder.call(self.runtime["pcc_gc_store_root"], [self._as_gc_ptr(result_root), result])
         self._release_rooted_pcc_lifetimes(tuple(roots[1:]))
         result = self.builder.call(

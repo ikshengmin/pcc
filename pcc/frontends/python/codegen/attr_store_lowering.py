@@ -183,8 +183,6 @@ class AttrStoreLoweringMixin:
                     gv,
                     name=self._fresh(f"modattr.{target.name}.old"),
                 )
-                self._gc_unpin(old_value)
-                self._gc_pin(value_obj)
                 self.builder.call(
                     self.runtime["pcc_gc_store_root"],
                     [
@@ -264,9 +262,6 @@ class AttrStoreLoweringMixin:
                 old_value = self.builder.load(old_root, name=self._fresh("module.attr.old.live"))
                 same = self.builder.icmp_unsigned("==", old_value, value_obj)
                 preserve = self.builder.select(same, ir.Constant(ir.IntType(64), 64), ir.Constant(ir.IntType(64), 0))
-                # This is the new canonical-global pin; the keeper has a
-                # separate metric acquisition. Do not clear the old pin yet.
-                self._gc_pin(value_obj)
                 self.builder.call(
                     self.runtime["pcc_gc_store_root"],
                     [self._as_gc_ptr(gv, name=self._fresh("module.attr.slot")), value_obj],
@@ -293,10 +288,7 @@ class AttrStoreLoweringMixin:
                 if not isinstance(value.type, ir.PointerType):
                     self._gc_release(new_owned)
                 # Publish has finished before either old owner is released.
-                # For self-assignment keep the replacement global's PIN bit
-                # while balancing both displaced-global and keeper metrics.
-                old_live = self.builder.load(old_root, name=self._fresh("module.attr.old.live"))
-                self._gc_unpin(old_live)
+                # For self-assignment keep the replacement global's PIN bit.
                 old_owned = self.builder.call(
                     self.runtime["pcc_gc_take_pinned_slot"],
                     [self._as_gc_ptr(old_root), preserve],

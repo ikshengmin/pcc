@@ -370,9 +370,7 @@ class NativeThreadingLoweringMixin:
                 [ir.Constant(_CSTR, None), self._as_gc_ptr(result_root)],
                 name=self._fresh("thread.result.current"),
             )
-            self._gc_pin(result)
             self._leave_container_temp_root(result_root)
-            self._gc_unpin(result)
             self._note_owned_object_value(result)
             return result
         return None

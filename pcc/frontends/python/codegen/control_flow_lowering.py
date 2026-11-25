@@ -261,7 +261,6 @@ class ControlFlowLoweringMixin:
             return self._truthy(value, cond_expr.ty)
         if not provenance[3]:
             value = self._gc_retain(value, name=self._fresh("cond.retain"))
-        self._gc_pin(value)
         old_pcc = self._current_try_err_block()
         target = old_pcc if old_pcc is not None else self._ensure_fn_err_exit()
         self._try_err_block = self._make_cpy_operand_cleanup_block(
@@ -271,7 +270,6 @@ class ControlFlowLoweringMixin:
             result = self._truthy(value, cond_expr.ty)
         finally:
             self._try_err_block = old_pcc
-        self._gc_unpin(value)
         self._gc_release(value)
         return result
 

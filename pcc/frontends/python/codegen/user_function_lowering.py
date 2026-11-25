@@ -2872,26 +2872,22 @@ class UserFunctionLoweringMixin:
             [ir.Constant(_I64, n)],
             name=self._fresh("func.sig.names"),
         )
-        self._gc_pin(names)
         kinds = self.builder.call(
             self.runtime["py_tuple_new"],
             [ir.Constant(_I64, n)],
             name=self._fresh("func.sig.kinds"),
         )
-        self._gc_pin(kinds)
         has_defaults = self.builder.call(
             self.runtime["py_tuple_new"],
             [ir.Constant(_I64, n)],
             name=self._fresh("func.sig.has_defaults"),
         )
-        self._gc_pin(has_defaults)
         defaults = self.builder.call(
             self.runtime["py_tuple_new"],
             [ir.Constant(_I64, n)],
             name=self._fresh("func.sig.defaults"),
         )
 
-        self._gc_pin(defaults)
         signature_error_target = self._current_try_err_block()
         signature_cleanup_target = signature_error_target
         if signature_cleanup_target is None:
@@ -3041,13 +3037,9 @@ class UserFunctionLoweringMixin:
             self._try_err_block = tuple_cleanup
             self._cpy_operand_cleanup_block = tuple_cleanup
             self._slot_call_check_status(released, "signature fill lease release")
-            self._gc_unpin(defaults)
             self._gc_release(defaults)
-            self._gc_unpin(has_defaults)
             self._gc_release(has_defaults)
-            self._gc_unpin(kinds)
             self._gc_release(kinds)
-            self._gc_unpin(names)
             self._gc_release(names)
             self._try_err_block = result_cleanup
             self._cpy_operand_cleanup_block = result_cleanup
@@ -3168,7 +3160,6 @@ class UserFunctionLoweringMixin:
 
         self.builder.position_at_end(create_bb)
         created = self._emit_native_func_signature(original_args)
-        self._gc_pin(created)
         self.builder.store(created, cache_gv)
         create_exit = self.builder.block
         self.builder.branch(done_bb)
@@ -3351,7 +3342,6 @@ class UserFunctionLoweringMixin:
             emit_function_auto_park_role(self, fd, current)
             if cache_gv is not None:
                 self.builder.call(self.runtime["py_incref"], [current])
-                self._gc_pin(current)
                 self.builder.store(current, cache_gv)
             # One collector: an address lease is token 0 and its release answers 0.
             released = ir.Constant(_I64, 0)
@@ -3936,7 +3926,6 @@ class UserFunctionLoweringMixin:
                         and direct_call_argument_reads_stable_root(self, ast_arg, target_ty)):
                     rooted_arg_values.append(v)
                 else:
-                    self._gc_pin(v)
                     pinned_arg_temps.append((v, owned))
             args_ir.append(v)
         call_name = (
@@ -3951,7 +3940,6 @@ class UserFunctionLoweringMixin:
             pinned_arg_temps=tuple(pinned_arg_temps),
         )
         for arg_value, owned in pinned_arg_temps:
-            self._gc_unpin(arg_value)
             if owned:
                 self._gc_release(
                     arg_value,

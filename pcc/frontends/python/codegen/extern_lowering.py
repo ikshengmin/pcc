@@ -278,11 +278,7 @@ class ExternScaffoldMixin:
                     [ir.Constant(_CSTR, None), self._as_gc_ptr(result_root)],
                     name=self._fresh("extern.object.result.current"),
                 )
-                # Reestablish the pin after possible alias unpins. The extra
-                # pair balances metrics and covers root deregistration itself.
-                self._gc_pin(result)
                 self._leave_container_temp_root(result_root)
-                self._gc_unpin(result)
             else:
                 self._release_rooted_pcc_lifetimes(tuple(object_roots))
         if restype_name == "c_rawptr" and self._raw_addresses_are_ints():
@@ -335,17 +331,6 @@ class ExternScaffoldMixin:
             name=self._fresh("extern.argument.current"),
         )
 
-    def _extern_repin_root(self, root):
-        # A later operand or a nested call may have temporarily pinned and
-        # unpinned an alias. Roots remain authoritative; reestablish our one
-        # lease without changing its metric before exposing any raw pointer.
-        pin_locked = self._emit_root_pin_lock()
-        value = self._extern_load_root(root)
-        self._gc_unpin(value)
-        self._gc_pin(value)
-        self._emit_root_pin_unlock(pin_locked)
-        return value
-
     def _extern_take_root(self, root):
         """Consume a source owner, then transfer the root's retained owner."""
         slot, owned, prior = root
@@ -354,7 +339,6 @@ class ExternScaffoldMixin:
             # (or c_obj result) owner while that root still protects the object;
             # then reload because a release can run code or safepoint.
             self._gc_release(self._extern_load_root(root), known_object=True)
-        self._extern_repin_root(root)
         if not (self.current_func_def is not None
                 and getattr(self, "_runtime_threads_enabled", False)):
             self._emit_gc_frame_leave_lifo_for_slot(slot)
@@ -491,9 +475,6 @@ class ExternScaffoldMixin:
         # so a c_str/c_obj projection takes no foreign-address lease (the
         # runtime answered token 0 for every lease, and its release 0).
         leases = []
-        # Pin the complete set before deriving the first interior pointer.
-        for root in roots:
-            self._extern_repin_root(root)
         for index, root, value, ctype in projections:
             if root is not None:
                 value = self._extern_load_root(root)

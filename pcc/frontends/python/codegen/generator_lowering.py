@@ -456,10 +456,6 @@ def emit_generator_may_park_call(
 def _release_may_park_arg_provenance(host, pinned_arg_provenance) -> None:
     for value, managed, raw, owned in pinned_arg_provenance:
         if managed:
-            host.builder.call(
-                host.runtime["pcc_gc_unpin"],
-                [host._value_available_at_insertion_point(value)],
-            )
             if owned:
                 host._gc_release(
                     value,
@@ -488,13 +484,11 @@ def emit_generator_may_park_sync(
     child (outside a virtual thread every parking primitive blocks) and
     returns an owned ``StopIteration.value``.
     """
-    host._gc_pin(child)
     result = host.builder.call(
         host.runtime["py_gen_run_may_park_sync"],
         [child],
         name=host._fresh("vthread.sync.result"),
     )
-    host._gc_unpin(child)
     host._gc_release(child)
     _release_may_park_arg_provenance(host, pinned_arg_provenance)
     host._emit_post_call_err_check(host._expr_span_or_none(expr))
@@ -554,14 +548,9 @@ def emit_generator_may_park_child(
         host, expr, callee_name
     )
     if not child_already_rooted:
-        host.builder.call(host.runtime["pcc_gc_pin"], [child])
         host.builder.call(
             host.runtime["pcc_gc_store_root"],
             [initial_child_root_ptr, child],
-        )
-        host.builder.call(
-            host.runtime["pcc_gc_unpin"],
-            [host._value_available_at_insertion_point(child)],
         )
         # The root store retained the replacement and released the slot's prior
         # owner. Consume the direct call's owned temporary so the hidden slot
@@ -2614,7 +2603,6 @@ class GeneratorLoweringMixin:
         # The private frame is an owned construction temporary until gen_new
         # retains it. Root and pin only this construction lease.
         frame_slot = self._alloca_in_entry(_CSTR, name=self._fresh("gen.wrapper.frame"), init_null=True)
-        self._gc_pin(frame)
         self.builder.call(self.runtime["pcc_gc_store_root_take"], [frame_slot, frame])
         self._emit_current_gc_frame_enter_lifo(self._gc_one_slot_frame_map(), frame_slot)
         arg_by_name = {
@@ -2708,7 +2696,6 @@ class GeneratorLoweringMixin:
                 or id(fd) in getattr(self, "_vthread_may_park_method_ids", set())):
             self.builder.call(self.runtime["py_gen_set_may_park"], [gen])
         # No unrooted result may survive the construction-owner cleanup.
-        self._gc_pin(gen)
         self._emit_gc_frame_leave_lifo_for_slot(frame_slot)
         owned_frame = self.builder.call(
             self.runtime["pcc_gc_take_pinned_slot"],
@@ -2718,7 +2705,6 @@ class GeneratorLoweringMixin:
         self._gc_release(owned_frame)
         if argument_roots is not None:
             self._emit_gc_frame_leave_lifo_for_slot(argument_roots)
-        self._gc_unpin(gen)
         self.builder.ret(gen)
 
         self._strict_stub_user_function_with_cpy_fallback(resume_fn, fd)
@@ -3174,7 +3160,6 @@ class GeneratorLoweringMixin:
             pin_locked = self._emit_root_pin_lock()
             current = self.builder.load(result_slot)
             prior_pin = self._extern_prior_pin(current)
-            self._gc_pin(current)
             self._emit_root_pin_unlock(pin_locked)
         worker_timing = str(
             os.environ.get("PCC_PY_FRONTEND_WORKER_TIMING", "") or ""

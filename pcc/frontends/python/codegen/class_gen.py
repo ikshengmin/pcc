@@ -930,7 +930,6 @@ def _classgen_emit_container_literal_fallback(parent, expr):
             [ir.Constant(_I64, n)],
             name=parent._fresh("classgen.list"),
         )
-        parent.builder.call(parent.runtime["pcc_gc_pin"], [out])
         idx = 0
         while idx < n:
             elem = expr.elems[idx]
@@ -940,7 +939,6 @@ def _classgen_emit_container_literal_fallback(parent, expr):
                 [out, elem_obj],
             )
             idx += 1
-        parent.builder.call(parent.runtime["pcc_gc_unpin"], [out])
         return out
     if isinstance(expr, TupleExpr) or _classgen_str_eq(kind, "TupleExpr"):
         n = len(expr.elems)
@@ -949,7 +947,6 @@ def _classgen_emit_container_literal_fallback(parent, expr):
             [ir.Constant(_I64, n)],
             name=parent._fresh("classgen.tuple"),
         )
-        parent.builder.call(parent.runtime["pcc_gc_pin"], [out])
         idx = 0
         while idx < n:
             elem = expr.elems[idx]
@@ -959,7 +956,6 @@ def _classgen_emit_container_literal_fallback(parent, expr):
                 [out, ir.Constant(_I64, idx), elem_obj],
             )
             idx += 1
-        parent.builder.call(parent.runtime["pcc_gc_unpin"], [out])
         return out
     if isinstance(expr, DictExpr) or _classgen_str_eq(kind, "DictExpr"):
         out = parent.builder.call(
@@ -967,7 +963,6 @@ def _classgen_emit_container_literal_fallback(parent, expr):
             [],
             name=parent._fresh("classgen.dict"),
         )
-        parent.builder.call(parent.runtime["pcc_gc_pin"], [out])
         idx = 0
         n = len(expr.pairs)
         while idx < n:
@@ -979,7 +974,6 @@ def _classgen_emit_container_literal_fallback(parent, expr):
                 [out, key_obj, val_obj],
             )
             idx += 1
-        parent.builder.call(parent.runtime["pcc_gc_unpin"], [out])
         return out
     return None
 
@@ -5374,16 +5368,11 @@ class ClassLowering:
         if name_cell is not None:
             # The class's methods read its name, so the enclosing function
             # keeps that name in a cell: bind the class into the cell.
-            parent.builder.call(parent.runtime["pcc_gc_pin"], [cls_ptr])
             cell = parent._emit_name(Name(span=cd.span, ty=DynType(name="dyn"), ident=name_cell))
             parent.builder.call(
                 parent.runtime["py_list_setitem"],
                 [cell, ir.Constant(_I64, 0), parent._value_available_at_insertion_point(cls_ptr)],
                 name=self._fresh("local.class.cell.bind"),
-            )
-            parent.builder.call(
-                parent.runtime["pcc_gc_unpin"],
-                [parent._value_available_at_insertion_point(cls_ptr)],
             )
             parent._emit_post_call_err_check(cd.span)
             # The cell retained the class; consume the construction result.
@@ -5417,14 +5406,9 @@ class ClassLowering:
 
         parent._ensure_owned_local_gc_root(cd.name, alloca, _PTR)
         owned_flag = parent._ensure_owned_local_flag(cd.name, alloca)
-        parent.builder.call(parent.runtime["pcc_gc_pin"], [cls_ptr])
         parent.builder.call(
             parent.runtime["pcc_gc_store_root"],
             [parent._as_gc_ptr(alloca), cls_ptr],
-        )
-        parent.builder.call(
-            parent.runtime["pcc_gc_unpin"],
-            [parent._value_available_at_insertion_point(cls_ptr)],
         )
         # The root store retained the replacement and released any previous
         # binding.  Consume the fresh class-construction result.
@@ -5545,13 +5529,8 @@ class ClassLowering:
             parent._try_err_block = parent._slot_call_cleanup_block(tuple(held), target)
             parent._cpy_operand_cleanup_block = parent._try_err_block
 
-        builder.call(parent.runtime["pcc_gc_pin"], [cls_ptr])
         builder.call(
             parent.runtime["pcc_gc_store_root"], [parent._as_gc_ptr(current), cls_ptr],
-        )
-        builder.call(
-            parent.runtime["pcc_gc_unpin"],
-            [parent._value_available_at_insertion_point(cls_ptr)],
         )
         # The root retained the class; consume the construction result.
         parent._gc_release(
@@ -5796,13 +5775,10 @@ class ClassLowering:
             )
         if info.dynamic_layout:
             # Leave the base roots (LIFO) before the class body roots the
-            # new class, whichever constructor made it; pinned meanwhile so
-            # it cannot move.
-            builder.call(runtime["pcc_gc_pin"], [cls_ptr])
+            # new class, whichever constructor made it.
             self.parent._release_rooted_pcc_lifetimes(tuple(base_lifetimes))
             self.parent._try_err_block = saved_base_try
             self.parent._cpy_operand_cleanup_block = saved_base_cpy
-            builder.call(runtime["pcc_gc_unpin"], [cls_ptr])
         class_body_root = self.parent._enter_container_temp_root(cls_ptr, self._fresh("class.body"))
         body_error_target = self.parent._current_try_err_block()
         if body_error_target is None:
@@ -6071,8 +6047,6 @@ class ClassLowering:
             for method_name, method_obj in prepared_method_objects.items():
                 if method_name == _DATACLASS_PREPARED_DEFAULTS_OWNER:
                     self.parent.builder.call(runtime["py_func_release_default_snapshot"], [method_obj])
-                else:
-                    self.parent._gc_unpin(method_obj)
             # Factory captures and methods can interleave. Their lexical
             # module frames must unwind in actual reverse registration order.
             for lifetime_kind, lifetime_root, owns_lifetime in reversed(class_body_lifetimes):
@@ -7585,7 +7559,6 @@ class ClassLowering:
             if _is_ast_node(stmt, FuncDef):
                 method_obj = self._emit_namespace_method_object(cd, stmt, info)
                 if method_obj is not None:
-                    self.parent._gc_pin(method_obj)
                     method_error_target = self.parent._current_try_err_block()
                     if method_error_target is None:
                         method_error_target = self.parent._ensure_fn_err_exit()
@@ -8695,13 +8668,8 @@ class ClassLowering:
             [cls_ptr],
             name=self._fresh("inst." + class_name),
         )
-        # ``py_instance_new`` returns an owned object, but an SSA pointer is
-        # not a GC root.  Argument lowering and ``__init__`` may allocate, so
-        # keep the new instance pinned until construction finishes.  Without
-        # this, a relocating collection can leave ``self`` stale and later
-        # class fields (notably IR symbol strings during pcc1 -> pcc2) read as
-        # NULL even though every store succeeded inside ``__init__``.
-        builder.call(runtime["pcc_gc_pin"], [inst])
+        # ``py_instance_new`` returns an owned object; the one collector
+        # never moves it while argument lowering and ``__init__`` run.
         init_info = info
         init_fn = info.init_fn
         if init_fn is None:
@@ -9117,10 +9085,6 @@ class ClassLowering:
                     init_info.init_returns_void,
                 )
                 init_called = True
-        builder.call(
-            runtime["pcc_gc_unpin"],
-            [parent._value_available_at_insertion_point(inst)],
-        )
         if init_called:
             # A user ``__init__`` reports Python exceptions through TLS even
             # when its native return value is discarded.  Check only after

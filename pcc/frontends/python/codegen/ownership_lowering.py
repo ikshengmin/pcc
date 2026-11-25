@@ -184,9 +184,9 @@ class OwnershipLoweringMixin:
         * the immortal singletons `py_None` / `py_True` / `py_False`, which
           carry `PY_FLAG_IMMORTAL` and are never collected.
 
-        Both make `pcc_gc_pin` / `unpin` / `release` no-ops at run time (each
-        starts by testing for a tagged immediate or an immortal flag and
-        returning), so emitting the call buys nothing and still costs the GC
+        Both make `pcc_gc_release` a no-op at run time (it starts by testing
+        for a tagged immediate or an immortal flag and returning), so
+        emitting the call buys nothing and still costs the GC
         managed-pointer probe that profiles as a top leaf of a stage2 build.
         Measured over 60 real modules, singleton-sourced barriers are ~3800 of
         79766 barrier arguments.
@@ -239,23 +239,6 @@ class OwnershipLoweringMixin:
         self.builder.call(self.runtime["pcc_py_gc_minor_graph_unlock"], [])
         self.builder.branch(done)
         self.builder.position_at_end(done)
-
-    def _gc_pin(self, obj: ir.Value) -> None:
-        # pcc_gc_pin returns immediately for a tagged immediate, so emitting
-        # the call for one is pure overhead — and it also spares the GC
-        # managed-pointer table the lookup, which profiles as the hottest
-        # leaf of a `pcc1 -> pcc2` build.
-        if self._value_is_never_gc_object(obj):
-            return
-        self.builder.call(self.runtime["pcc_gc_pin"], [obj])
-
-    def _gc_unpin(self, obj: ir.Value) -> None:
-        if self._value_is_never_gc_object(obj):
-            return
-        self.builder.call(
-            self.runtime["pcc_gc_unpin"],
-            [self._value_available_at_insertion_point(obj)],
-        )
 
     def _note_global_backed_value(self, value: ir.Value, source) -> None:
         """Record that ``value`` was loaded from module-level ``source``.
@@ -1738,14 +1721,6 @@ class OwnershipLoweringMixin:
                         )],
                     )
                     continue
-                pinned = self.builder.load(
-                    alloca,
-                    name=self._fresh("gc.root.cleanup.unpin"),
-                )
-                self.builder.call(
-                    self.runtime["pcc_gc_unpin"],
-                    [self._value_available_at_insertion_point(pinned)],
-                )
                 self.builder.call(
                     self.runtime["pcc_gc_store_root"],
                     [

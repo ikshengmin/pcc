@@ -426,13 +426,6 @@ class ReturnLoweringMixin:
                         [self._as_gc_ptr(slot, name=self._fresh("gc.root.cleanup.ptr"))],
                     )
                 else:
-                    pinned = self.builder.load(
-                        slot, name=self._fresh("gc.root.cleanup.unpin"),
-                    )
-                    self.builder.call(
-                        self.runtime["pcc_gc_unpin"],
-                        [self._value_available_at_insertion_point(pinned)],
-                    )
                     self.builder.call(
                         self.runtime["pcc_gc_store_root"],
                         [self._as_gc_ptr(slot, name=self._fresh("gc.root.cleanup.ptr")),
@@ -860,7 +853,6 @@ class ReturnLoweringMixin:
             flags = self.builder.load(self.builder.bitcast(address, ir.IntType(32).as_pointer()))
             prior_bits = self.builder.and_(flags, ir.Constant(ir.IntType(32), PY_FLAG_GC_PINNED))
             prior_value = self.builder.zext(prior_bits, ir.IntType(64))
-            self._gc_pin(value)
             if pin_locked is not None:
                 self._emit_root_pin_unlock(pin_locked)
             previous = self.builder._block
@@ -1051,12 +1043,6 @@ class ReturnLoweringMixin:
             # would silently turn a bignum add/shift into wrapping machine IR.
             exact_object = self._emit_exact_int_operand_object(stmt.value)
             exact_owned = self._pcc_pointer_source_is_owned(stmt.value)
-            exact_pinned = (
-                isinstance(exact_object.type, ir.PointerType)
-                and exact_object not in self._cpy_values
-            )
-            if exact_pinned:
-                self._gc_pin(exact_object)
             value = marshal.marshal_from_object(
                 self.builder,
                 self.module,
@@ -1064,8 +1050,6 @@ class ReturnLoweringMixin:
                 exact_object,
                 self.current_func_def.return_ty,
             )
-            if exact_pinned:
-                self._gc_unpin(exact_object)
             if exact_owned:
                 self._gc_release(
                     exact_object,
