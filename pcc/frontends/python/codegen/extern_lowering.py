@@ -4,7 +4,7 @@ from __future__ import annotations
 from pcc.ir.compat import ir
 
 from pcc.frontends.python.py_ast import Assign, BoolLit, Call, DynType, IntType, Name, RawPointerType, StrLit, TupleExpr
-from pcc.runtime.py.py_abi_constants import PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_GC_PINNED, PY_TYPE_STR
+from pcc.runtime.py.py_abi_constants import PY_TYPE_STR
 
 
 _VOID = ir.VoidType()
@@ -290,39 +290,10 @@ class ExternScaffoldMixin:
             self._note_owned_object_value(result)
         return result
 
-    def _extern_prior_pin(self, value: ir.Value) -> ir.Value:
-        """Read a managed object's pin lease without dereferencing immediates."""
-        bits = self.builder.ptrtoint(value, _I64)
-        tagged = self.builder.icmp_unsigned(
-            "!=", self.builder.and_(bits, ir.Constant(_I64, 1)), ir.Constant(_I64, 0)
-        )
-        nonnull = self.builder.icmp_unsigned("!=", value, ir.Constant(_CSTR, None))
-        managed = self.builder.and_(nonnull, self.builder.not_(tagged))
-        header = self.current_function.append_basic_block(self._fresh("extern.pin.header"))
-        ready = self.current_function.append_basic_block(self._fresh("extern.pin.ready"))
-        empty = self.builder._block
-        self.builder.cbranch(managed, header, ready)
-        self.builder.position_at_end(header)
-        byte_pointer = self.builder.bitcast(value, _CSTR, name=self._fresh("extern.pin.bytes"))
-        address = self.builder.gep(byte_pointer, [ir.Constant(_I64, PYOBJECTHEADER_FLAGS_OFFSET)])
-        flags = self.builder.load(self.builder.bitcast(address, _I32.as_pointer()))
-        previous = self.builder.zext(
-            self.builder.and_(flags, ir.Constant(_I32, PY_FLAG_GC_PINNED)), _I64
-        )
-        header_exit = self.builder._block
-        self.builder.branch(ready)
-        self.builder.position_at_end(ready)
-        prior = self.builder.phi(_I64, name=self._fresh("extern.pin.prior"))
-        prior.add_incoming(ir.Constant(_I64, 0), empty)
-        prior.add_incoming(previous, header_exit)
-        return prior
-
     def _extern_enter_root(self, value, owned: bool, label: str):
-        # Save the prior state before acquiring the temporary lease. Aliased
-        # arguments acquire in source order and release in reverse order.
-        prior = self._extern_prior_pin(value)
+        # Aliased arguments enter in source order and leave in reverse order.
         slot = self._enter_container_temp_root(value, self._fresh(label))
-        return (slot, owned, prior)
+        return (slot, owned)
 
     def _extern_load_root(self, root):
         return self.builder.call(
@@ -333,7 +304,7 @@ class ExternScaffoldMixin:
 
     def _extern_take_root(self, root):
         """Consume a source owner, then transfer the root's retained owner."""
-        slot, owned, prior = root
+        slot, owned = root
         if owned:
             # store_root retained a distinct reference. Release the expression
             # (or c_obj result) owner while that root still protects the object;
@@ -342,18 +313,18 @@ class ExternScaffoldMixin:
         if not (self.current_func_def is not None
                 and getattr(self, "_runtime_threads_enabled", False)):
             self._emit_gc_frame_leave_lifo_for_slot(slot)
-        # Unlike container-root cleanup, this no-park handoff restores the
-        # external pin state and clears the slot without a relocation window.
+        # Unlike container-root cleanup, this no-park handoff clears the slot
+        # and transfers its owner; the one collector pins nothing to restore.
         return self.builder.call(
-            self.runtime["pcc_gc_take_pinned_slot"],
-            [self._as_gc_ptr(slot), prior],
+            self.runtime["pcc_gc_take_slot"],
+            [self._as_gc_ptr(slot)],
             name=self._fresh("extern.argument.take"),
         )
 
     def _extern_release_roots(self, roots):
         for root in reversed(roots):
             value = self._extern_take_root(root)
-            # take_pinned_slot transfers rather than decrefs the root owner.
+            # take_slot transfers rather than decrefs the root owner.
             # Operand cleanup consumes it even when the source was borrowed.
             self._gc_release(value, known_object=True)
 
@@ -506,14 +477,6 @@ class ExternScaffoldMixin:
                                    name="" if isinstance(ret_ty, ir.VoidType) else self._fresh("extern.result"))
         if restype == "c_obj":
             result_root = self._extern_enter_root(result, True, "extern.result.root")
-            prior = result_root[2]
-            # If the result aliases an operand, discard this call's temporary
-            # leases from the restored state. Earliest acquisition wins.
-            for root in reversed(roots):
-                alias = self.builder.icmp_unsigned("==", result, self._extern_load_root(root))
-                prior = self.builder.select(alias, root[2], prior,
-                                             name=self._fresh("extern.result.alias.prior"))
-            result_root = (result_root[0], True, prior)
             release_failed = self._extern_release_foreign_leases(tuple(leases))
             self._extern_check_lease_cleanup(release_failed, tuple(roots) + (result_root,))
             self._extern_release_roots(tuple(roots))

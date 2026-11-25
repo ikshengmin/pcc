@@ -117,7 +117,7 @@ def _assert_independent_extern_result(text, symbol, argument_count):
     assert [origins[value] for value in args(invoke) if value in origins] == operands
 
     def consumes(ins):
-        return called(ins, "pcc_gc_take_pinned_slot") and slot(args(ins)[0]) == output
+        return called(ins, "pcc_gc_take_slot") and slot(args(ins)[0]) == output
 
     for path in _paths_to_consumer(roots, block, index + 2, consumes):
         retired = False
@@ -138,7 +138,7 @@ def _assert_independent_extern_result(text, symbol, argument_count):
             (output, publications[0].data[0]),
             *[(slot(args(ins)[0]), ins.data[0]) for ins in reversed(inputs)],
         ]
-        takes = [ins for ins in path if called(ins, "pcc_gc_take_pinned_slot")]
+        takes = [ins for ins in path if called(ins, "pcc_gc_take_slot")]
         assert [slot(args(ins)[0]) for ins in takes] == list(reversed(operands)) + [output]
         reloads = [position for position, ins in enumerate(path) if ins.kind == "load"
                    and ins.data[0].startswith("extern.result.current") and slot(ins.data[3]) == output]
@@ -172,8 +172,9 @@ def probe(left: str, make, collect) -> int:
         copies = [copy for copy in root_copy_calls(body) if copy.destination == slots[0]]
         assert len(copies) == 1 and copies[0].source.startswith("%" + name + ".addr.")
     assert "extern.argument.cleanup" in body
-    assert "extern.pin.prior" in body
-    assert "@pcc_gc_take_pinned_slot(" in body
+    # One collector: no prior pin is read before the take (item 2 (d)).
+    assert "extern.pin.prior" not in body
+    assert "@pcc_gc_take_slot(" in body
     assert "@pcc_gc_store_root(" in body[:min(callbacks)]
 
 
@@ -268,7 +269,7 @@ def probe(value: str) -> int:
     assert "extern.argument.cleanup" in body
     assert body.index("@user_string_args_fail(") < body.index("@py_str_utf8(")
     cleanups = re.findall(r"(?ms)^extern.argument.cleanup[^:]*:\n(.*?)(?=^[\w.]+:|\Z)", body)
-    assert any(part.count("@pcc_gc_take_pinned_slot(") == 2 for part in cleanups)
+    assert any(part.count("@pcc_gc_take_slot(") == 2 for part in cleanups)
 
 
 _NATIVE_SOURCE = '''from pcc import i64
@@ -418,7 +419,7 @@ def test_c_string_native_regression_shape_compiles_to_verified_ir(tmp_path):
     text = output.read_text()
     verify_ir_text(text)
     assert "@test_cstr_callback_read(" in text
-    assert "@pcc_gc_take_pinned_slot(" in text
+    assert "@pcc_gc_take_slot(" in text
 
 
 @pytest.mark.integration
@@ -462,7 +463,7 @@ class _PinModel:
         self._extern_release_roots = ExternScaffoldMixin._extern_release_roots.__get__(self)
         self.current_func_def = None
         self.runtime = {name: name for name in (
-            "pcc_gc_load_ptr", "pcc_gc_take_pinned_slot",
+            "pcc_gc_load_ptr", "pcc_gc_take_slot",
             "pcc_py_gc_minor_graph_lock", "pcc_py_gc_minor_graph_unlock")}
         self.builder = self
         self.slots = {}
@@ -485,32 +486,29 @@ class _PinModel:
     def call(self, function, args, name=None):
         if function == "pcc_gc_load_ptr":
             return self.slots[args[1]]
-        if function == "pcc_gc_take_pinned_slot":
-            slot, prior = args
+        if function == "pcc_gc_take_slot":
+            # One collector: transfer the owner; no pin state to restore.
+            slot, = args
             value = self.slots[slot]
             self.slots[slot] = None
-            if value is not None and prior:
-                value["pinned"] = True
             self.events.append(("take", slot))
             return value
         raise AssertionError("unexpected runtime call " + function)
 
     def acquire(self, slot, value, owned=False):
-        prior = 64 if value["pinned"] else 0
         value["refs"] += 1  # pcc_gc_store_root retains its own reference
         self.slots[slot] = value
-        return (slot, owned, prior)
+        return (slot, owned)
 
 
 @pytest.mark.parametrize("initial_pin", [False, True])
-def test_extern_root_cleanup_restores_alias_pin_flag(initial_pin):
+def test_extern_root_cleanup_leaves_alias_pin_flag_alone(initial_pin):
     model = _PinModel()
     obj = {"name": "object", "pinned": initial_pin, "refs": 2}
     first = model.acquire("first", obj)
     second = model.acquire("second", obj, owned=True)
-    # A nested operand clears the header flag but balances its own metric.
-    obj["pinned"] = False
     model._extern_release_roots((first, second))
+    # One collector: cleanup neither reads nor restores a pin (item 2 (d)).
     assert obj["pinned"] is initial_pin
     assert obj["refs"] == 1  # caller's borrowed owner survives; temporary is consumed
     assert model.slots == {"first": None, "second": None}
@@ -540,8 +538,9 @@ def probe(value: str, later) -> int:
     body = _body(text, "probe")
     assert "extern.argument.root" in body
     assert "@pcc_gc_frame_enter(" in body
-    assert "@pcc_gc_take_pinned_slot(" in body
-    assert "extern.pin.prior" in body
+    assert "@pcc_gc_take_slot(" in body
+    # One collector: no prior pin is read (item 2 (d)).
+    assert "extern.pin.prior" not in body
 
 
 def test_c_string_native_callees_emit_owned_object():
@@ -554,22 +553,15 @@ def test_c_string_native_callees_emit_owned_object():
 
 
 @pytest.mark.parametrize("value", ['"hello"', '1.5'])
-def test_extern_pin_header_offset_is_bytes_for_typed_constants(tmp_path, value):
+def test_extern_typed_constants_read_no_pin_header(tmp_path, value):
     body = _body(_compile(tmp_path, '''
 def probe() -> int:
     return pair(''' + value + ''', "other", 0)
 '''), "probe")
-    headers = re.findall(r"(?ms)^extern.pin.header[^:]*:\n(.*?)(?=^[\w.]+:|\Z)", body)
-    if value.startswith('"'):
-        # A str literal is a static immortal object: nothing is pinned, so
-        # no header is read. The float constant still reaches the header.
-        assert headers == []
-        assert not re.search(r"@pcc_gc_pin\(ptr @\.pystr\.obj\.", body)
-        return
-    assert headers
-    for header in headers:
-        assert re.search(r"getelementptr i8, ptr [^\n]+, i64 12", header), header
-        assert "getelementptr {" not in header
+    # One collector: no extern argument reads its header's pin bit, for a
+    # static str literal or a heap float (item 2 (d)).
+    assert not re.search(r"(?m)^extern\.pin\.header", body)
+    assert not re.search(r"\bcall\b[^\n]*@pcc_gc_pin\(", body)
 
 
 @pytest.mark.parametrize("owned", [False, True])
@@ -591,7 +583,7 @@ def test_extern_managed_result_transfers_exactly_one_reference(alias):
     result["refs"] += 1  # Foreign c_obj return is an owned reference.
     result_root = model.acquire("result", result, owned=True)
     if alias:
-        result_root = (result_root[0], True, argument_root[2])
+        result_root = (result_root[0], True)
     model._extern_release_roots((argument_root,))
     transferred = model._extern_take_root(result_root)
     assert transferred is result
@@ -634,7 +626,7 @@ def probe(left: str, right: str) -> int:
     assert "extern.lease.overflow" in body
     assert "extern.lease.cleanup.error" in body
     assert "@py_err_occurred(" in body[foreign:]
-    assert "@pcc_gc_take_pinned_slot(" in body[foreign:]
+    assert "@pcc_gc_take_slot(" in body[foreign:]
 
 
 def test_foreign_lease_helpers_match_native_host_method_signatures():

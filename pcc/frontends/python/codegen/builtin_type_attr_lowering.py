@@ -622,7 +622,7 @@ class BuiltinTypeAttrLoweringMixin:
             )
             self._emit_post_call_err_check(str_expr.span)
             if as_bytearray:
-                encoded_root = self._encode_capture_result_root(result, roots, label + ".encoded")
+                encoded_root = self._encode_capture_result_root(result, label + ".encoded")
                 roots.append(encoded_root)
                 leases = self._encode_acquire_root_leases(
                     roots, target, str_expr.span, tuple(leases), 1,
@@ -632,7 +632,7 @@ class BuiltinTypeAttrLoweringMixin:
                     name=self._fresh(label + ".bytearray"),
                 )
                 self._emit_post_call_err_check(str_expr.span)
-            result_root = self._encode_capture_result_root(result, roots, label + ".result")
+            result_root = self._encode_capture_result_root(result, label + ".result")
         finally:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = previous_cpy

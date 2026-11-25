@@ -553,7 +553,7 @@ def test_owned_namespace_return_transfers_its_result(tmp_path, monkeypatch):
                 'from provider import value\ndef probe():\n    return value\n')
     probe = body(text, 'user_consumer_probe')
     _assert_immediate_publication(probe, 'py_module_attr_get')
-    assert '@pcc_gc_take_pinned_slot(' in probe
+    assert '@pcc_gc_take_slot(' in probe
     assert 'return.retain' not in probe, 'NEW namespace result was retained as a borrowed global'
 
 
@@ -606,7 +606,7 @@ def test_imported_integer_attribute_owns_receiver_and_result(tmp_path, monkeypat
     _assert_immediate_publication(probe, 'py_module_attr_get')
     _assert_immediate_publication(probe, 'py_obj_getattr')
     _assert_rooted_receiver(probe, 'py_obj_getattr')
-    assert '@pcc_gc_take_pinned_slot(' in probe
+    assert '@pcc_gc_take_slot(' in probe
     assert not re.search(r'call [^\n]*@py_int_(?:to_i64_lane|value_i64)\(', probe)
 
 

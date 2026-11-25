@@ -109,12 +109,12 @@ def _assert_yield_handoff_contract(module, blocks, function_name):
                 if ins.kind == "call" and (ins.data[0] or "").startswith("gen.yield.owner")]
     assert handoffs, "resume needs a yielded-owner handoff"
     for block, index, take in handoffs:
-        assert (roots.called(take, "pcc_gc_take_pinned_slot")
+        # One collector: the handoff is pcc_gc_take_slot(slot) (item 2 (d)).
+        assert (roots.called(take, "pcc_gc_take_slot")
                 and not take.data[3] and not take.data[6]
-                and take.data[5] in (0, 2)
-                and take.data[1].is_ptr and len(take.data[4]) == 2
-                and take.data[4][0][0].is_ptr
-                and take.data[4][1][0].describe() == "i64"), "invalid yielded take ABI"
+                and take.data[5] in (0, 1)
+                and take.data[1].is_ptr and len(take.data[4]) == 1
+                and take.data[4][0][0].is_ptr), "invalid yielded take ABI"
         taken = roots.slot(roots.args(take)[0])
         assert taken not in borrowed, "borrowed cells must not alias the yielded owner"
         assert taken in await_cells, "yield must take the published await owner"
@@ -202,7 +202,7 @@ target triple = "x86_64-unknown-linux-gnu"
 declare void @pcc_gc_frame_enter_local(ptr, ptr)
 declare void @pcc_gc_frame_leave_local(ptr)
 declare ptr @py_await_step(ptr, ptr, ptr)
-declare ptr @pcc_gc_take_pinned_slot(ptr, i64)
+declare ptr @pcc_gc_take_slot(ptr)
 declare void @py_recursion_leave(i64)
 define ptr @resume(ptr %gen, ptr %frame) {
 entry:
@@ -237,7 +237,7 @@ handoff:
   call void @pcc_gc_frame_leave_local(ptr %operands)
   call void @pcc_gc_frame_leave_local(ptr %borrowed)
   call void @py_recursion_leave(i64 1)
-  %gen.yield.owner = call ptr @pcc_gc_take_pinned_slot(ptr %await.owner, i64 0)
+  %gen.yield.owner = call ptr @pcc_gc_take_slot(ptr %await.owner)
   store ptr null, ptr %clear.gen
   store ptr null, ptr %clear.frame
   ret ptr %gen.yield.owner
@@ -292,7 +292,7 @@ def test_yield_handoff_accepts_only_physical_borrowed_cell_clears():
         "clear each borrowed ABI cell exactly once", id="duplicate-clear",
     ),
     pytest.param(
-        "ptr %await.owner, i64 0)", "ptr %await.owner, i32 0)",
+        "@pcc_gc_take_slot(ptr %await.owner)", "@pcc_gc_take_slot(ptr %await.owner, i64 0)",
         "invalid yielded take ABI", id="wrong-take-abi",
     ),
     pytest.param(

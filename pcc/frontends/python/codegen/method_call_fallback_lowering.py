@@ -967,14 +967,8 @@ class MethodCallFallbackLoweringMixin:
             )
             self._emit_post_call_err_check(expr.span)
             result_root = self._extern_enter_root(result, True, "to_bytes.result.root")
-            # Root teardown may call finalizers and move the result. The
-            # shared take helper consumes the source owner exactly once,
-            # then transfers the root owner after restoring prior pin state.
-            prior = result_root[2]
-            for root in reversed(roots):
-                alias = self.builder.icmp_unsigned("==", self._extern_load_root(result_root), self._extern_load_root(root))
-                prior = self.builder.select(alias, root[2], prior)
-            result_root = (result_root[0], True, prior)
+            # Root teardown may call finalizers. The shared take helper consumes
+            # the source owner exactly once, then transfers the root owner.
         finally:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = previous_cpy

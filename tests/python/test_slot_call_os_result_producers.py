@@ -117,9 +117,10 @@ def probe():
     aliases = [result_slot] + re.findall(
         r"(%[^ ]+) = bitcast ptr " + re.escape(result_slot) + r" to ptr", after,
     )
-    # The take reloads the root and pins its current object before handing it off.
-    assert any("@pcc_gc_pin_slot_for_take(ptr " + alias + "," in after for alias in aliases)
-    assert any("@pcc_gc_take_pinned_slot(ptr " + alias + "," in after for alias in aliases)
+    # The take hands the root's current object off.
+    # One collector: the result is taken without a pin (item 2 (d)).
+    assert "@pcc_gc_pin_slot_for_take(" not in after
+    assert any("@pcc_gc_take_slot(ptr " + alias + ")" in after for alias in aliases)
 
 
 @pytest.mark.parametrize("path", ("''", "path"))

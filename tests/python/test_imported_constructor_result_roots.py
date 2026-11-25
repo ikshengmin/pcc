@@ -85,7 +85,7 @@ def test_constructor_owner_is_published_before_initializer(tmp_path, monkeypatch
     publication = body.index("store ptr " + allocation.group(1) + ", ptr ", allocation.end())
     initializer = body.index("@user_result_provider_Box___init__(")
     assert publication < initializer
-    assert "@pcc_gc_take_pinned_slot(" in body[initializer:]
+    assert "@pcc_gc_take_slot(" in body[initializer:]
 
 
 @pytest.mark.parametrize("class_name,arguments", [("Box", '"item", 7'), ("Fields", 'first(), second()')])

@@ -67,7 +67,7 @@ def test_sum_publication_and_caller_result_sink(expression, site):
     if site in ('argument', 'default', 'later-error'):
         assert 'sum.result.operand' not in function
     else:
-        assert '@pcc_gc_take_pinned_slot(' in function
+        assert '@pcc_gc_take_slot(' in function
     assert '@py_cpy_' not in function
 
 

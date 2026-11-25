@@ -169,23 +169,16 @@ class StringMethodLoweringMixin:
         self._cpy_operand_cleanup_block = cleanup
         return acquired_leases
 
-    def _encode_capture_result_root(self, result, roots, label):
-        result_root = self._extern_enter_root(result, True, label)
-        # Preserve the earliest caller pin lease if a runtime result aliases an
-        # operand; never let our temporary acquisitions become the prior state.
-        prior = result_root[2]
-        for root in reversed(roots):
-            alias = self.builder.icmp_unsigned(
-                "==", self._extern_load_root(result_root), self._extern_load_root(root)
-            )
-            prior = self.builder.select(alias, root[2], prior)
-        return (result_root[0], True, prior)
+    def _encode_capture_result_root(self, result, label):
+        # The one collector pins nothing, so an aliased result needs no prior
+        # pin state from its operands (item 2 (d)).
+        return self._extern_enter_root(result, True, label)
 
     def _emit_str_encode_call(self, expr: Call, recv: ir.Value):
         # Source-order evaluation and conversion are separate. Reloadable roots
-        # retain borrowed values and preserve pre-existing pin leases when an
-        # argument runs user code, mutates the receiver binding, or aliases an
-        # earlier argument. The shared root helper owns exactly one transfer.
+        # retain borrowed values when an argument runs user code, mutates the
+        # receiver binding, or aliases an earlier argument. The shared root
+        # helper owns exactly one transfer.
         receiver = self._extern_enter_root(
             recv, self._owned_release_needed(recv, expr.func.obj), "encode.receiver"
         )
@@ -251,7 +244,7 @@ class StringMethodLoweringMixin:
                 name=self._fresh("str.encode"),
             )
             self._emit_post_call_err_check(expr.span)
-            result_root = self._encode_capture_result_root(result, roots, "encode.result")
+            result_root = self._encode_capture_result_root(result, "encode.result")
         finally:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = previous_cpy

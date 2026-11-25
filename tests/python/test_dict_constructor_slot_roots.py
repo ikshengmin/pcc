@@ -48,7 +48,7 @@ def test_dict_producer_contexts_publish_immediately(expression, site):
         assert 'dict.constructor.result.operand' not in function
         assert 'dict.fromkeys.result.operand' not in function
     else:
-        assert '@pcc_gc_take_pinned_slot(' in function
+        assert '@pcc_gc_take_slot(' in function
 
 
 @pytest.mark.parametrize('expression', EXPRESSIONS)

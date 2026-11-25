@@ -469,6 +469,7 @@ int64_t pcc_gc_try_init_ptr_locked(PyObject **destination, PyObject **source);
  * NULL slot/value and tagged immediates are accepted without pin-metric changes.
  * The caller must consume/root/pin the returned owner before it can park. */
 PyObject *pcc_gc_take_pinned_slot(PyObject **slot, int64_t prior_pin);
+PyObject *pcc_gc_take_slot(PyObject **slot);
 
 void      pcc_gc_immortalize(PyObject *o);
 int64_t   py_obj_id(PyObject *o);

@@ -985,6 +985,20 @@ def pcc_gc_unpin(o) -> None:
 
 
 
+@c_abi_export("pcc_gc_take_slot")
+def pcc_gc_take_slot(slot):
+    # The one collector's take: the caller owns one reference stored in this
+    # stable slot and has finished every operation that can park, including
+    # frame unregistration. Transfer it out without a callback, park or
+    # refcount change. No object moves and none is pinned, so there is no
+    # pin to drop or prior pin to restore.
+    if ptr_is_null(slot) != 0:
+        return null()
+    value = load_ptr(slot, 0)
+    store_ptr(slot, 0, null())
+    return value
+
+
 @c_abi_export("pcc_gc_take_pinned_slot")
 def pcc_gc_take_pinned_slot(slot, prior_pin: i64):
     # The caller owns one pinned reference stored in this stable slot and has

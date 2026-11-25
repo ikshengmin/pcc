@@ -55,7 +55,7 @@ def test_zip_publication_contexts(expression, site):
     if site in ('argument', 'default', 'later-error'):
         assert 'zip.result.operand' not in function
     else:
-        assert '@pcc_gc_take_pinned_slot(' in function
+        assert '@pcc_gc_take_slot(' in function
     if 'strict=True' in expression:
         assert 'zip.strict.bad' in function
 

@@ -102,7 +102,7 @@ def test_republication_after_helper_requires_another_disposal(property_body):
         _owners_and_cfg(changed, ACCESSORS)
 
 
-@pytest.mark.parametrize('producer', ('pcc_gc_take_pinned_slot', 'py_property_new'))
+@pytest.mark.parametrize('producer', ('pcc_gc_take_slot', 'py_property_new'))
 def test_owned_result_must_be_published_before_another_call(property_body, producer):
     call = re.search(
         r'^  (%[-\w.$]+) = call [^\n]*@' + producer + r'\([^\n]*\)\n'

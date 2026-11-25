@@ -53,7 +53,7 @@ def test_owned_capture_root_handoffs_consume_each_source_once():
         current_func_def = object()
         _runtime_threads_enabled = True
         builder = Builder()
-        runtime = {"pcc_gc_take_pinned_slot": object()}
+        runtime = {"pcc_gc_take_slot": object()}
 
         def _extern_load_root(self, _root):
             return value
@@ -68,7 +68,7 @@ def test_owned_capture_root_handoffs_consume_each_source_once():
         def _fresh(self, label):
             return label
 
-    assert ExternScaffoldMixin._extern_take_root(Host(), ([value], True, 0)) is value
+    assert ExternScaffoldMixin._extern_take_root(Host(), ([value], True)) is value
     assert value.references == 1
 
 

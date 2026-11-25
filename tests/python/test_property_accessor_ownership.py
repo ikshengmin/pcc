@@ -75,7 +75,7 @@ def _owners_and_cfg(body, expected):
     # A terminal callable handoff must immediately publish to its preregistered
     # caller root, before another accessor may allocate signature/metadata.
     for stage, role in enumerate(expected):
-        pattern = (r"(%[-\w.]+) = call [^\n]*@pcc_gc_take_pinned_slot\([^\n]*\)\n"
+        pattern = (r"(%[-\w.]+) = call [^\n]*@pcc_gc_take_slot\([^\n]*\)\n"
                    r"  store ptr \1, ptr " + re.escape(roots[role][stage]) + r"(?:,|\n)")
         assert re.search(pattern, body), role
     descriptors = list(re.finditer(r"(%[-\w.]+) = call [^\n]*@py_property_new\([^\n]*\)\n", body))

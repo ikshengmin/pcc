@@ -657,25 +657,19 @@ class TypeAbiLoweringMixin:
         self._emit_owned_local_cleanup(skip_payload=output)
         roots = self._valueclass_payload_owned_roots(output)
         paths = self._valueclass_payload_pointer_field_paths(ty)
-        pins = []
-        pin_locked = self._emit_root_pin_lock()
-        for index, root in enumerate(roots):
-            current = self.builder.call(self.runtime["pcc_gc_load_ptr"], [ir.Constant(_CSTR, None), self._as_gc_ptr(root)])
-            prior = self._extern_prior_pin(current)
-            pins.append((root, prior, paths[index]))
-        self._emit_root_pin_unlock(pin_locked)
         for root in reversed(roots):
             self._emit_gc_frame_leave_for_slot(root)
         self.builder.store(self.builder.load(output), handoff)
         first_handoff = None
-        # Reverse the pin nesting too: two leaves may alias the same object.
-        # Each take restores the pin state observed before its matching pin.
-        # No operation after the first take can park or invoke Python.
-        for root, prior, path in reversed(pins):
+        # Take the leaves in reverse order; two may alias the same object.
+        # No operation after the first take can park or invoke Python. The
+        # one collector moves and pins nothing, so no prior pin is read
+        # (item 2 (d)).
+        for root, path in reversed(list(zip(roots, paths))):
             _slot, flag, _lifo = self._slot_call_root_record(root)
             if flag is not None:
                 self.builder.store(ir.Constant(_I1, 0), flag)
-            current = self.builder.call(self.runtime["pcc_gc_take_pinned_slot"], [self._as_gc_ptr(root), prior],
+            current = self.builder.call(self.runtime["pcc_gc_take_slot"], [self._as_gc_ptr(root)],
                                         name=self._fresh("value.return.take"))
             if first_handoff is None:
                 first_handoff = self.builder._block._instrs[-1]

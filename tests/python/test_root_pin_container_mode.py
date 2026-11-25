@@ -8,9 +8,9 @@ return's payload roots and an extern argument's root under it. In container
 mode (every collector without the provenance probe) every collector scans
 roots with the world stopped, an object a running thread names never moves
 and the count-free store barrier is the unlocked one, so neither needs the
-lock: pcc_gc_note_root_slot_barrier and the compiled root pin
-(OwnershipLoweringMixin._emit_root_pin_lock/_unlock) read the mode and take
-the lock only without it.
+lock: pcc_gc_note_root_slot_barrier reads the mode and takes the lock only
+without it. Compiled code no longer pins a root before its take (item 2 (d)),
+so it has no such lock at all.
 """
 from __future__ import annotations
 
@@ -89,7 +89,11 @@ def _blocks(body):
     return blocks
 
 
-def test_compiled_root_pins_lock_only_outside_container_mode(tmp_path):
+def test_compiled_root_handoffs_take_no_graph_lock(tmp_path):
+    """One collector (item 2 (d)): compiled code no longer pins a heap
+    return, a yielded value, a valueclass payload root or an extern argument
+    root before its take, so it takes no graph lock and reads no container
+    mode for one."""
     source = tmp_path / "root_pins.py"
     source.write_text(SOURCE, encoding="utf-8")
     output = tmp_path / "root_pins.ll"
@@ -98,18 +102,9 @@ def test_compiled_root_pins_lock_only_outside_container_mode(tmp_path):
     text = output.read_text(encoding="utf-8")
     bodies = {m.group(1): m.group(0)
               for m in re.finditer(r"^define [^\n]*@(user_root_pins_\w+)\(.*?^}", text, re.M | re.S)}
-    checked = 0
+    # join's heap result of a dynamic binary operation still hands off.
+    assert "user_root_pins_join" in bodies, sorted(bodies)
+    assert "@pcc_gc_take_slot(" in bodies["user_root_pins_join"]
     for name, body in bodies.items():
-        blocks = _blocks(body)
-        for label, lines in blocks.items():
-            if not any("@pcc_py_gc_minor_graph_lock(" in line for line in lines):
-                continue
-            assert label.startswith("gc.root.pin.lock"), (name, label)
-            entries = [other for other, other_lines in blocks.items()
-                       if any(l.startswith("br ") and "%" + label in l for l in other_lines)]
-            assert entries, (name, label)
-            for entry in entries:
-                assert any("@pcc_gc_list_container_mode" in l for l in blocks[entry]), (name, entry)
-            checked += 1
-    # join's heap result of a dynamic binary operation pins its root.
-    assert checked >= 1 and "user_root_pins_join" in bodies, (checked, sorted(bodies))
+        assert "gc.root.pin.lock" not in body, name
+        assert "@pcc_gc_list_container_mode" not in body, name

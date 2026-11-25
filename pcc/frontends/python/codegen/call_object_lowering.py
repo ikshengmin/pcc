@@ -1637,15 +1637,15 @@ class CallObjectLoweringMixin:
             self._cpy_operand_cleanup_block = saved_cpy
         return output
 
-    def _take_slot_call_root(self, slot, keep_pinned=False, source_expr=None):
+    def _take_slot_call_root(self, slot, source_expr=None):
         """Finish every parking operation before returning the root's owner.
 
-        A tagged int or NULL is no managed object: it needs no graph lock,
-        read barrier or pin, so that word skips them. Both words and objects
-        then leave the root through the same pinned transfer, which keeps the
-        result's root provenance single for precise stack-map planning.
+        Words and objects leave the root through the same transfer,
+        pcc_gc_take_slot, which keeps the result's root provenance single for
+        precise stack-map planning. The one collector moves and pins nothing,
+        so the transfer reads no prior pin (item 2 (d)).
         """
-        if source_expr is not None and not keep_pinned:
+        if source_expr is not None:
             sinks = self._slot_call_result_sinks
             for index in range(len(sinks) - 1, -1, -1):
                 expression, consumer, _published = sinks[index]
@@ -1662,42 +1662,12 @@ class CallObjectLoweringMixin:
                         return ir.Constant(_CSTR, None)
                     break
         _slot, flag, lifo = self._slot_call_root_record(slot)
-        raw = self.builder.load(slot, name=self._fresh("call.slot.take.raw"))
-        raw_bits = self.builder.ptrtoint(raw, _I64, name=self._fresh("call.slot.take.bits"))
-        tagged = self.builder.icmp_unsigned(
-            "!=", self.builder.and_(raw_bits, ir.Constant(_I64, 1)), ir.Constant(_I64, 0),
-            name=self._fresh("call.slot.take.tagged"),
-        )
-        empty = self.builder.icmp_unsigned(
-            "==", raw_bits, ir.Constant(_I64, 0), name=self._fresh("call.slot.take.empty"),
-        )
-        immediate = self.builder.or_(tagged, empty, name=self._fresh("call.slot.take.immediate"))
-        word_block = self.current_function.append_basic_block(self._fresh("call.slot.take.word"))
-        object_block = self.current_function.append_basic_block(self._fresh("call.slot.take.object"))
-        done_block = self.current_function.append_basic_block(self._fresh("call.slot.take.done"))
-        self.builder.cbranch(immediate, word_block, object_block)
-        self.builder.position_at_end(object_block)
-        # The runtime pins the current object inside a graph transaction on a
-        # moving collector; GC0 never relocates and pins without that lock.
-        prior = self.builder.call(
-            self.runtime["pcc_gc_pin_slot_for_take"],
-            [self._as_gc_ptr(slot), ir.Constant(_I64, 1 if keep_pinned else 0)],
-            name=self._fresh("call.slot.take.prior"),
-        )
-        object_end = self.builder.block
-        self.builder.branch(done_block)
-        self.builder.position_at_end(word_block)
-        self.builder.branch(done_block)
-        self.builder.position_at_end(done_block)
-        prior_pin = self.builder.phi(_I64, name=self._fresh("call.slot.take.prior"))
-        prior_pin.add_incoming(prior, object_end)
-        prior_pin.add_incoming(ir.Constant(_I64, 64) if keep_pinned else ir.Constant(_I64, 0), word_block)
         if lifo:
             self._emit_gc_frame_leave_lifo_for_slot(slot)
         if flag is not None:
             self.builder.store(ir.Constant(_I1, 0), flag)
         value = self.builder.call(
-            self.runtime["pcc_gc_take_pinned_slot"], [self._as_gc_ptr(slot), prior_pin],
+            self.runtime["pcc_gc_take_slot"], [self._as_gc_ptr(slot)],
             name=self._fresh("call.slot.take"),
         )
         self._note_owned_object_value(value)

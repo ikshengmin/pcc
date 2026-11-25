@@ -157,7 +157,7 @@ def test_closure_classinfo_owned_ir(tmp_path, monkeypatch):
     assert 'cell.bound.error' in text
     assert 'isinstance.classinfo' in text
     assert 'extern.argument.cleanup' in text
-    assert '@pcc_gc_take_pinned_slot(' in text
+    assert '@pcc_gc_take_slot(' in text
 
 
 def test_source_factory_call_is_not_admitted_by_cell_repair():

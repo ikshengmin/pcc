@@ -91,7 +91,7 @@ def test_generator_wrapper_roots_inputs_before_poll_and_reloads_them(shapes_ir):
     assert "gen.arguments.borrowed" in body
     assert re.search(r"%gen.argument.current[^\n]* = load ptr, ptr %gen.argument.slot", body)
     assert body.count("@pcc_gc_frame_enter_lifo") == body.count("@pcc_gc_frame_leave_lifo")
-    assert "@pcc_gc_take_pinned_slot" in body
+    assert "@pcc_gc_take_slot" in body
 
 
 def test_generator_resume_roots_both_owners_and_uses_root_derived_ssa(shapes_ir):

@@ -111,11 +111,6 @@ class NumericBuiltinLoweringMixin:
                 )
                 self._emit_post_call_err_check(getattr(expr, "span", None))
                 result_root = self._extern_enter_root(result, True, "int.result.root")
-                prior = result_root[2]
-                for root in reversed(roots):
-                    alias = self.builder.icmp_unsigned("==", result, self._extern_load_root(root))
-                    prior = self.builder.select(alias, root[2], prior)
-                result_root = (result_root[0], True, prior)
             finally:
                 self._try_err_block = previous
                 self._cpy_operand_cleanup_block = previous_cpy

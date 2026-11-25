@@ -36,7 +36,6 @@ from pcc.frontends.python.codegen.cpy_import_state import live_import_global_slo
 from pcc.frontends.python.codegen.str_default_cells import funcdef_defined_here
 from pcc.frontends.python.codegen.subscript_lowering import native_owned_getitem_runtime
 from pcc.frontends.python.codegen.errors import L1CodegenError
-from pcc.runtime.py.py_abi_constants import PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_GC_PINNED
 
 
 _CSTR = ir.IntType(8).as_pointer()
@@ -820,57 +819,17 @@ class ReturnLoweringMixin:
             self._return_cleanup_roots = saved_roots
             self._restore_try_err_block(saved_error)
         if not self._builder_block_is_terminated():
-            # A tagged integer or NULL result has no header to pin and
-            # nothing a collector can move: it needs neither the graph
-            # transaction nor a pin. Forwarding never changes those bits, so
-            # a plain load of this private slot decides.
-            peek = self.builder.load(slot, name=self._fresh("return.cleanup.peek"))
-            peek_bits = self.builder.ptrtoint(peek, ir.IntType(64))
-            peek_tagged = self.builder.icmp_unsigned(
-                "!=", self.builder.and_(peek_bits, ir.Constant(ir.IntType(64), 1)),
-                ir.Constant(ir.IntType(64), 0),
-            )
-            peek_nonnull = self.builder.icmp_unsigned("!=", peek, ir.Constant(peek.type, None))
-            peek_managed = self.builder.and_(peek_nonnull, self.builder.not_(peek_tagged))
-            header = self.current_function.append_basic_block(name=self._fresh("return.pin.header"))
-            ready = self.current_function.append_basic_block(name=self._fresh("return.pin.ready"))
-            empty = self.builder._block
-            self.builder.cbranch(peek_managed, header, ready)
-            self.builder.position_at_end(header)
-            pin_locked = None
-            if source_slot is not None:
-                # Reload, inspect and pin under the graph transaction. The
-                # registered owner remains live through the lock's entry poll.
-                pin_locked = self._emit_root_pin_lock()
-            value = self.builder.call(
-                self.runtime["pcc_gc_load_ptr"],
-                [ir.Constant(value.type, None), self._as_gc_ptr(slot)],
-                name=self._fresh("return.cleanup.current"),
-            )
-            # Preserve an existing pin lease. The new owned return remains
-            # pinned through every local finalizer and root unregistration.
-            address = self.builder.gep(value, [ir.Constant(ir.IntType(64), PYOBJECTHEADER_FLAGS_OFFSET)])
-            flags = self.builder.load(self.builder.bitcast(address, ir.IntType(32).as_pointer()))
-            prior_bits = self.builder.and_(flags, ir.Constant(ir.IntType(32), PY_FLAG_GC_PINNED))
-            prior_value = self.builder.zext(prior_bits, ir.IntType(64))
-            if pin_locked is not None:
-                self._emit_root_pin_unlock(pin_locked)
-            previous = self.builder._block
-            self.builder.branch(ready)
-            self.builder.position_at_end(ready)
-            prior = self.builder.phi(ir.IntType(64), name=self._fresh("return.pin.prior"))
-            prior.add_incoming(ir.Constant(ir.IntType(64), 0), empty)
-            prior.add_incoming(prior_value, previous)
             # Keeps its own exit: the handoff below must follow every frame
-            # leave (pcc_gc_take_pinned_slot's no-park contract), which a
-            # shared exit would run after it.
+            # leave (pcc_gc_take_slot's no-park contract), which a shared
+            # exit would run after it. The one collector moves and pins
+            # nothing, so no prior pin is read (item 2 (d)).
             self._emit_owned_local_cleanup(skip_name=hidden)
             result = self.builder.call(
-                self.runtime["pcc_gc_take_pinned_slot"], [self._as_gc_ptr(slot), prior],
+                self.runtime["pcc_gc_take_slot"], [self._as_gc_ptr(slot)],
                 name=self._fresh("return.cleanup.take"),
             )
             # Later-discovered frame leaves and recursion accounting must run
-            # before the no-park ownership handoff, never after its unpin.
+            # before the no-park ownership handoff, never after it.
             self._return_handoff_sites.append((self.current_function, self.builder._block, self.builder._block._instrs[-1]))
             self.builder.ret(result)
         continuation = self.builder._block

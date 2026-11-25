@@ -282,7 +282,7 @@ def emit_generator_terminal_frame_clear(host) -> None:
 
     The generator and its frame container may outlive completion. The current
     activation still owns its restored locals; release saved heap-cell owners
-    before those locals, with an updateable frame root and a temporary pin.
+    before those locals, with an updateable frame root.
     """
     ctx = host._generator_ctx_stack[-1]
     frame = host.builder.call(
@@ -290,13 +290,7 @@ def emit_generator_terminal_frame_clear(host) -> None:
         [ir.Constant(_CSTR, None), host._as_gc_ptr(ctx["frame_root"])],
         name=host._fresh("gen.terminal.frame"),
     )
-    # The private factory always supplies a managed list frame. Preserve an
-    # existing pin lease while balancing this helper's own temporary pin.
-    flags_addr = host.builder.gep(frame, [ir.Constant(_I64, 12)])
-    flags_ptr = host.builder.bitcast(flags_addr, _I32.as_pointer())
-    flags = host.builder.load(flags_ptr, name=host._fresh("gen.frame.pin.flags"))
-    prior = host.builder.and_(flags, ir.Constant(_I32, 64))
-    prior = host.builder.zext(prior, _I64)
+    # The private factory always supplies a managed list frame.
     keeper = host._enter_container_temp_root(frame, host._fresh("gen.terminal.frame.keeper"))
     none = host._emit_none_literal()
     # Later-emitted operands can extend the frame after an earlier return
@@ -364,8 +358,8 @@ def emit_generator_terminal_frame_clear(host) -> None:
     if not (host.current_func_def is not None and getattr(host, "_runtime_threads_enabled", False)):
         host._emit_gc_frame_leave_lifo_for_slot(keeper)
     owned_frame = host.builder.call(
-        host.runtime["pcc_gc_take_pinned_slot"],
-        [host._as_gc_ptr(keeper), prior],
+        host.runtime["pcc_gc_take_slot"],
+        [host._as_gc_ptr(keeper)],
         name=host._fresh("gen.terminal.frame.take"),
     )
     host._gc_release(owned_frame)
@@ -2698,8 +2692,8 @@ class GeneratorLoweringMixin:
         # No unrooted result may survive the construction-owner cleanup.
         self._emit_gc_frame_leave_lifo_for_slot(frame_slot)
         owned_frame = self.builder.call(
-            self.runtime["pcc_gc_take_pinned_slot"],
-            [frame_slot, ir.Constant(_I64, 0)],
+            self.runtime["pcc_gc_take_slot"],
+            [frame_slot],
             name=self._fresh("gen.wrapper.frame.take"),
         )
         self._gc_release(owned_frame)
@@ -3146,10 +3140,9 @@ class GeneratorLoweringMixin:
     ) -> None:
         ctx = self._generator_ctx_stack[-1]
         result_name = None
-        prior_pin = None
         if result_slot is not None:
-            # The producer published before any cleanup. Pin that registered
-            # owner while activation roots are retired, then take it only
+            # The producer published before any cleanup. Its registered owner
+            # stays rooted while activation roots are retired; take it only
             # after the final operation that can park.
             for local_name, local in self.env.items():
                 if local[0] is result_slot:
@@ -3157,10 +3150,6 @@ class GeneratorLoweringMixin:
                     break
             if result_name is None:
                 raise L1CodegenError("yield result has no registered local owner")
-            pin_locked = self._emit_root_pin_lock()
-            current = self.builder.load(result_slot)
-            prior_pin = self._extern_prior_pin(current)
-            self._emit_root_pin_unlock(pin_locked)
         worker_timing = str(
             os.environ.get("PCC_PY_FRONTEND_WORKER_TIMING", "") or ""
         ).strip().lower() in ("1", "true", "yes", "on")
@@ -3194,8 +3183,8 @@ class GeneratorLoweringMixin:
             sys.stderr.write("pcc frontend generator yield add-case done\n")
         if result_slot is not None:
             value = self.builder.call(
-                self.runtime["pcc_gc_take_pinned_slot"],
-                [self._as_gc_ptr(result_slot), prior_pin],
+                self.runtime["pcc_gc_take_slot"],
+                [self._as_gc_ptr(result_slot)],
                 name=self._fresh("gen.yield.owner"),
             )
             self._return_handoff_sites.append((

@@ -70,7 +70,7 @@ def _temporary_owner_contract(module, symbol, has_argument, nested):
             assert inner_output == argument, "nested NEW must transfer directly into the argument owner"
             _must_precede(roots, (inner[0].name, inner[1] + 1), _position(leases[0]))
 
-    takes = [row for row in _calls(roots, "pcc_gc_take_pinned_slot")
+    takes = [row for row in _calls(roots, "pcc_gc_take_slot")
              if roots.slot(roots.args(row[2])[0]) == output]
     assert len(takes) == 1
     take_point = _position(takes[0])
@@ -135,7 +135,7 @@ def _temporary_owner_contract(module, symbol, has_argument, nested):
             if output in cleared:
                 assert not output_cleared, "output owner disposed twice"
                 output_cleared = True
-            if roots.called(ins, "pcc_gc_take_pinned_slot") and roots.slot(roots.args(ins)[0]) == output:
+            if roots.called(ins, "pcc_gc_take_slot") and roots.slot(roots.args(ins)[0]) == output:
                 assert lease_released and argument_cleared and not output_cleared, (
                     "constructor output transfer must follow argument retirement without losing its owner"
                 )

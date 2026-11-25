@@ -1,10 +1,11 @@
-"""A returned tagged int or NULL takes no graph transaction or pin.
+"""A returned value takes no graph transaction or pin.
 
-The return path reloads and pins a heap result under the graph lock so a
-moving collector cannot relocate it between the reload and the pin. A
-tagged integer has no header and never moves: every call returning one
-used to serialize all worker threads on that global lock (the call
-primitive spent 84% of its time waiting for it with four workers).
+The return path once reloaded and pinned a heap result under the graph lock
+so a moving collector could not relocate it between the reload and the pin,
+and skipped that for a tagged integer: every call returning one used to
+serialize all worker threads on that global lock (the call primitive spent
+84% of its time waiting for it with four workers). The one collector never
+moves an object, so no return takes the lock or a pin (item 2 (d)).
 """
 import re
 
@@ -48,7 +49,7 @@ def _blocks(body):
     return blocks
 
 
-def test_scalar_return_skips_graph_lock_and_heap_return_keeps_it(tmp_path):
+def test_returns_take_their_result_without_a_graph_lock_or_pin(tmp_path):
     source = tmp_path / "scalar_return.py"
     source.write_text(SOURCE)
     output = tmp_path / "scalar_return.ll"
@@ -56,22 +57,12 @@ def test_scalar_return_skips_graph_lock_and_heap_return_keeps_it(tmp_path):
                    ir_scaffold_mode="on", emit_llvm_only=True)
     body = _function(output.read_text(), "user_scalar_return_add")
     blocks = _blocks(body)
-    locking = [label for label, lines in blocks.items()
-               if any("@pcc_py_gc_minor_graph_lock(" in line for line in lines)]
-    assert locking, "the heap-result branch keeps its graph transaction"
-    # The lock is taken only in a root-pin lock block, entered from the branch
-    # the peeked result selects when it is a non-NULL, untagged pointer, and
-    # only when the collector is not in container mode.
-    assert all(label.startswith("gc.root.pin.lock") for label in locking), locking
-    for lock in locking:
-        entries = [label for label, lines in blocks.items()
-                   if any(line.startswith("br ") and "%" + lock in line for line in lines)]
-        assert entries and all(label.startswith("return.pin.header") for label in entries), entries
-        for label in entries:
-            assert any("@pcc_gc_list_container_mode" in line for line in blocks[label]), blocks[label]
-    for label, lines in blocks.items():
-        branch = next((line for line in lines if line.startswith("br i1")), None)
-        if branch is None or "return.pin.header" not in branch:
-            continue
-        assert any("return.cleanup.peek" in line for line in lines), lines
-        assert re.search(r"label %return\.pin\.ready", branch), branch
+    # One collector (item 2 (d)): neither a tagged int nor a heap result is
+    # peeked, reloaded under the graph lock or pinned; the return takes its
+    # result slot through pcc_gc_take_slot.
+    assert not any("@pcc_py_gc_minor_graph_lock(" in line
+                   for lines in blocks.values() for line in lines)
+    assert not any(label.startswith(("return.pin.", "gc.root.pin.")) for label in blocks)
+    assert "return.cleanup.peek" not in body
+    assert "@pcc_gc_list_container_mode" not in body
+    assert "@pcc_gc_take_slot(" in body

@@ -96,7 +96,8 @@ def _static_constructor_contract(module, function, status, output_slot):
     require(reached, "Static constructor is unreachable")
 
     def consumes(ins):
-        return (roots.called(ins, "pcc_gc_take_pinned_slot")
+        # Code generation hands off through pcc_gc_take_slot (item 2 (d)).
+        return (roots.called(ins, "pcc_gc_take_slot")
                 and roots.slot(roots.args(ins)[0]) == output)
 
     reaching = {block.name for block in blocks if any(consumes(ins) for ins in block.instructions)}

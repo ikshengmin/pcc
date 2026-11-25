@@ -655,7 +655,6 @@ L1_CODEGEN_HOST_METHODS = (
     # ownership transfers with the existing expression/extern paths.
     "_emit_builtin_exception_and_branch",
     "_owned_release_needed",
-    "_extern_prior_pin",
     "_extern_enter_root",
     "_extern_load_root",
     "_extern_take_root",

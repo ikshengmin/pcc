@@ -252,16 +252,13 @@ class AttrStoreLoweringMixin:
                     value,
                     value_ty,
                 )
-                # Both RHS and displaced value need an owned, pinned keeper:
+                # Both RHS and displaced value need an owned keeper:
                 # namespace publication allocates, and dropping the last old
                 # reference may run a finalizer which reads both representations.
                 new_root = self._enter_container_temp_root(value_obj, "module.attr.new")
                 old_value = self.builder.load(gv, name=self._fresh("module.attr.old"))
                 old_root = self._enter_container_temp_root(old_value, "module.attr.old")
                 value_obj = self.builder.load(new_root, name=self._fresh("module.attr.new.live"))
-                old_value = self.builder.load(old_root, name=self._fresh("module.attr.old.live"))
-                same = self.builder.icmp_unsigned("==", old_value, value_obj)
-                preserve = self.builder.select(same, ir.Constant(ir.IntType(64), 64), ir.Constant(ir.IntType(64), 0))
                 self.builder.call(
                     self.runtime["pcc_gc_store_root"],
                     [self._as_gc_ptr(gv, name=self._fresh("module.attr.slot")), value_obj],
@@ -272,7 +269,7 @@ class AttrStoreLoweringMixin:
                      self._attr_name_ptr(target.name), value_obj],
                     name=self._fresh("module.attr.publish"),
                 )
-                # Unregister in LIFO order while both objects remain pinned.
+                # Unregister in LIFO order while both keepers own their objects.
                 # In threaded functions these entry slots stay registered
                 # until the ordinary function epilogue; take clears the slot.
                 persistent = self.current_func_def is not None and getattr(self, "_runtime_threads_enabled", False)
@@ -280,18 +277,17 @@ class AttrStoreLoweringMixin:
                     self._emit_gc_frame_leave_lifo_for_slot(old_root)
                     self._emit_gc_frame_leave_lifo_for_slot(new_root)
                 new_owned = self.builder.call(
-                    self.runtime["pcc_gc_take_pinned_slot"],
-                    [self._as_gc_ptr(new_root), ir.Constant(ir.IntType(64), 64)],
+                    self.runtime["pcc_gc_take_slot"],
+                    [self._as_gc_ptr(new_root)],
                     name=self._fresh("module.attr.new.take"),
                 )
                 self._gc_release(new_owned)
                 if not isinstance(value.type, ir.PointerType):
                     self._gc_release(new_owned)
                 # Publish has finished before either old owner is released.
-                # For self-assignment keep the replacement global's PIN bit.
                 old_owned = self.builder.call(
-                    self.runtime["pcc_gc_take_pinned_slot"],
-                    [self._as_gc_ptr(old_root), preserve],
+                    self.runtime["pcc_gc_take_slot"],
+                    [self._as_gc_ptr(old_root)],
                     name=self._fresh("module.attr.old.take"),
                 )
                 self._gc_release(old_owned)

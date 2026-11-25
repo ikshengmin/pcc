@@ -217,7 +217,7 @@ def mutable(value: str):
         assert "strict.nolib.stub" not in body[1], name
         assert "@" + helper + "(" in body[1], name
         assert "@py_err_occurred(" in body[1], name
-        assert "@pcc_gc_take_pinned_slot(" in body[1], name
+        assert "@pcc_gc_take_slot(" in body[1], name
         assert "@pcc_gc_store_root(" in body[1], name
 
 

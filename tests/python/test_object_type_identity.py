@@ -403,7 +403,7 @@ def test_issubclass_roots_both_operands_and_cleans_up_the_predicate_error_path()
     assert "@py_obj_getattr(" in body[:predicate]
     assert "@py_tuple_new(" in body[:predicate]
     assert "@py_err_occurred(" in body[predicate:]
-    assert "@pcc_gc_take_pinned_slot(" in body[predicate:]
+    assert "@pcc_gc_take_slot(" in body[predicate:]
     assert "extern.argument.cleanup" in body
 
 

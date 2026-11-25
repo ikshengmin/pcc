@@ -120,7 +120,7 @@ def test_native_static_constructor_audit_rejects_corruption(static_ir, mutation)
                               + r" = [^\n]*?)\bconstant\b", r"\1global", text, count=1)
         assert count == 1
     elif mutation == "wrong-take-owner":
-        text, count = re.subn(r"(@pcc_gc_take_pinned_slot\(ptr )" + re.escape(output) + r"(?=,)",
+        text, count = re.subn(r"(@pcc_gc_take_slot\(ptr )" + re.escape(output) + r"(?=\))",
                               r"\1null", text, count=1)
         assert count == 1
     elif mutation == "cleared-output-success":
@@ -135,8 +135,8 @@ def test_native_static_constructor_audit_rejects_corruption(static_ir, mutation)
         # Anchor the real final handoff, not the earlier error-cleanup leave.
         # Mutate its protocol, balance, or the no-parking interval between
         # successful retirement and the exact owning take.
-        take = re.search(r"(?m)^\s*%\S+ = call ptr[^\n]*@pcc_gc_take_pinned_slot\(ptr "
-                         + re.escape(output) + r",[^\n]*\)\n", text[end:])
+        take = re.search(r"(?m)^\s*%\S+ = call ptr[^\n]*@pcc_gc_take_slot\(ptr "
+                         + re.escape(output) + r"\)\n", text[end:])
         assert take is not None
         take_start = end + take.start()
         block = list(re.finditer(r"(?m)^[-a-zA-Z0-9_.$]+:\n", text[:take_start]))[-1]

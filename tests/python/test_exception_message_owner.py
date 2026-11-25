@@ -55,7 +55,7 @@ def _message_contract(module, converted):
                  "py_cleanup_one_lease_preserving_exception"):
         assert not _calls(roots, name), name
     _must_precede(roots, _position(utf8), _position(outer))
-    takes = [row for row in _calls(roots, "pcc_gc_take_pinned_slot")
+    takes = [row for row in _calls(roots, "pcc_gc_take_slot")
              if roots.slot(roots.args(row[2])[0]) == output]
     assert len(takes) == 1
     # The message owner protects the interior pointer until constructor
@@ -95,7 +95,7 @@ def _message_contract(module, converted):
                 slot = roots.slot(roots.args(ins)[0])
                 if slot in inputs:
                     assert slot in cleared, "message frame left before owner cleanup"
-            if roots.called(ins, "pcc_gc_take_pinned_slot") and roots.slot(roots.args(ins)[0]) == output:
+            if roots.called(ins, "pcc_gc_take_slot") and roots.slot(roots.args(ins)[0]) == output:
                 assert cleared == inputs and not output_cleared
                 transfers += 1
                 transferred = True
@@ -193,7 +193,7 @@ def test_direct_constructor_oracle_rejects_valid_ir_mutations(tmp_path, monkeypa
         after = before.replace(call, call + "\n  " + call, 1)
         diagnostic = "direct argument owner must be released exactly once after unpin"
     else:
-        take = [row for row in _calls(roots, "pcc_gc_take_pinned_slot")
+        take = [row for row in _calls(roots, "pcc_gc_take_slot")
                 if roots.slot(roots.args(row[2])[0]) == output][0]
         checks = [row for row in _calls(roots, "py_err_occurred")
                   if _reaches(roots, (outer[0].name, outer[1] + 2), _position(row))

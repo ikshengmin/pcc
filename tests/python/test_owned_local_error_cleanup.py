@@ -428,7 +428,7 @@ def test_source_generator_terminal_real_ir_keeps_frame_rooted(tmp_path, monkeypa
     body = body.group(1)
     assert "gen.frame.borrowed.slot" in body
     assert "gen.terminal.frame.keeper" in body
-    assert "@pcc_gc_take_pinned_slot" in body
+    assert "@pcc_gc_take_slot" in body
     error = re.search(r"^err.exit:\n(.*?)(?=^[A-Za-z0-9_.]+:|\Z)", body, re.M | re.S)
     assert error is not None
     error = error.group(1)

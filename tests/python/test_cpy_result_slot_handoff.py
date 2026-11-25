@@ -187,4 +187,4 @@ def test_shared_bridge_preserves_cpython_source_ownership(tmp_path, borrowed):
     bridge, _output = _bridge_publication(body)
     decrefs = re.findall(r"@py_cpy_decref\(ptr " + re.escape(bridge[2]) + r"\)", body)
     assert bool(decrefs) is (not borrowed)
-    assert "@pcc_gc_take_pinned_slot" in body[bridge.end():]
+    assert "@pcc_gc_take_slot" in body[bridge.end():]

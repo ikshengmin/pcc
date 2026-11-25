@@ -151,7 +151,7 @@ def test_literal_dynamic_classinfo_uses_one_rooted_runtime_predicate(classinfo):
     assert '@py_tuple_set_item(' in body[:predicate]
     assert 'isinstance.operand' in body[:predicate]
     assert 'isinstance.classinfo' in body[:predicate]
-    assert '@pcc_gc_take_pinned_slot(' in body[predicate:]
+    assert '@pcc_gc_take_slot(' in body[predicate:]
     assert 'extern.argument.cleanup' in body
     from ir_pointer_aliases import canonical_pointer, pointer_bitcast_aliases
 
@@ -169,7 +169,7 @@ def test_literal_dynamic_classinfo_uses_one_rooted_runtime_predicate(classinfo):
     assert '@pcc_gc_borrowed_lease_acquire(' not in body
     assert 'isinstance.classinfo' in classinfo_slot
     takes = [value for value, slot in re.findall(
-        r'(%[\w.$]+) = call ptr \(ptr, i64\) @pcc_gc_take_pinned_slot\(ptr (%[\w.$]+),',
+        r'(%[\w.$]+) = call ptr \(ptr\) @pcc_gc_take_slot\(ptr (%[\w.$]+)\)',
         body,
     ) if canonical_pointer(slot, aliases) == classinfo_slot]
     # The normal continuation and the predicate-error cleanup both consume

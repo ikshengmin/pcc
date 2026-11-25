@@ -57,10 +57,10 @@ def _lifo_slots(roots):
 
 def _assert_lexical_take(roots, block, index, take):
     """The final take consumes the exact owner whose last parking call left."""
-    assert roots.called(take, "pcc_gc_take_pinned_slot")
-    assert (take.data[1].is_ptr and len(take.data[4]) == 2
-            and take.data[4][0][0].is_ptr
-            and take.data[4][1][0].describe() == "i64"), "invalid pinned take signature"
+    # One collector: the take is pcc_gc_take_slot(slot) (item 2 (d)).
+    assert roots.called(take, "pcc_gc_take_slot")
+    assert (take.data[1].is_ptr and len(take.data[4]) == 1
+            and take.data[4][0][0].is_ptr), "invalid take signature"
     slot = roots.slot(roots.args(take)[0])
     assert roots.require_owning(slot, allow_lifo=True) == (*slot, 1)
     enters = [ins for _, _, ins in roots.rows
@@ -581,7 +581,7 @@ def test_module_operand_leaves_root_before_nonparking_take():
     for function in module.functions:
         roots = _function_roots(module, function)
         takes.extend((roots, block, index, ins) for block, index, ins in roots.rows
-                     if roots.called(ins, "pcc_gc_take_pinned_slot")
+                     if roots.called(ins, "pcc_gc_take_slot")
                      and roots.slot(roots.args(ins)[0])[0].startswith("probe.operand"))
     assert len(takes) == 1
     _assert_lexical_take(*takes[0])
@@ -597,8 +597,7 @@ def _frame_contract_fixture(*, lifo=True, suffix=""):
 @map = internal constant i32 1
 declare void @{enter}(ptr, ptr)
 declare void @{leave}(ptr)
-declare i64 @pcc_gc_pin_slot_for_take(ptr, i64)
-declare ptr @pcc_gc_take_pinned_slot(ptr, i64)
+declare ptr @pcc_gc_take_slot(ptr)
 define ptr @control() {{
 entry:
   %owner = alloca ptr
@@ -607,9 +606,8 @@ entry:
   store ptr null, ptr %other
   %alias = bitcast ptr %owner to ptr
   call void @{enter}(ptr @map, ptr %owner)
-  %prior = call i64 @pcc_gc_pin_slot_for_take(ptr %alias, i64 0)
   call void @{leave}(ptr %alias)
-  %value = call ptr @pcc_gc_take_pinned_slot(ptr %owner, i64 %prior)
+  %value = call ptr @pcc_gc_take_slot(ptr %owner)
   ret ptr %value
 }}
 ''')
@@ -773,26 +771,27 @@ def test_lexical_take_contract_rejects_wrong_owner_and_parking_order():
     for suffix in ("", "_mapped", "_local", "_local_mapped"):
         roots = _frame_contract_fixture(suffix=suffix)
         block, index, take = next(row for row in roots.rows
-                                 if roots.called(row[2], "pcc_gc_take_pinned_slot"))
+                                 if roots.called(row[2], "pcc_gc_take_slot"))
         _assert_lexical_take(roots, block, index, take)
         leave_index = index - 1
         leave = block.instructions[leave_index]
-        pin = block.instructions[leave_index - 1]
+        # Any other call between the leave and the take breaks the contract.
+        other_call = _changed_instruction(leave, callee="pcc_gc_safepoint", arguments=())
         for mutation, diagnostic in (
             (lambda instructions: instructions.pop(leave_index), "last call before take"),
-            (lambda instructions: instructions.insert(index, pin), "last call before take"),
+            (lambda instructions: instructions.insert(index, other_call), "last call before take"),
             (lambda instructions: instructions.__setitem__(leave_index, _changed_instruction(
                 leave, arguments=((leave.data[4][0][0], "other"),))), "same physical slot"),
             (lambda instructions: instructions.__setitem__(index, _changed_instruction(
-                take, arguments=((take.data[4][0][0], "other"), take.data[4][1]))),
+                take, arguments=((take.data[4][0][0], "other"),))),
              "exactly one covering owning registration"),
             (lambda instructions: instructions.insert(index, block.instructions[2]),
              "owner overwritten between leave and take"),
             (lambda instructions: instructions.__setitem__(index, _changed_instruction(
-                take, arguments=(take.data[4][0],))), "invalid pinned take signature"),
+                take, arguments=())), "invalid take signature"),
         ):
             mutated = _mutated_frame_contract(roots, mutation)
-            target = next(row for row in mutated.rows if mutated.called(row[2], "pcc_gc_take_pinned_slot"))
+            target = next(row for row in mutated.rows if mutated.called(row[2], "pcc_gc_take_slot"))
             with pytest.raises(AssertionError, match=diagnostic):
                 _assert_lexical_take(mutated, *target)
 

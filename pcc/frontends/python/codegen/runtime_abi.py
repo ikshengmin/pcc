@@ -113,9 +113,7 @@ def _runtime_signatures_part_1():
     "pcc_gc_root_copy_lease_prepare_locked": (_I64, [_PTR, _PTR, _I64, _PTR], False),
     "pcc_gc_root_copy_lease_finish": (_VOID, [_PTR], False),
     "pcc_gc_object_is_address_pinned": (_I64, [_PYOBJ], False),
-    "pcc_gc_take_pinned_slot": (_PYOBJ, [_PTR, _I64], False),
-    # Pin a call root's object before the take above; returns the prior pin.
-    "pcc_gc_pin_slot_for_take": (_I64, [_PTR, _I64], False),
+    "pcc_gc_take_slot": (_PYOBJ, [_PTR], False),
     "pcc_gc_immortalize": (_VOID, [_PYOBJ], False),
     "py_obj_id": (_I64, [_PYOBJ], False),
     "py_sys_stream_object": (_PYOBJ, [_I64], False),
@@ -1583,7 +1581,6 @@ RUNTIME_GLOBALS: dict[str, ir.Type] = {
     "pcc_gc_gray_worklist_flush_requested": _I32,
     "pcc_object_type_epoch": _I64,
     "pcc_gc_backend4_auto_step_pending": _I32,
-    # Read by compiled root pins (ownership_lowering._emit_root_pin_lock).
     "pcc_gc_list_container_mode": _I32,
 }
 

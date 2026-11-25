@@ -192,7 +192,10 @@ class _Flow:
                     self._edge('*' + destination, {'*' + token for token in _tokens(args[1])})
             elif callee in ('pcc_gc_load_ptr', 'pcc_gc_load_borrowed_ptr') and len(args) == 2 and result:
                 self._edge(result, {'*' + token for token in _tokens(args[1])})
-            elif callee == 'pcc_gc_take_pinned_slot' and len(args) == 2 and result:
+            elif ((callee == 'pcc_gc_take_pinned_slot' and len(args) == 2)
+                  or (callee == 'pcc_gc_take_slot' and len(args) == 1)) and result:
+                # Compiled code takes through pcc_gc_take_slot; runtime
+                # modules still use pcc_gc_take_pinned_slot (item 2 (d)).
                 self._edge(result, {'*' + token for token in _tokens(args[0])})
             elif callee == 'pcc_gc_retain' and len(args) == 1 and result:
                 # An owned reference to the same object: incref, return the argument.

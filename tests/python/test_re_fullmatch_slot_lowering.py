@@ -23,7 +23,7 @@ def test_dynamic_operands_are_rooted_and_result_published_before_error_check(tmp
     # One collector: no address lease is taken (item 2 (d)).
     assert 're.fullmatch.argument' in body and 'call.slot.argument.lease' not in body
     assert '@py_cleanup_two_roots_preserving_exception' in body
-    assert '@pcc_gc_take_pinned_slot' in body
+    assert '@pcc_gc_take_slot' in body
 
 def test_second_argument_exception_has_prior_operand_cleanup(tmp_path):
     body=emit(tmp_path,'re.fullmatch(p(s), boom(s))')
@@ -53,7 +53,7 @@ def test_dynamic_compile_arguments_and_return_use_owned_transaction(tmp_path):
     assert re.search(r'store ptr ' + re.escape(first.group(1)) + r', ptr %[-.\w]+', body[first.end():later])
     assert re.search(r'(%[-.\w]+) = call ptr[^\n]*@py_re_compile_obj\([^\n]*\)\n\s*store ptr \1, ptr %[-.\w]+', body)
     assert '@py_cleanup_two_roots_preserving_exception' in body
-    assert '@pcc_gc_take_pinned_slot' in body
+    assert '@pcc_gc_take_slot' in body
 
 
 def test_compile_keyword_source_order_and_assignment_result_are_owned(tmp_path):

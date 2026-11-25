@@ -9,6 +9,10 @@ the request handler). pcc_gc_pin_slot_for_take keeps the transaction for
 the moving collectors and pins directly on GC0, on the nonmoving count-free
 GC1/GC2, and on a count-free GC3/GC4 whose call root lies in the thread's
 stack: their conservative stack scan keeps what it names in place.
+
+Since item 2 (d) compiled code no longer calls pcc_gc_pin_slot_for_take; it
+takes through pcc_gc_take_slot. The runtime helper's models below remain
+until the runtime drops it.
 """
 from __future__ import annotations
 
@@ -63,7 +67,7 @@ main()
 '''
 
 
-def test_take_pins_through_the_runtime_without_a_graph_lock(monkeypatch):
+def test_take_uses_take_slot_without_a_pin_or_graph_lock(monkeypatch):
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
     typed = infer_module(parse_and_lift(PROGRAM, "takes.py", "takes"))
     generator = L1CodeGen(typed, emit_cpy_main_exitcode=False, ir_scaffold_mode="on")
@@ -71,7 +75,10 @@ def test_take_pins_through_the_runtime_without_a_graph_lock(monkeypatch):
     generator._prefer_native_callable_values = True
     text = str(generator.generate(typed))
     body = re.search(r"^define [^\n]*@user_takes_handoff\(.*?^}", text, re.M | re.S).group(0)
-    assert body.count("@pcc_gc_pin_slot_for_take(") == 2
+    # One collector (item 2 (d)): compiled code takes each call root through
+    # pcc_gc_take_slot, with no pin and no graph lock.
+    assert body.count("@pcc_gc_take_slot(") == 2
+    assert "@pcc_gc_pin_slot_for_take(" not in body
     assert "@pcc_py_gc_minor_graph_lock(" not in body
 
 

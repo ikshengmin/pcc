@@ -27,7 +27,7 @@ def test_dynamic_receiver_and_all_arguments_use_registered_roots(tmp_path,statem
     result=re.search(r'(%[-.\w]+) = call ptr[^\n]*@py_obj_call_loaded_method\([^\n]*\)\n\s*store ptr \1, ptr',body)
     assert result
     assert '@py_cleanup_two_roots_preserving_exception' in body
-    assert '@pcc_gc_take_pinned_slot' in body
+    assert '@pcc_gc_take_slot' in body
 
 def test_later_argument_error_has_receiver_method_and_argument_cleanup(tmp_path):
     body=emit(tmp_path,'return receiver(s).fullmatch(text(s), boom(s), end(s))')

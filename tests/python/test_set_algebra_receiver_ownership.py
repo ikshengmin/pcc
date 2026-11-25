@@ -57,7 +57,7 @@ def test_algebra_publishes_into_caller_sink(method, annotation, site):
         assert 'set.call.result.operand' not in function
         assert 'set.call.current' in function
     else:
-        assert '@pcc_gc_take_pinned_slot(' in function
+        assert '@pcc_gc_take_slot(' in function
     if not annotation:
         assert 'set.call.generic.status' in function
     if method == 'update' and not annotation:

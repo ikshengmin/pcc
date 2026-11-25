@@ -7468,12 +7468,12 @@ class ClassLowering:
         try:
             factory_captures = self._emit_prepared_namespace_statements(cd, info, ns_obj, ns_info, precomputed, method_objects)
             if info.dataclass_init_args is not None and not info.dataclass_generated_init:
-                # Prepared constructors already transport pinned method
-                # owners across __new__. Keep one explicit NEW tuple owner
+                # Prepared constructors already transport method owners
+                # across __new__. Keep one explicit NEW tuple owner
                 # beside them until the class can own its declarations. Never
                 # expose this implementation value to the user namespace.
                 defaults = self._emit_dataclass_defaults_root(cd, info)
-                method_objects[_DATACLASS_PREPARED_DEFAULTS_OWNER] = self.parent._take_slot_call_root(defaults, keep_pinned=True)
+                method_objects[_DATACLASS_PREPARED_DEFAULTS_OWNER] = self.parent._take_slot_call_root(defaults)
         finally:
             self.parent._class_namespace_context = previous_namespace
             for capture_root, owns_capture in reversed(factory_captures):

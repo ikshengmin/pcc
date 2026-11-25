@@ -101,7 +101,7 @@ def check_return_cfg(body):
             if '@pcc_py_gc_minor_graph_unlock(' in line:
                 assert lock_depth > 0
                 lock_depth -= 1
-            take = re.match(r'(%[^ ]+) = call ptr (?:\([^\n]*?\) )?@pcc_gc_take_pinned_slot\(', line)
+            take = re.match(r'(%[^ ]+) = call ptr (?:\([^\n]*?\) )?@pcc_gc_take_slot\(', line)
             if take:
                 # Function-root retro-patches and recursion accounting must
                 # precede the terminal unpin/owner handoff on every return.

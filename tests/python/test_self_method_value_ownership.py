@@ -157,7 +157,7 @@ def test_self_method_value_uses_the_shared_attribute_owner(tmp_path):
     body = re.search(r"(?ms)^define[^\n]*@user_self_method_Worker_callback\([^\n]*\{\n(.*?)^}", output.read_text())
     assert body is not None and "strict.nolib.stub" not in body[1]
     assert "@py_obj_getattr(" in body[1]
-    assert "@pcc_gc_take_pinned_slot(" in body[1]
+    assert "@pcc_gc_take_slot(" in body[1]
     assert "Worker_method_bound_adapter" not in output.read_text()
 
 
