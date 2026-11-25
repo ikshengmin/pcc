@@ -25,6 +25,43 @@ _DEFERRED_INDEXED_PROCESS_SPLIT = "pidx-pco-v1"
 _DEFERRED_CODEGEN_RESULT = "PCC_DEFERRED_FRONTEND_CODEGEN"
 
 
+# Export workers retain their ASTs until publishing all assigned modules.
+# A measured small-source batch amortizes native process startup without
+# retaining large module graphs together. Actual guarded admission still
+# uses each manifest's aggregate bytes and measured worker peak.
+_NATIVE_EXPORT_BATCH_BYTES = 64 * 1024
+
+
+def _bounded_native_export_chunks(src_paths):
+    from pcc.frontends.python.pipeline_frontend_workers import SOURCE_WORKER_MODULES_PER_CHUNK
+
+    chunks = []
+    chunk = []
+    source_bytes = 0
+    for index in range(len(src_paths)):
+        try:
+            size = os.path.getsize(src_paths[index])
+        except OSError:
+            # Preserve the real worker's missing-source error and do not
+            # combine an input with an unknown memory cost.
+            size = _NATIVE_EXPORT_BATCH_BYTES + 1
+        if chunk and (
+            len(chunk) >= SOURCE_WORKER_MODULES_PER_CHUNK
+            or source_bytes + size > _NATIVE_EXPORT_BATCH_BYTES
+        ):
+            chunks.append(chunk)
+            chunk = []
+            source_bytes = 0
+        if size > _NATIVE_EXPORT_BATCH_BYTES:
+            chunks.append([index])
+        else:
+            chunk.append(index)
+            source_bytes += size
+    if chunk:
+        chunks.append(chunk)
+    return chunks
+
+
 def _copy_frontend_artifact_file(source: str, destination: str) -> None:
     """Copy generated compiler inputs without a shell or external utility."""
     with open(source, "rb") as reader:
@@ -1152,7 +1189,15 @@ def compile_parallel_uncached(
     export_oversized_chunk_count = 0
     export_safe_jobs = jobs
     if native_owned_lanes:
-        export_chunks = [[index] for index in range(len(src_paths))]
+        # Only measured, budgeted native worker admission may use batches.
+        # The unbudgeted path retains its conservative singleton behavior.
+        export_budgeted = _worker_tree_budget_bytes(
+            os.environ.get(_WORKER_TREE_BUDGET_ENV, "")
+        ) > 0
+        if export_budgeted:
+            export_chunks = _bounded_native_export_chunks(src_paths)
+        else:
+            export_chunks = [[index] for index in range(len(src_paths))]
         export_oversized, export_safe = (
             _split_codegen_chunks_by_source_size(src_paths, export_chunks)
         )

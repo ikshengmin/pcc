@@ -545,6 +545,77 @@ def test_source_workers_separate_export_and_short_codegen_shards(
     assert [name for name, _ir in result[0]] == module_names
 
 
+def test_native_export_batches_are_bounded_by_total_source_and_count(tmp_path):
+    sizes = [1, 2, 65533, 65536, 70000, 200000] + [1] * 9
+    paths = []
+    for index, size in enumerate(sizes):
+        path = tmp_path / ("batch_" + str(index) + ".py")
+        path.write_bytes(b"#" * size)
+        paths.append(str(path))
+    assert parallel._bounded_native_export_chunks(paths) == [
+        [0, 1, 2], [3], [4], [5], list(range(6, 14)), [14],
+    ]
+
+
+def test_native_export_batch_retains_merged_graph_and_ast_bytes(tmp_path):
+    import sys
+
+    names = ["provider", "consumer"]
+    paths = []
+    for name, source in zip(names, [
+        "def add(a: int, b: int) -> int:\n    return a + b\n",
+        "from provider import add\ncallback = add\ndef use() -> int:\n    return callback(20, 22)\n",
+    ]):
+        path = tmp_path / (name + ".py")
+        path.write_text(source, encoding="utf-8")
+        paths.append(str(path))
+
+    def run(case, chunks):
+        state = tmp_path / case
+        ast_dir = state / "ast"
+        ir_dir = state / "ir"
+        ast_dir.mkdir(parents=True)
+        ir_dir.mkdir()
+        exports, uses, edges, deps = {}, [], [], {}
+        for index, chunk in enumerate(chunks):
+            manifest = state / ("manifest" + str(index))
+            result = state / ("result" + str(index))
+            worker_policy.write_worker_manifest(
+                str(manifest), str(result), str(ir_dir), "", str(ast_dir),
+                paths, names, chunk, entry_module="consumer",
+                sibling_inits=(), ir_scaffold_mode="on", verbose=False,
+                job_kind="export",
+            )
+            completed = subprocess.run(
+                [sys.executable, "-m", "pcc",
+                 "--pcc-python-multi-codegen-worker", str(manifest)],
+                capture_output=True, text=True, timeout=20,
+            )
+            assert completed.returncode == 0, completed.stderr
+            fields = result.read_text().strip().split("\t")
+            assert fields[0] == "EXPORT"
+            shard, _, shard_uses = pipeline._read_native_exports_wire(
+                fields[1], include_function_object_uses=True,
+            )
+            exports.update(shard)
+            uses.extend(shard_uses)
+            shard_edges, shard_deps = pipeline._read_reexport_edges_wire(
+                fields[2], include_module_dependencies=True,
+            )
+            edges.extend(shard_edges)
+            deps.update(shard_deps)
+        pipeline._merge_closed_world_reexport_edges(names, exports, edges)
+        pipeline._apply_closed_world_function_object_uses(exports, uses)
+        ast_bytes = [p.read_bytes() for p in sorted(ast_dir.glob("module_*.json"))]
+        assert len(ast_bytes) == len(names)
+        return exports, set(uses), set(edges), deps, ast_bytes
+
+    single = run("single", [[0], [1]])
+    batch = run("batch", parallel._bounded_native_export_chunks(paths))
+    assert single == batch
+    assert batch[0]["provider"]["add"]["needs_object"] is True
+
+
 @pytest.mark.parametrize("tree_budget", [None, "1073741824"], ids=["unbudgeted", "budgeted"])
 def test_native_auto_frontend_bounds_export_and_codegen_lanes(
     tmp_path,
@@ -649,7 +720,7 @@ def test_native_auto_frontend_bounds_export_and_codegen_lanes(
     )
 
     assert export_plan == {
-        "chunks": [[0], [1], [2], [3]],
+        "chunks": [[0], [1, 2, 3]] if tree_budget else [[0], [1], [2], [3]],
         "oversized": 0 if tree_budget else 1,
         "safe_jobs": 10 if tree_budget else 2,
     }

@@ -135,3 +135,47 @@ batches with their memory contract, repeated graph decode and the
 generated/backend emit hot owners. Oversized codegen concurrency remains
 a separate resource-evidence candidate; do not remove that restriction
 without validating peaks and bounded admission.
+
+## Native export startup: bounded small batches
+
+The exact admitted historical Linux Stage1 compiler from run 45643044565,
+artifact 15039495663, source 5f101c6160d8301d9d3fd5f1e82e0686e38b7f23,
+was materialized against its bundle manifest (compiler SHA-256
+1c0456d4a0e90d10fc57b4ebaa500e6a21801612ba94a341a4b33588d5cdc69e).
+It executed its actual `--pcc-python-multi-codegen-worker` export command
+on eight original repository modules per experiment. This measures worker
+shape, not a rebuilt current Stage2 compiler. Each of five alternating
+same-input pairs compared eight singleton processes with one eight-module
+process; original 90 s / 1 GiB tree guard, no cache or contract changes.
+The actual coordinator's merge, function-object uses, re-export edges,
+dependency rows and every lifted AST byte were equal in all 15 pairs.
+The unmerged export records naturally differ in early needs-object markers;
+the actual merge reapplies all uses, so a raw JSON comparison is not the
+semantic boundary.
+
+| Original source cohort | Singleton median | Batch median | Wins | Guard peak |
+| --- | ---: | ---: | ---: | ---: |
+| 31,790 bytes (backend/diagnostics/frontends init and definition helpers) | 2.010 s | 1.336 s | 5/5 | 220,246,016 bytes |
+| 62,540 bytes (native deferred, Mach-O support, Metal, artifact inspect, backend config/cache, definition linkage) | 2.915 s | 2.685 s | 5/5 | 289,734,656 bytes |
+| larger cohort (resource-plan/process-pool and pipeline helpers) | 4.885 s | 4.679 s | 5/5 | 315,215,872 bytes |
+
+The larger cohort has little benefit, so guarded native export scheduling
+batches at most eight sources and at most 64 KiB combined source bytes;
+larger or unknown-size sources remain singleton. Existing oversized-first
+ordering, the unbudgeted singleton path, codegen singleton policy, byte
+admission and hard guards are unchanged. The resource estimator already
+takes the sum/max/count of each actual assignment and separates
+full-graph and module-indexed observations.
+
+The planning witness failed before and passed after. A real host export
+worker regression compares all AST bytes and merged metadata for separate
+and batched cross-module function-object use. Three affected worker-policy
+files passed 159/159 under the original 90 s/1 GiB guard. The changed
+coordinator emitted 2.1 MiB of owned Python-library IR in 3.40 s (85.9 MB
+peak), including the actual bounded-batch helper definition. A separate,
+unchanged preload-delta test still fails on both preimage and candidate
+because the serial index reverses two equivalent key rows
+(`test_worker_deltas_build_the_serial_index_byte_for_byte`); retain that
+failure to investigate in the next preload unit. No whole Stage2 timing
+or current-source pcc1 qualification is claimed; hosted CI is the next
+end-to-end check.

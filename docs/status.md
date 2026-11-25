@@ -1082,17 +1082,20 @@ in the relevant section or issue and removes the entry.
    #200; section "Self-host fixed point: the final convergence step" below),
    together with every result that needs a current pcc1 (GPU M2, proof-checker
    stage 3). Bootstrap runs need the maintainer's explicit OK.
-   Next: validate the corrected single-chain Stage1/2/3 worker ceiling in
-   CI, then the native export/preload and indexed generation slowdown
-   under the same guard. Run 45643044565 timed out inside Stage2:
-   Linux 2/621 codegen modules retired, Windows not yet through the
-   class preload index. The inherited width fix preserves the original
-   byte and time guards; 334 related tests passed on Linux. No full
-   Stage2/3 or native speedup claim. See the
-   [phase investigation](investigations/stage2-worker-budget-parity-45643044565.md).
+   Next: validate matching worker ceilings and bounded native export
+   batching in CI; optimize repeated preload and indexed generation.
+   Run 45643044565: Linux 2/621 codegen modules retired at Stage2 timeout;
+   Windows not yet through class preload. The original 1,800 s / 16 GiB
+   guards remain. Worker ceiling: 334 related tests passed. Actual prior
+   native export binary, five pairs each: 31.8 KiB eight-module batch
+   -33.5%, 62.5 KiB -7.9%, both 5/5 with identical merged metadata and AST
+   bytes; 159 worker tests passed. Only guarded batches <=64 KiB / 8
+   modules are admitted. Next preload unit also owns the existing serial
+   key-order witness failure. No full Stage2/3 speedup claim.
+   [Phase investigation](investigations/stage2-worker-budget-parity-45643044565.md).
 
    Claims:
-   - Stage2 native export batch admission: Codex, Linux, 2026-11-25T16:51Z, area selfhost (pipeline_frontend_parallel and export tests; not bootstrap_platform)
+   - none
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
