@@ -1339,6 +1339,23 @@ in the relevant section or issue and removes the entry.
    for the same IR (entry/exit saves, call-result spills, address
    materialization, register copies; see the self-aarch64-* investigations)
    and measure each fix with `pcc_perf.py instr` against this bound.
+   Where the self code is longer (same experiment, static machine code of
+   the 20 hottest runtime functions): self bodies are 1.5-2.5x clang's
+   (`py_incref` 55/27, `pcc_gc_retain_known` 139/68,
+   `pcc_gc_try_init_ptr_locked` 130/51, `pcc_gc_store_root` 510/279), while
+   both save about as many callee-saved registers, so shrink-wrapping those
+   is not the lever. In `py_incref`'s counted fast path (about 38 self
+   instructions against 22): (1) a frame record and pointer authentication
+   on every entry and exit where clang builds no frame (fast path calls
+   nothing, the slow path is a tail call); (2) `sxtw` after every 32-bit
+   load; (3) unfused tests: `and`+`cmp`+`b.ne` for bit 0 (clang `tbnz`),
+   `cmp #0`+`b.lt` for a sign (`tbnz #63`), `ldr`+`sxtw`+`and`+`cbz` for a
+   flag (`ldrb`+`tbnz`); (4) a tag range test as several compare-branches
+   (clang `sub`+one unsigned compare); (5) `nop`s on executed paths and
+   branches to blocks that only branch; (6) `adrp`+`add`+`ldr` where the
+   offset folds into the load. Proposed order: frameless leaves and tail
+   calls, then compare/branch fusion and extension removal, then nops,
+   branch chains and address folding, each measured with `instr`.
    J2. Fewer root stores and release chains in code generation: 104 of the
        304 calls per request clear a slot that is already empty.
    J3. TaskScope (5x CPython), `time.perf_counter` (7x), `str.encode` (5x).
