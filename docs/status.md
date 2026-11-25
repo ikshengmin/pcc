@@ -194,6 +194,14 @@ in the relevant section or issue and removes the entry.
   inline read with the resolver's answer and falls back to the call for
   the whole process when they differ.
 
+- Item 3 (c) measurement rule (asked by Claude, 2026-11-26): may a change
+  whose request-level gain is below the host's floor be merged on
+  mechanism evidence, that is a `prim --against` gain on its yardstick
+  primitive beyond that primitive's control, plus a `top --against` drop of
+  the targeted functions, with the handler `ab` run once per bundle? On
+  2026-11-26 a loaded host (load 7.1) gave a 4.2% floor, which no single
+  1-3% change can pass. Claude's recommendation: yes.
+
 1. **GC correctness.** Open issues:
    [#7](https://github.com/ikshengmin/pcc/issues/7) (ownership of managed
    boxed-int direct returns) waits for a new reported native owner witness,
@@ -1092,28 +1100,64 @@ in the relevant section or issue and removes the entry.
    immortal; a third of the calls clear an empty slot), like the existing
    AArch64 short path of the root reads, is the remaining form of (3),
    ceiling about 3% (not measured).
-   Order for (c), Claude's recommendation that the user accepted on
-   2026-11-26 ("按你的建议", then "完整的顺序包括你的启示"); each step records
-   its ceiling first, keeps only a gain beyond an `ab --control-arm`
-   floor, and leaves the object header layout alone:
-   A1. Darwin thread-local access inline: read the pthread TSD slot through
-       `tpidrro_el0` instead of calling the TLV resolver, with a startup
-       check against the resolver and a fallback to the call (about 4%;
-       waits on the maintainer, see "Waiting on maintainer").
-   A2. Backend short paths of `pcc_gc_store_root`, the releases and the
-       retains when neither value needs a count (NULL, tagged, immortal; a
-       clear of an empty slot), as for the root reads (about 3-4%).
-   A3. Short paths of the error check and the recursion-depth check (needs
-       A1; about 2-3%).
-   A4. The list-append path: container-lock fast path, without the
-       recheck of the retired collector-switch word and with the sanity
-       checks off the hot path (after the (d) 4b claim on `py_list.py`;
-       about 4%).
-   A5. Allocation and release bundle: per-thread batched statistics, the
-       magazine limit by table, the dict deallocator's debug check behind
-       a switch (with A1 or A4, together above the floor).
-   Checkpoint after A1 and A2: if the trend does not support w1 at 75-80k
-   req/s, report and reassess.
+   Measured 2026-11-26 (local Mac, w1, arms of 6e54efdb3 with and without
+   the A2 patch). The handler request costs 17.56 us of processor time;
+   asyncio's is 11.5 us (87k req/s). `gap`: program 12.01 us (68.4%), roots
+   3.64 (20.7%), allocator 1.35 (7.7%), barrier 0.55 (3.1%). Inclusive:
+   the request body 13.40 us, `json.dumps` 5.63, `pcc_gc_store_root` 3.47
+   (most of it the releases and deallocations of cleared slots). `prim`
+   against CPython, ns: json 6279/1719 (3.65x, 16 allocations), TaskScope
+   2394/484, perf_counter 395/57, str.encode 308/60, closure 2648/137,
+   raise 511/98, generator 119/33, method 97/38; spawn and sleep cost less
+   than asyncio's. json is about two thirds of the w1 gap. Its 6.8 us per
+   call: json's own code and string building about 1.3 us (CPython's C
+   encoder takes 1.7 us in all); reference counts, root stores and
+   deallocation about 1.1; allocation 0.55; the container lock of the
+   buffer list only this thread uses 0.40; the provenance checks
+   `pcc_gc_granule_is_object_start`, `pcc_gc_pointer_is_managed` and
+   `list_is_sane` 0.39; the TLV resolver 0.19; error and recursion checks
+   0.17 (self time; the pieces are estimates until counted).
+   A2 result: `pcc_gc_store_root` runs 304 times per request, counted with
+   an lldb breakpoint over two run lengths with startup subtracted: an
+   empty slot cleared 34.2%, a counted value cleared 26.8%, an immortal
+   value cleared 15.6%, a counted value stored in an empty slot 9.7%, a
+   tagged value cleared 7.7%, the rest below 3% each. The backend short
+   path for NULL or tagged values on both sides (42% of the calls) cut its
+   self time from 1.27 to 1.03 us, and its callers' self time grew about
+   0.1 us; `ab` w1 56650 -> 56469 req/s (-0.3%, 1/5 pairs, floor 4.2% at
+   load 7.1). Not merged; the patch is kept outside the repository. The
+   plan's 3-4% was the profile share times a guessed half; a ceiling is
+   now the counted calls per case times the per-case saving. A3-A5 of the
+   earlier order are folded into J1 below.
+   Order, Claude's recommendation of 2026-11-26, after the user asked to
+   find where the time goes before anything else; json is the yardstick,
+   `prim ARM --only json --against BASE` per change and one handler `ab`
+   per bundle:
+   Correctness comes first (the user's requirement of 2026-11-26:
+   correctness, concurrency correctness, virtual-thread correctness). A
+   check leaves a hot path only when it decides nothing, that is it only
+   audits or debugs; a check that tells a foreign or CPython-handle object
+   from an owned one stays. A lock fast path keeps mutual exclusion and
+   ordering for every thread and carrier: a virtual thread can resume on
+   another carrier, so no thread or carrier identity makes a container
+   private. Before its measurement each piece runs, besides its own tests,
+   the container-lock races (`test_list_container_lock_races.py`,
+   `test_dict_container_lock_races.py`, `test_concurrent_list_append.py`,
+   `test_threaded_gc0_shared_containers.py`) and the virtual-thread carrier
+   and park tests (`test_virtual_thread_pcc_py_carriers.py`,
+   `test_virtual_thread_park_effect.py`, `test_virtual_thread_lock_mechanisms.py`).
+   J1. Off json's hot path: the provenance checks (from `list_is_sane`,
+       `ptr_is_list`, instance getattr and set_field, the freeing note),
+       a fast path for an uncontended list lock, the allocator's magazine
+       calls, and the diagnostics-log call `py_obj_getattr` makes while the
+       log is off; about 1.2 us of json's 6.8 (self-time guess). Parts in
+       `py_list.py` wait for the (d) 4b claim.
+   J2. Fewer root stores and release chains in code generation: 104 of the
+       304 calls per request clear a slot that is already empty.
+   J3. TaskScope (5x CPython), `time.perf_counter` (7x), `str.encode` (5x).
+   A1. Darwin thread-local access inline (TSD slot through `tpidrro_el0`,
+       startup check, fallback to the call): the resolver is 0.65 us per
+       request, the inline read is not free; waits on the maintainer.
    B1. On an idle host, why a w4 request costs about 50% more processor
        time than a w1 request. B2. Scheduler: the global ready-node pool
        lock and the shared counters become per-carrier caches and batched
@@ -1148,8 +1192,15 @@ in the relevant section or issue and removes the entry.
    a local Mac `sample` of a probe names its own functions. Re-check a Mac
    function profile taken before this fix against `nm` before using it.
 
+   Failing on master on 2026-11-26, not caused by item 3 (checked on
+   HEAD and on `shenming/master` snapshots):
+   `tests/python/test_local_frame_arena.py`, 8 nodes (models of the
+   removed frame protocol), and
+   `tests/python/test_aarch64_record_lane_bindings.py::test_bound_record_consumers_match_assembly_and_native_sections[addresses-*]`,
+   4 nodes (`fallback_instruction_count` is 0; the test expects 1).
+
    Claims:
-   - (c) A2 root-store short path: Claude, macOS, 2026-11-25T17:27Z, area backend (AArch64 only: self_backend_aarch64_gc_calls.py and its tests; no file shared with the x86 claim)
+   - none
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
