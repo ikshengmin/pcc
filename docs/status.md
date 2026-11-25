@@ -862,7 +862,7 @@ in the relevant section or issue and removes the entry.
    function profile taken before this fix against `nm` before using it.
 
    Claims:
-   - (c) handler one-worker gap to asyncio, profiling first: Claude, local Mac, 2026-11-25T16:09Z, area runtime-gc (files named before any edit; none shared with active claims)
+   - (c) handler gap to asyncio; first: restore the cache-line padding of freestanding_gc_state.py that the one-collector cleanup removed: Claude, local Mac, 2026-11-25T16:12Z, area runtime-gc (files: freestanding_gc_state.py, scripts/one_collector/cleanup_declarations.py)
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
