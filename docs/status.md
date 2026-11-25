@@ -548,6 +548,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - #20 runtime oracle exact checkout CLI entry: Codex, Linux, 2026-11-25T17:42Z, area runtime-codegen (test_runtime_oracle_diff only)
+   - #20 indexed bridge selector-negative dynamic lane witnesses: Codex, Linux x86-64, 2026-11-25T17:46Z, area backend
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
