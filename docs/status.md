@@ -848,6 +848,8 @@ in the relevant section or issue and removes the entry.
    U11 deletes the matching `py_runtime.h` exports ("一起删"); a test or
    case that only exercises a removed protocol function is rewritten to
    the one collector, or deleted and listed in its commit ("改写或删并列出").
+   The user, 2026-11-26, on claims: "plan也可以自己认领啊"; one claim
+   line covers the whole plan, renewed every two hours.
 
    The first tests-only (b) slice is admitted unqualified: the maintainer
    said “同意合入” and asked Codex to continue. The exact test patch of
@@ -976,7 +978,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (d) U1, 4b batch 3 (py_obj, py_coroutine, py_obj_ops_compare, py_tempfile): Claude, macOS, 2026-11-25T17:36Z, area runtime-codegen
+   - (d) plan U1-U14 (the units under "Next for (d)", in order): Claude, macOS, 2026-11-25T17:56Z, area runtime-codegen
 
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
