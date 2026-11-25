@@ -64,7 +64,8 @@ def test_import_publication_respects_physical_global_storage(
         assert isinstance(slot.value_type, ir.IntType) and slot.value_type.width == 64
     if isinstance(slot.value_type, ir.PointerType):
         assert re.search(r"load ptr, ptr " + re.escape(symbol), text)
-        assert "import.publish.current" in text
+        # Retirement clears the object staging root (item 2 (d): no unpin).
+        assert re.search(r"call [^\n]*@pcc_gc_store_root\(ptr " + re.escape(symbol) + r", ptr null\)", text)
     else:
         # A scalar projection is an exported ABI value, never a GC root.
         assert re.search(r"store (?:i64|i1|double) [^\n]*, ptr " + re.escape(symbol), text)
