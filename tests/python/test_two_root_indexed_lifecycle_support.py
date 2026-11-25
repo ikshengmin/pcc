@@ -192,11 +192,32 @@ def _rows(kernel, kind):
 
 
 def _condition_record(kernel):
+    # The direct builder assigns unique SSA spellings. Follow the actual
+    # inline edge's condition instead of guessing the unqualified name.
+    conditions = []
+    for block in range(len(kernel.block_names)):
+        span = kernel.inline_error_edge_span(block)
+        for edge in range(span.first, span.first + span.second):
+            conditions.append(kernel.inline_error_edge_condition(edge))
+    assert len(conditions) == 1
     for block, position, record in _rows(kernel, ICMP):
-        value = kernel.defined_value_id(block, position)
-        if kernel.value_name(value) == "error.condition":
+        if kernel.defined_value_id(block, position) == conditions[0]:
             return record
     raise AssertionError("fixture has no pending-error condition")
+
+
+def _fixture_call(graph, symbol):
+    calls = [call for call in graph.calls if call.symbol == symbol]
+    assert len(calls) == 1, symbol
+    return calls[0]
+
+
+def _fixture_operand_root(graph):
+    call = _fixture_call(graph, _HELPER)
+    root = graph.local(call.args[0][1])
+    graph.alloca(root, "ptr")
+    assert ".args.operand." in graph.kernel.value_name(root)
+    return root
 
 
 @pytest.mark.parametrize("inline", [False, True])
@@ -245,11 +266,16 @@ def test_scalar_arena_mutations_fail_closed(tmp_path, monkeypatch, fault):
     kernel = get_indexed_function_kernel(function)
     if fault == "polarity":
         record = _condition_record(kernel)
+        assert kernel.call_texts[kernel.instruction_record(record).first] == "ne"
         kernel.call_texts.append("eq")
         kernel.instruction_record_scalars.set_unchecked(record * 4, len(kernel.call_texts) - 1)
+        assert kernel.call_texts[kernel.instruction_record(record).first] == "eq"
     elif fault == "wrong_query":
         record = _condition_record(kernel)
-        kernel.instruction_record_scalars.set_unchecked(record * 4 + 2, kernel.value_id("result"))
+        wrong = _fixture_call(_Graph(module, function), "witness_fail").instruction.dest
+        assert wrong >= 0 and wrong != kernel.instruction_record(record).third
+        kernel.instruction_record_scalars.set_unchecked(record * 4 + 2, wrong)
+        assert kernel.instruction_record(record).third == wrong
     elif fault == "wrong_trigger":
         # This later same-block instruction still dominates the edge. Full
         # module verification alone cannot reject the delayed error trigger.
@@ -266,8 +292,9 @@ def test_scalar_arena_mutations_fail_closed(tmp_path, monkeypatch, fault):
                 kernel.call_scalars.set_unchecked(call_id * 8 + 1, len(kernel.call_texts) - 1)
                 break
     elif fault == "root_name":
-        value = kernel.value_id("x.args.operand.0")
+        value = _fixture_operand_root(_Graph(module, function))
         kernel.value_names[value] = "wrong.root"
+        assert kernel.value_name(value) == "wrong.root"
     elif fault in ("enter_abi", "mixed_enter_abi"):
         for _block, _position, call_id in _rows(kernel, CALL):
             header = kernel.call_header(call_id)
@@ -278,15 +305,21 @@ def test_scalar_arena_mutations_fail_closed(tmp_path, monkeypatch, fault):
                 if fault == "mixed_enter_abi":
                     break
     else:
-        value = kernel.value_id("x.args.operand.0")
+        value = _fixture_operand_root(_Graph(module, function))
         from pcc.backend.self_backend_ir import TypeDesc
-        kernel.value_scalars.set_unchecked(value * 8 + 4, kernel.intern_type(TypeDesc("int", 32)))
+        bad_type = kernel.intern_type(TypeDesc("int", 32))
+        kernel.publish_alloca_type_id(value, kernel.alloca_offset(value), bad_type)
+        assert kernel.alloca_type_id(value) == bad_type
     if fault in ("polarity", "wrong_query", "wrong_trigger"):
         from pcc.backend.self_backend_verify import verify_parsed_module
         # These are structurally valid typed inputs. The lifecycle predicate,
         # not a malformed codec/SSA record, must reject their wrong condition.
         verify_parsed_module(module)
-    with pytest.raises(AssertionError):
+    diagnostics = {
+        "polarity": "wrong error condition", "wrong_query": "wrong error condition",
+        "root_name": "expected exactly one two-root cleanup site", "wrong_alloca": "alloca ABI",
+    }
+    with pytest.raises(AssertionError, match=diagnostics.get(fault)):
         _assert_probe(_Graph(module, function))
     with pytest.raises(_REJECTED):
         assert_indexed_compiler_two_root_error_edge([_raw(tmp_path, module)])
@@ -440,8 +473,21 @@ def test_cleanup_cannot_double_as_inline_landing(tmp_path, monkeypatch, slot_nam
     module = _module(monkeypatch, spare_payload=True)
     function = module.functions[0]
     kernel = get_indexed_function_kernel(function)
-    kernel.error_landing_scalars.append2(kernel.block_id("cleanup"), kernel.value_id(slot_name))
+    graph = _Graph(module, function)
+    if slot_name == "x.args.operand.0":
+        slot = _fixture_operand_root(graph)
+    else:
+        slots = [index for index, name in enumerate(kernel.value_names)
+                 if name == slot_name or name.startswith(slot_name + ".")]
+        assert len(slots) == 1
+        slot = slots[0]
+        graph.alloca(slot, "int", 32)
+    cleanup = kernel.block_id("cleanup")
+    assert cleanup >= 0 and kernel.inline_error_landing_slot(cleanup) < 0
+    kernel.error_landing_scalars.append2(cleanup, slot)
     kernel.error_edge_scalars.set_unchecked(6, 0)
+    assert kernel.inline_error_landing_slot(cleanup) == slot
+    assert kernel.inline_error_edge_payload(0) == 0
     # Both a pointer root overwrite and an otherwise valid spare i32 landing
     # pass ordinary edge/SSA verification. Neither has a landing consumer at
     # cleanup entry, and neither may bypass the lifecycle proof's landing check.

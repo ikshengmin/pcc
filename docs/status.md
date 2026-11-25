@@ -520,10 +520,20 @@ in the relevant section or issue and removes the entry.
    101,351,424-byte peak); eight integration nodes not run. Next: remaining
    lifecycle negative-witness target IDs and independent CI failures.
    No assembler/symbol behavior changed.
+   #20 indexed lifecycle negative controls: unique SSA names now include
+   suffixes; the old mutation guessed bare names and could target value -1.
+   Condition and cleanup-root controls follow actual edge/call IDs and
+   assert the observed mutations (including the precise alloca type and
+   landing slot). All six original failures now exercise the real intended
+   semantic rejection after ordinary typed verification passes; the
+   independent encoded witness also rejects them. All 97 related indexed
+   and textual lifecycle, x86 inline-edge and slot-reuse tests pass under
+   90 s / 1 GiB (4.59 s, 110,600,192-byte peak). Next: stale constant-lane
+   selector negative witnesses and remaining backend correctness red.
+   Production verifier/GC semantics unchanged.
 
    Claims:
    - Complete pytest overlapping worker growth fixture: Codex, Linux x86_64, 2026-11-25T17:38Z, area selfhost (tests/python/test_worker_resource_plan.py only)
-   - #20 indexed lifecycle negative witness authoritative fixture values: Codex, Linux x86-64, 2026-11-25T17:40Z, area backend
    - #20 runtime oracle exact checkout CLI entry: Codex, Linux, 2026-11-25T17:42Z, area runtime-codegen (test_runtime_oracle_diff only)
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
