@@ -1231,6 +1231,15 @@ in the relevant section or issue and removes the entry.
    `pcc/runtime/py`. Earlier arms changed the runtime, the backend (keyed
    by its sources) or IR passes (after the cache boundary), so their
    results stand.
+   J2 checks (Claude, 2026-11-26; details in
+   [the design note](design/python-borrowed-local-operands.md)): slot calls
+   consume no input; the exact-list guard memoizes on the borrowed registry,
+   so borrowed locals need their own; pcc has no frame write-back (locals,
+   vars, exec, settrace, _getframe all fail closed); a may-park dynamic call
+   in a spawned function fails to compile. Found: pcc does not raise
+   "generator already executing" (self re-entry recurses into
+   RecursionError; four threads drive one generator without a ValueError),
+   a correctness bug independent of J2 that blocks J2's step 2.
    J2. Fewer root stores and release chains in code generation: 104 of the
        304 calls per request clear a slot that is already empty.
    J3. TaskScope (5x CPython), `time.perf_counter` (7x), `str.encode` (5x).

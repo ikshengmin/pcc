@@ -85,6 +85,39 @@ callbacks run at the same points. The local's slot is already an owning root,
 so the cycle collector sees the same counts. CPython 3.14 relies on the same
 argument when its compiler loads a local as a borrowed reference.
 
+## Checked before implementation (2026-11-26)
+
+1. Consumption. `_slot_call_runtime_call` loads each operand from its root and
+   passes the raw value; the caller keeps the root until after the call and
+   clears it itself, so no slot-call operation consumes an input, and the
+   protocol already accepts borrowed roots (unchanged parameters) for every
+   operation: `_release_slot_call_roots` and the cleanup blocks skip them,
+   a method receiver is copied instead of moved, `py_list_append_from_slots`
+   receives a borrowed mask. One consumer treats the registry as more than
+   that: `_stable_parameter_exact_list_guard` (list_method_lowering.py)
+   memoizes "is an exact list" for the rest of the function when the
+   receiver is registered as borrowed, which holds only for a parameter that
+   is never rebound. A borrowed local must therefore not enter
+   `_slot_call_borrowed_operands` as it is; it gets its own registry (or the
+   guard checks parameter-ness itself), and a test rebinds a local from a
+   list to another type after a guarded append.
+2. Frame writes. Compiled with host pcc0 and run without libpython: a
+   function that writes `locals()`, writes `vars()`, calls `sys.settrace`
+   or `sys._getframe` is unavailable (NotImplementedError at its call);
+   `exec` is not defined (NameError). CPython 3.15 does write a caller's
+   local through `sys._getframe(1).f_locals`. A test pins that pcc has none
+   of these, and names this note: adding any of them requires a gate here.
+3. Generator re-entrance. pcc does not raise "generator already executing":
+   a generator that calls `next` on itself recursed into RecursionError, and
+   four threads driving one generator never raised ValueError (CPython does
+   both). Step 2 (resumable bodies) waits until that is fixed; step 1 does
+   not depend on it.
+4. Dynamic calls that park. `vt.spawn` of a function whose dynamically
+   dispatched method may park fails to compile ("cannot prove a resumable
+   parking boundary ... unresolved user-method may park"), unless the worker
+   stays on a pinned carrier, where a park blocks the native stack and every
+   operand stays valid.
+
 ## Tests before the change
 
 * IR-shape tests: no root copy and no clear for a qualifying operand; the
