@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from . import self_backend_aarch64_semantics as sem
 from .arm64_encode import (
-    EMITTED_INSTRUCTION_MOVE, EMITTED_INSTRUCTION_SCALAR,
+    EMITTED_INSTRUCTION_MOVE, EMITTED_INSTRUCTION_SCALAR, EMITTED_INSTRUCTION_UNSCALED,
+    encode_emitted_load_store_parts,
     STRUCTURED_FIXUP_BRANCH19, STRUCTURED_FIXUP_BRANCH26,
     encode_emitted_move_register_parts, encode_emitted_compare_register_parts,
     encode_emitted_addsub_register_parts, EncodeError,
@@ -663,6 +664,64 @@ def fold_mov_arith_self_update(
     return _run(fragments, semantics, span, 8)
 
 
+def fold_sign_extending_load(fragments, semantics, span):
+    """``ldr``/``ldur wN, [xB{, #imm}]`` then ``sxtw xM, wN`` -> ``ldrsw xM``.
+
+    ``ldur`` becomes ``ldursw``. With M == N both leave the same register
+    state; otherwise wN must be a scratch that is dead after the pair. Only an
+    x base with a plain immediate qualifies, as in the text counterpart
+    (``_fold_sign_extending_load``). Kept outside the frozen ``_run``.
+    """
+    p = _Pass(fragments, semantics, span)
+    try:
+        changed = False
+        index = 0
+        while index < len(p.ids):
+            a = p.rid(index)
+            b = p.rid(index + 1) if index + 1 < len(p.ids) else -1
+            replacement = -2
+            load_op = p.op(a)
+            if b >= 0 and load_op in ("ldr", "ldur") and p.op(b) == "sxtw":
+                t = p.tokens(a)
+                narrow, wide, source = p.register(a, 0), p.register(b, 0), p.register(b, 1)
+                if (narrow >= 0 and wide >= 0 and source == narrow
+                        and _class(narrow) == "w" and _class(wide) == "x"
+                        and len(p.tokens(b)) == 2
+                        and len(t) in (3, 4) and t[1].first == sem.TOKEN_ADDRESS
+                        and t[1].third == len(t) - 2
+                        and t[1].second in (sem.ADDRESS_BASE, sem.ADDRESS_OFFSET)
+                        and t[2].first == sem.TOKEN_REGISTER and _class(t[2].second) == "x"
+                        and (len(t) == 3 or t[3].first == sem.TOKEN_IMMEDIATE)
+                        and (_number(narrow) == _number(wide)
+                             or (_scratch(narrow) and p.dead(index + 2, narrow, True)))):
+                    signed_op = "ldrsw" if load_op == "ldr" else "ldursw"
+                    immediate = t[3].second if len(t) == 4 else 0
+                    try:
+                        word = encode_emitted_load_store_parts(
+                            signed_op, _spelling(wide), _spelling(t[2].second), immediate,
+                        )
+                    except EncodeError:
+                        word = -1
+                    if word >= 0:
+                        family = (EMITTED_INSTRUCTION_UNSCALED if signed_op == "ldursw"
+                                  else EMITTED_INSTRUCTION_SCALAR)
+                        replacement = p.new(signed_op, [_reg(wide)] + list(t[1:]), word, family)
+            if replacement >= 0:
+                p.output.append(replacement)
+                changed = True
+                index += 2
+            else:
+                p.output.append(a)
+                index += 1
+        if not changed and fragments.spans.length(span) == len(p.ids):
+            result = fragments.new_fragment()
+            fragments.extend_fragment(result, span)
+            return result
+        return p.finish()
+    finally:
+        p.close()
+
+
 def fold_scratch_def_into_move(
     fragments: AArch64EmissionFragments, semantics: sem.AArch64InstructionSemantics,
     span: CompilerInt2,
@@ -803,6 +862,11 @@ def _run_aarch64_typed_peepholes(
         span = _run_owned_move_matchers(fragments, semantics, span, 14) if owned_stack_windows and _owned_timer_is_canonical(phase_timing) else drop_dead_cset_branch_stores(fragments, semantics, span)
         if phase_timing is not None:
             phase_timing.complete_backend_finalize("typed_drop_dead_cset_branch_stores", started)
+        if phase_timing is not None:
+            started = phase_timing.begin_backend_finalize("typed_fold_sign_extending_load")
+        span = fold_sign_extending_load(fragments, semantics, span)
+        if phase_timing is not None:
+            phase_timing.complete_backend_finalize("typed_fold_sign_extending_load", started)
         return span
     finally:
         if span_owner_transfer is not None:

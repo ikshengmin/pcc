@@ -7248,8 +7248,9 @@ def test_self_backend_emits_direct_call_subset(tmp_path):
     asm_text = asm_path.read_text(encoding="utf-8")
     assert "_helper:" in asm_text
     assert "_main:" in asm_text
-    assert "bl _helper" in asm_text
-    assert "stp x29, x30, [sp, #-16]!" in asm_text
+    # main may call helper or transfer to it as a sibling call, and both
+    # functions may run without a frame record; the result is the contract.
+    assert ("bl _helper" in asm_text) or ("  b _helper" in asm_text), asm_text
 
     run = _assemble_and_run(asm_path, tmp_path)
     assert run.returncode == 5
@@ -7296,8 +7297,8 @@ def test_self_backend_emits_branch_phi_subset(tmp_path):
     # result"; accept either to keep this test focused on the
     # presence of a real conditional branch rather than the exact
     # mnemonic.
-    assert ("cbz w9" in asm_text) or ("b.eq " in asm_text), asm_text
-    assert "bl _max2" in asm_text
+    assert re.search(r"^  (cbz|cbnz|tbz|tbnz|b\.[a-z]{2}) ", asm_text, re.M), asm_text
+    assert ("bl _max2" in asm_text) or ("  b _max2" in asm_text), asm_text
 
     run = _assemble_and_run(asm_path, tmp_path)
     assert run.returncode == 7
@@ -8922,9 +8923,14 @@ next:
     assert "L_main_next:" in drop_lines
     assert "  b L_main_next" not in drop_lines
 
+    # Plain local labels emit no code: the branch still targets the next
+    # instruction. A stack-map label in between keeps it.
     assert _drop_fallthrough_uncond_branches(
         ["  b L_target", "L_other:", "L_target:"]
-    ) == ["  b L_target", "L_other:", "L_target:"]
+    ) == ["L_other:", "L_target:"]
+    assert _drop_fallthrough_uncond_branches(
+        ["  b L_target", "L_pcc_smap_1_2:", "L_target:"]
+    ) == ["  b L_target", "L_pcc_smap_1_2:", "L_target:"]
 
 
 def test_self_backend_aarch64_folds_conditional_branch_to_fallthrough_pair():

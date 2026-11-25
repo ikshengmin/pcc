@@ -188,16 +188,60 @@ def fold_cond_branch_to_fallthrough_records(
 
 
 def drop_fallthrough_uncond_branches_records(ctx, records):
+    # Empty events and plain local labels emit no code; stack-map labels,
+    # function labels, directives and instructions end the search.
     out = []
     for index, record_id in enumerate(records):
         branch = _branch(ctx, record_id)
         if branch is not None and branch[0] == "b" and ctx.symbol(branch[1]).startswith("L_"):
             following = index + 1
-            while following < len(records) and ctx.is_empty(records[following]):
-                following += 1
-            if following < len(records) and _local(ctx, records[following]) == branch[1]:
+            found = False
+            scanning = True
+            while scanning and following < len(records):
+                if ctx.is_empty(records[following]):
+                    following += 1
+                    continue
+                label = _local(ctx, records[following])
+                if label == branch[1]:
+                    found = True
+                    scanning = False
+                elif label is None or ctx.symbol(label).startswith("L_pcc_smap"):
+                    scanning = False
+                else:
+                    following += 1
+            if found:
                 continue
         out.append(record_id)
+    return out
+
+
+def _is_call(opcode):
+    return opcode == "bl" or opcode == "blr" or opcode.startswith("blra")
+
+
+def drop_loop_separator_nops_records(ctx, records):
+    """Typed ``_drop_loop_separator_nops``: the loop record's ``nop`` goes
+    when an ordinary non-call instruction precedes it."""
+    out = []
+    previous_is_instruction = False
+    for index, record_id in enumerate(records):
+        if ctx.is_empty(record_id):
+            out.append(record_id)
+            continue
+        label = ctx.label(record_id)
+        opcode = "" if label is not None or ctx.is_directive(record_id) else ctx.opcode(record_id)
+        if opcode == "nop" and previous_is_instruction:
+            following = index + 1
+            while following < len(records) and ctx.is_empty(records[following]):
+                following += 1
+            if following < len(records):
+                next_label = ctx.label(records[following])
+                if next_label is not None:
+                    name = ctx.symbol(next_label)
+                    if name.startswith("L_pcc_smap_") and not name.startswith("L_pcc_smap_end_"):
+                        continue
+        out.append(record_id)
+        previous_is_instruction = opcode != "" and not _is_call(opcode)
     return out
 
 
@@ -247,6 +291,12 @@ def drop_fallthrough_uncond_branches(fragments, semantics, span):
     return fragments.drop_fallthrough_branches(span)
 
 
+def drop_loop_separator_nops(fragments, semantics, span):
+    from .self_backend_aarch64_typed_pass_context import TypedPassContext
+    ctx = TypedPassContext(fragments, semantics)
+    return ctx.write_span(drop_loop_separator_nops_records(ctx, ctx.read_span(span)))
+
+
 def drop_unreferenced_empty_local_labels(fragments, semantics, span, metadata_labels=()):
     from .self_backend_aarch64_typed_pass_context import TypedPassContext
     ctx = TypedPassContext(fragments, semantics)
@@ -259,7 +309,8 @@ def run_aarch64_typed_cfg_passes(
     fragments, semantics, span, metadata_labels, cold_fallthrough_edges,
     *, phase_timing=None,
 ):
-    """Final six passes in the original order, over the whole module.
+    """Final six passes in the original order, over the whole module, then
+    the loop-separator ``nop`` cleanup, which needs the final instructions.
 
     Proof inputs retain their established module-union ownership and ordering.
     Missing names cannot match emitted labels; do not mutate the symbol table
@@ -317,4 +368,9 @@ def run_aarch64_typed_cfg_passes(
     result = pair_adjacent_aarch64_64bit_memory_ops(fragments, semantics, result, enabled=True)
     if phase_timing is not None:
         phase_timing.complete_backend_finalize("typed_pair_adjacent_aarch64_64bit_memory_ops", started)
+    if phase_timing is not None:
+        started = phase_timing.begin_backend_finalize("typed_drop_loop_separator_nops")
+    result = drop_loop_separator_nops(fragments, semantics, result)
+    if phase_timing is not None:
+        phase_timing.complete_backend_finalize("typed_drop_loop_separator_nops", started)
     return result

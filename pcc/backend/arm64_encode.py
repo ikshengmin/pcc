@@ -1008,7 +1008,8 @@ def encode_emitted_load_store_parts(
         "ldrh",
         "strh",
     )
-    if not unscaled and not scaled:
+    signed_word = mnemonic in ("ldrsw", "ldursw")
+    if not unscaled and not scaled and not signed_word:
         raise EncodeError("unsupported emitted load/store mnemonic " + mnemonic)
     register_code = _emitted_register_code(register)
     base_code = _emitted_register_code(base)
@@ -1016,6 +1017,13 @@ def encode_emitted_load_store_parts(
         raise EncodeError("bad emitted load/store register " + register)
     if base_code < 0 or base_code >> 6 != _EMITTED_REG_X:
         raise EncodeError("bad emitted load/store base " + base)
+    if signed_word:
+        # A 32-bit load sign-extended into an X register: size 2, opc 2.
+        if register_code >> 6 != _EMITTED_REG_X:
+            raise EncodeError(mnemonic + " requires an x register")
+        if mnemonic == "ldursw":
+            return _enc_ldst_unscaled(2, 2, register_code & 63, base_code & 63, immediate)
+        return _enc_ldst_unsigned(2, 2, register_code & 63, base_code & 63, immediate)
 
     register_kind = register_code >> 6
     if register_kind == _EMITTED_REG_Q:
@@ -3428,6 +3436,17 @@ def _encode_one(line, at, labels, resolve_branch, relocations, undefined,
         load = 1 if mn == "ldur" else 0
         # SIMD/FP unscaled load/store is the integer encoding with V=1.
         return _enc_ldst_unscaled(size, load, rt, base, imm) | (1 << 26)
+
+    if mn in ("ldrsw", "ldursw"):
+        rt, t64 = _reg(ops[0])
+        if not t64:
+            raise EncodeError(f"{mn} requires an x register: {line!r}")
+        base, imm, mode = _mem(ops[1])
+        if mode:
+            raise EncodeError(f"{mn} with writeback not in the proven subset")
+        if mn == "ldursw":
+            return _enc_ldst_unscaled(2, 2, rt, base, imm)
+        return _enc_ldst_unsigned(2, 2, rt, base, imm)
 
     if mn in ("ldur", "stur", "ldurb", "sturb", "ldurh", "sturh"):
         rt, t64 = _reg(ops[0])

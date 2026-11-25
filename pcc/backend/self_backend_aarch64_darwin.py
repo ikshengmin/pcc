@@ -1302,6 +1302,7 @@ def _emit_prepared_aarch64_darwin_lines_active(
         lines = _fold_forwarded_cset_branch(lines)
         lines = _fold_cset_zero_branch(lines)
         lines = _drop_dead_cset_branch_stores(lines)
+        lines = _fold_sign_extending_load(lines)
         metadata_labels: set[str] = set()
         for func in functions:
             plan = stack_map_plans[func.name]
@@ -1326,6 +1327,9 @@ def _emit_prepared_aarch64_darwin_lines_active(
     # but before compact-unwind sizing.  Even with optimization disabled this
     # finalizer removes the source-semantics barrier pseudo-directives.
     lines = pair_adjacent_aarch64_64bit_memory_ops(lines, enabled=optimize)
+    if optimize:
+        # Last: needs the final instruction before each loop record label.
+        lines = _drop_loop_separator_nops(lines)
     direct_instruction_records = None
     direct_instruction_symbols = None
     if direct_instruction_capture:
@@ -2310,6 +2314,64 @@ def _rename_destination(line: str, reg: str, new_reg: str) -> str | None:
     return "  " + opcode + " " + new_reg + ", " + tail
 
 
+def _register_number(text: str, prefix: str) -> int:
+    """``prefix`` + decimal register number (``w3`` -> 3), else -1."""
+    if len(text) < 2 or not text.startswith(prefix) or not text[1:].isdigit():
+        return -1
+    return int(text[1:])
+
+
+def _plain_memory_operand(text: str) -> bool:
+    """``[xB]`` or ``[xB, #imm]`` with a decimal immediate, nothing else."""
+    if not text.startswith("[x") or not text.endswith("]"):
+        return False
+    inner = text[1:-1]
+    base, sep, offset = inner.partition(", ")
+    if _register_number(base, "x") < 0:
+        return False
+    if not sep:
+        return True
+    if not offset.startswith("#"):
+        return False
+    digits = offset[2:] if offset.startswith("#-") else offset[1:]
+    return digits.isdigit()
+
+
+def _fold_sign_extending_load(lines: list[str]) -> list[str]:
+    """``ldr wN, [xB{, #imm}]`` + ``sxtw xM, wN`` -> ``ldrsw xM, [...]``.
+
+    ``ldur`` becomes ``ldursw``. With M == N the register state is the same;
+    otherwise wN must be a scratch register dead after the pair. The typed
+    counterpart is ``fold_sign_extending_load``; both admit only an x base
+    with a plain immediate (no relocated offset, no writeback, no sp)."""
+    out: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if index + 1 < len(lines) and line.startswith(("  ldr w", "  ldur w")):
+            opcode, _sep, rest = line[2:].partition(" ")
+            narrow_text, _sep2, memory = rest.partition(", ")
+            narrow = _register_number(narrow_text, "w")
+            following = lines[index + 1]
+            if narrow >= 0 and _plain_memory_operand(memory) and following.startswith("  sxtw x"):
+                wide_text, _sep3, source_text = following[len("  sxtw "):].partition(", ")
+                wide = _register_number(wide_text, "x")
+                if wide >= 0 and source_text == narrow_text and (
+                    narrow == wide
+                    or (
+                        _is_aarch64_scratch_reg(narrow_text)
+                        and _scratch_dead_after(lines, index + 2, narrow_text)
+                    )
+                ):
+                    signed = "ldrsw" if opcode == "ldr" else "ldursw"
+                    out.append("  " + signed + " " + wide_text + ", " + memory)
+                    index += 2
+                    continue
+        out.append(line)
+        index += 1
+    return out
+
+
 def _fold_scratch_def_into_move(lines: list[str]) -> list[str]:
     """``op x9, ...`` + ``mov xD, x9`` -> ``op xD, ...`` when x9 is dead after.
 
@@ -2702,6 +2764,12 @@ def _thread_trampoline_branches(
 
 
 def _drop_fallthrough_uncond_branches(lines: list[str]) -> list[str]:
+    """Drop ``b L_x`` when ``L_x`` labels the next instruction.
+
+    Blank lines and plain local labels between the branch and ``L_x`` emit no
+    code, so they do not block. Stack-map labels (their PCs must stay apart),
+    function labels, directives and instructions do.
+    """
     out: list[str] = []
     index = 0
     while index < len(lines):
@@ -2711,12 +2779,66 @@ def _drop_fallthrough_uncond_branches(lines: list[str]) -> list[str]:
             index += 1
             continue
         j = index + 1
-        while j < len(lines) and not lines[j]:
-            j += 1
-        if j < len(lines) and _local_label_name(lines[j]) == target:
+        found = False
+        scanning = True
+        while scanning and j < len(lines):
+            if not lines[j]:
+                j += 1
+                continue
+            label = _local_label_name(lines[j])
+            if label == target:
+                found = True
+                scanning = False
+            elif label is None or label.startswith("L_pcc_smap"):
+                scanning = False
+            else:
+                j += 1
+        if found:
             index += 1
             continue
         out.append(lines[index])
+        index += 1
+    return out
+
+
+def _is_call_mnemonic(mnemonic: str) -> bool:
+    return mnemonic == "bl" or mnemonic == "blr" or mnemonic.startswith("blra")
+
+
+def _drop_loop_separator_nops(lines: list[str]) -> list[str]:
+    """Drop a loop safepoint's separator ``nop`` after an ordinary instruction.
+
+    The stack-map planner emits ``nop`` before each loop record label so the
+    label never shares a PC with an earlier record, such as a call's return
+    address. When the line before the ``nop`` is an instruction other than a
+    call, the label already has its own PC, and the ``nop`` would only run on
+    every backedge. After a label, a directive or a call it stays. Runs after
+    every instruction-deleting pass; the stack-map encoder still rejects any
+    two records at one PC.
+    """
+    out: list[str] = []
+    previous_is_instruction = False
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if line == "  nop" and previous_is_instruction:
+            j = index + 1
+            while j < len(lines) and not lines[j]:
+                j += 1
+            if (
+                j < len(lines)
+                and lines[j].startswith("L_pcc_smap_")
+                and not lines[j].startswith("L_pcc_smap_end_")
+                and lines[j].endswith(":")
+            ):
+                index += 1
+                continue
+        out.append(line)
+        if line:
+            previous_is_instruction = False
+            if line.startswith("  ") and not line.startswith("  ."):
+                mnemonic = line[2:].split(" ", 1)[0]
+                previous_is_instruction = not _is_call_mnemonic(mnemonic)
         index += 1
     return out
 

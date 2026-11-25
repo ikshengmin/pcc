@@ -55,7 +55,8 @@ def test_rejected_operand_preserves_populated_fragment():
         for mnemonic, register, base, offset in (
             ("ldur", "x1", "x29", -300),
             ("ldurh", "x1", "x29", -8),
-            ("ldursw", "x1", "x29", -8),
+            # ldursw is encodable since the sign-extending load fold.
+            ("ldursh", "x1", "x29", -8),
             ("stur", "w1", "x31", -8),
         ):
             with pytest.raises(EncodeError):
@@ -260,7 +261,8 @@ def test_typed_fallthrough_keeps_calls_conditions_aliases_and_nonlocal_targets()
         owner.append_branch(span, "cbnz", "L_nonzero", "w3")
         owner.append_label(span, "L_nonzero")
         owner.append_branch(span, "b", "L_target")
-        owner.append_label(span, "L_alias")
+        # A plain L_ alias would be crossed; a stack-map label blocks.
+        owner.append_label(span, "L_pcc_smap_alias")
         owner.append_label(span, "L_target")
         owner.append_branch(span, "b", "_global")
         owner.append_label(span, "_global")

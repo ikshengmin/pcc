@@ -1448,6 +1448,44 @@ in the relevant section or issue and removes the entry.
    overstated it: it counts every duplicated epilogue. The 83k-instruction
    gap sits in function bodies: register copies, immediates moved before
    use, `sxtw`, `nop`, unfused compares and unfolded addresses.
+   (c) Sign-extending loads (Claude, 2026-11-26): pcc-Python's `load_i32`
+   returns a 64-bit integer, so runtime IR is full of `load i32` + `sext`
+   pairs, emitted as `ldr wN` + `sxtw xM, wN`. The typed peephole
+   `fold_sign_extending_load` (outside the frozen `_run`, phase
+   `typed_fold_sign_extending_load`) and its regex-free text counterpart
+   `_fold_sign_extending_load` turn the pair into one `ldrsw xM` (`ldursw`
+   for an unscaled offset) when the base is an x register with a plain
+   immediate and either M == N or wN is a dead scratch; the encoder gains
+   `ldrsw`/`ldursw` (words checked against clang 20). Platforms: AArch64
+   Darwin and Linux (the Linux emitter calls the Darwin one). x86-64 has
+   the same pair (`mov r10d, [m]` + `movsxd r10, r10d`, foldable into
+   `movsxd r10, dword [m]`) in its own emitter; not changed yet. Measured
+   with `instr` (load 3.9 on 12 cores, three runs each, arms p1-base at
+   e7374ffc0 and p1-sxtw): 267981 -> 262566 instructions per request
+   (-2.02%, run spread at most 0.51%), cycles -8.68%. Test:
+   `tests/python/test_aarch64_sign_extending_load.py`. Rebuilt as a
+   standalone pass (arm p1-sxtw2) and measured again with (d): 268555 ->
+   262712 (-2.18%).
+   (d) Loop-separator `nop` and branches over empty labels (Claude,
+   2026-11-26). The stack-map planner emits `nop` before every loop
+   safepoint label so the label never shares a PC with an earlier record
+   (a call's return address); it ran on every backedge, 1.5% of the self
+   runtime's executed instructions. `_drop_loop_separator_nops` (text) and
+   `drop_loop_separator_nops` (typed, phase `typed_drop_loop_separator_nops`,
+   the last pass) drop it when the previous instruction is not a call and
+   not a label or directive; the stack-map encoder still rejects two records
+   at one PC. The fallthrough-branch drop (text, typed records and the
+   native fragment rewrite) now also crosses plain `L_` labels between
+   `b L_x` and `L_x:`; stack-map labels, function labels, directives and
+   instructions still block. Platforms: AArch64 Darwin and Linux; the
+   x86-64 planner emits its one-byte separator under the same rule and
+   needs the same check. Measured with `instr` (load 3.2, three runs each):
+   262712 (p1-sxtw2) -> 259131 (p1-sep), -1.36%; with (c), 268555 ->
+   259131, -3.51% instructions per request against e7374ffc0. Cycles moved
+   +1.5%, inside the loaded host's noise. Test:
+   `tests/python/test_aarch64_label_run_fallthrough_and_loop_separator.py`
+   (text, typed and native agree; native bytes equal the assembled text;
+   a loop program runs).
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2
@@ -1461,9 +1499,9 @@ in the relevant section or issue and removes the entry.
    compares +3352 (6.0%), unconditional branches +3023 (5.4%), `nop` +2726
    (4.9%), stores, immediates, conditional branches, global addresses and
    stack slots 3-4% each; clang executes more loads and libSystem code.
-   Order: `sxtw` folding and the loop-separator `nop` (together about 15%,
-   peephole-sized), then register copies, then frames; signing waits on
-   the maintainer.
+   Order: `sxtw` folding and the loop-separator `nop` (done, (c) and (d):
+   -3.51% instructions), then register copies, then frames; signing waits
+   on the maintainer.
    J2. Fewer root stores and release chains in code generation: 104 of the
        304 calls per request clear a slot that is already empty.
    J3. TaskScope (5x CPython), `time.perf_counter` (7x), `str.encode` (5x).
@@ -1508,8 +1546,13 @@ in the relevant section or issue and removes the entry.
    HEAD and on `shenming/master` snapshots):
    `tests/python/test_local_frame_arena.py`, 8 nodes (models of the
    removed frame protocol), and
-   `tests/python/test_aarch64_record_lane_bindings.py::test_bound_record_consumers_match_assembly_and_native_sections[addresses-*]`,
-   4 nodes (`fallback_instruction_count` is 0; the test expects 1).
+   `tests/python/test_typed_list_iteration_ownership.py`, 4 nodes: the
+   allocator's live bytes grow linearly with iterations (about 23.5 bytes
+   per iteration; `Item(7)` alone about 7), in 8 KiB doubling steps, as if
+   a global pointer array grew per GC-tracked allocation; reproduced with
+   arm p1-base (e7374ffc0). Stale expectations in the backend test set
+   (record lanes, worker phases, codec preflight, link lifetime, typed
+   C ABI, structured inventory, suffix scratch) were updated on 2026-11-26.
 
    Claims:
    - P0 unit 1: self AArch64 register copies and immediate operands: Claude, macOS, 2026-11-25T21:10Z, area backend (AArch64 selection, register allocation and their tests; native and bootstrap gates authorized by the user on 2026-11-26)

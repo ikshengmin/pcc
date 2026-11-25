@@ -366,12 +366,14 @@ _TIMED_TYPED_PASSES = (
     "fold_forwarded_cset_branch",
     "fold_cset_zero_branch",
     "drop_dead_cset_branch_stores",
+    "fold_sign_extending_load",
     "thread_trampoline_branches",
     "fold_cond_branch_to_fallthrough",
     "drop_fallthrough_uncond_branches",
     "drop_unreferenced_empty_local_labels",
     "elide_dead_tlv_resolver_saves",
     "pair_adjacent_aarch64_64bit_memory_ops",
+    "drop_loop_separator_nops",
 )
 
 
@@ -398,7 +400,10 @@ def test_typed_pass_failure_retains_original_error_and_unclosed_begin(monkeypatc
         return run
 
     for index, name in enumerate(_TIMED_TYPED_PASSES):
-        owner = peepholes if index < 14 else cfg if index < 18 else tlv if index == 18 else pair
+        # Fifteen peephole-module passes, four CFG passes, the TLV and
+        # pairing passes, then the CFG module's loop-separator cleanup.
+        owner = (peepholes if index < 15 else cfg if index < 19 else tlv if index == 19
+                 else pair if index == 20 else cfg)
         monkeypatch.setattr(owner, name, operation(name))
     timer = timing.ModulePhaseTiming("failed.module")
     with pytest.raises(RuntimeError) as caught:
@@ -415,7 +420,7 @@ def test_typed_pass_failure_retains_original_error_and_unclosed_begin(monkeypatc
             if line.startswith("pcc coarse phase ")]
     phases = ["typed_peephole_validate"]
     for index, name in enumerate(calls):
-        if index == 14:
+        if index == 15:
             phases.append("typed_cfg_proofs")
         phases.append("typed_" + name)
     expected = [(phase, event) for phase in phases[:-1] for event in ("begin", "complete")]

@@ -453,7 +453,9 @@ def test_fourteen_noop_passes_do_not_retain_fourteen_record_trees(count):
                     result = run(owner, semantics, result, mode)
             assert len(owner.spans.nodes) - nodes == (0 if snapshot or not before else 14 * 3)
             assert len(owner.spans.runs) - runs == (0 if snapshot else 14 * len(before))
-            assert len(owner.spans.spans) == headers + 56
+            # Four span entries per noop pass: the frozen fourteen, plus the
+            # driver's fifteenth pass, fold_sign_extending_load.
+            assert len(owner.spans.spans) == headers + (60 if snapshot else 56)
             assert _ids(owner, result) == _ids(owner, source) == before
             assert owner.spans.projection_count == 0
             outcomes.append(before)

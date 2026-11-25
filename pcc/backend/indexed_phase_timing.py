@@ -74,6 +74,7 @@ _AARCH64_TYPED_PHASES = (
     "typed_fold_forwarded_cset_branch",
     "typed_fold_cset_zero_branch",
     "typed_drop_dead_cset_branch_stores",
+    "typed_fold_sign_extending_load",
     "typed_cfg_proofs",
     "typed_thread_trampoline_branches",
     "typed_fold_cond_branch_to_fallthrough",
@@ -81,6 +82,7 @@ _AARCH64_TYPED_PHASES = (
     "typed_drop_unreferenced_empty_local_labels",
     "typed_elide_dead_tlv_resolver_saves",
     "typed_pair_adjacent_aarch64_64bit_memory_ops",
+    "typed_drop_loop_separator_nops",
     "typed_publish",
 )
 

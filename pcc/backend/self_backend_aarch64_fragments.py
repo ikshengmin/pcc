@@ -241,11 +241,13 @@ class AArch64EmissionFragments:
         )
 
     def drop_fallthrough_branches(self, fragment: CompilerInt2) -> CompilerInt2:
-        """Drop only B to the next matching L_ label, skipping EMPTY events.
+        """Drop only B to an L_ label that labels the next instruction.
 
-        Every skipped empty event is retained in order. Directives, barriers,
-        aliases and instructions block adjacency. The input must contain the
-        complete module event sequence, never an instruction-only projection.
+        Empty events and plain L_ labels between the branch and its target
+        emit no code; every event is retained in order. Stack-map labels,
+        function labels, directives, barriers and instructions block. The
+        input must contain the complete module event sequence, never an
+        instruction-only projection.
         """
         self._require_open()
         source = CompilerIntArena()
@@ -285,14 +287,34 @@ class AArch64EmissionFragments:
                         ):
                             break
                         next_index += 1
-                    if next_index < count:
-                        following: CompilerInt4 = self.records.get4_unchecked(source.get_unchecked(next_index))
-                        drop = (
+                    probe = next_index
+                    scanning = self.symbol_names[pending.fourth].startswith("L_")
+                    while scanning and probe < count:
+                        probe_id = source.get_unchecked(probe)
+                        if probe_id >= len(self.records) // 4:
+                            raise EncodeError("emission fragment record ID is invalid")
+                        following: CompilerInt4 = self.records.get4_unchecked(probe_id)
+                        if (
+                            following.second == EMISSION_RECORD_EMPTY
+                            and following.first == 0 and following.third == 0 and following.fourth == -1
+                        ):
+                            probe += 1
+                        elif (
                             following.second == EMISSION_RECORD_LABEL
-                            and following.first == pending.fourth
                             and following.third == 0 and following.fourth == -1
-                            and self.symbol_names[pending.fourth].startswith("L_")
-                        )
+                            and 0 <= following.first < len(self.symbol_names)
+                        ):
+                            if following.first == pending.fourth:
+                                drop = True
+                                scanning = False
+                            else:
+                                name = self.symbol_names[following.first]
+                                if name.startswith("L_") and not name.startswith("L_pcc_smap"):
+                                    probe += 1
+                                else:
+                                    scanning = False
+                        else:
+                            scanning = False
                 if not drop:
                     kept.append(pending_id)
                 # Every skipped empty event is retained in order.

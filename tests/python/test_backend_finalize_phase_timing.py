@@ -30,12 +30,14 @@ TYPED_PHASES = (
     "typed_fold_scratch_def_into_move", "typed_fold_mov_mov_chain",
     "typed_fold_zero_test_branch", "typed_fold_forwarded_cset_branch",
     "typed_fold_cset_zero_branch", "typed_drop_dead_cset_branch_stores",
+    "typed_fold_sign_extending_load",
     "typed_cfg_proofs", "typed_thread_trampoline_branches",
     "typed_fold_cond_branch_to_fallthrough",
     "typed_drop_fallthrough_uncond_branches",
     "typed_drop_unreferenced_empty_local_labels",
     "typed_elide_dead_tlv_resolver_saves",
-    "typed_pair_adjacent_aarch64_64bit_memory_ops", "typed_publish",
+    "typed_pair_adjacent_aarch64_64bit_memory_ops",
+    "typed_drop_loop_separator_nops", "typed_publish",
 )
 TARGETS = ("arm64-apple-darwin23.6.0", "aarch64-unknown-linux-gnu")
 
