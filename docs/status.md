@@ -512,6 +512,7 @@ in the relevant section or issue and removes the entry.
    No assembler/symbol behavior changed.
 
    Claims:
+   - Complete pytest overlapping worker growth fixture: Codex, Linux x86_64, 2026-11-25T17:38Z, area selfhost (tests/python/test_worker_resource_plan.py only)
    - #20 owned Windows reader adapter import closure: Codex, Linux, 2026-11-25T17:39Z, area selfhost (worker_resource_reader test only)
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
