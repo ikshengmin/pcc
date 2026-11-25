@@ -1123,6 +1123,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Stage2 x86 register-copy retarget and forward shared scan: Codex, Linux x86-64, 2026-11-25T17:04Z, area backend
+   - Stage2 class-only preload wire and ordering: Codex, Linux, 2026-11-25T17:06Z, area selfhost (pipeline/type_infer preload only)
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
