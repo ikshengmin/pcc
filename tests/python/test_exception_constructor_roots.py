@@ -145,6 +145,13 @@ class _Memory:
         value.flags |= 64
         self.pin_metric += 1
 
+    def take_slot(self, slots):
+        # pcc_gc_take_slot: transfer the owner; nothing pinned (item 2 (d)).
+        value = slots.fields[0]
+        slots.fields[0] = None
+        assert value is None or not isinstance(value, _Object) or value.alive
+        return value
+
     def take(self, slots, prior):
         value = slots.fields[0]
         slots.fields[0] = None
@@ -184,6 +191,7 @@ class _Memory:
             "pcc_gc_note_write_barrier": lambda _owner, _value: self.gc("barrier"),
             "pcc_py_gc_minor_graph_lock": lock, "pcc_py_gc_minor_graph_unlock": unlock,
             "pcc_gc_pin": self.pin, "pcc_gc_take_pinned_slot": self.take,
+            "pcc_gc_take_slot": self.take_slot,
             "py_incref": self.incref, "py_decref": self.decref,
             "pcc_diagnostics_runtime_log_event_code": lambda *_args: self.gc("log"),
         }

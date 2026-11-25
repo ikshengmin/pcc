@@ -28,7 +28,7 @@ def test_module_creators_publish_new_results_before_parking(tmp_path, monkeypatc
         body = _ir_body(text, 'py_sys_modules_find')
         _assert_new_is_published(body, 'py_dict_get')
         finish = _ir_body(text, 'py_sys_modules_owner_finish')
-        transfer = finish.index('@pcc_gc_take_pinned_slot(')
+        transfer = finish.index('@pcc_gc_take_slot(')
         assert finish.rfind('@pcc_gc_frame_leave(') < transfer
         assert not re.search(r'\bcall\b', finish[finish.index('\n', transfer):])
         return

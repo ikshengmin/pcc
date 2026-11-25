@@ -42,6 +42,7 @@ class _BytesMemory:
             "pcc_gc_scheduler_root_unregister_handle": self.unregister,
             "pcc_gc_pin": self.pin, "pcc_gc_unpin": self.unpin,
             "pcc_gc_take_pinned_slot": self.take,
+            "pcc_gc_take_slot": self.take_slot,
             "pcc_py_gc_minor_graph_lock": self.lock,
             "pcc_py_gc_minor_graph_unlock": self.unlock,
             "pcc_gc_foreign_lease_acquire": self.acquire,
@@ -159,6 +160,12 @@ class _BytesMemory:
         self.unpin(value)
         if value is not None:
             value.flags |= prior & abi.PY_FLAG_GC_PINNED
+        return value
+
+    def take_slot(self, slot):
+        # pcc_gc_take_slot: transfer the owner; nothing pinned (item 2 (d)).
+        value = self.read(slot, 0)
+        self.write(slot, 0, None)
         return value
 
     def decref(self, value):

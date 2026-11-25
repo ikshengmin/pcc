@@ -22,9 +22,9 @@ class BinaryMemory(Memory):
         self.pins = set()
         self.cleanup_error = False
         tree = ast.parse(PORT.read_text())
-        names = {'_set_hold_binary_operands', '_set_binary_owned', 'py_set_difference', '_set_constructor_drop', '_set_constructor_pin'}
+        names = {'_set_hold_binary_operands', '_set_binary_owned', 'py_set_difference', '_set_constructor_drop'}
         body = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
-        assert len(body) == 5
+        assert len(body) == 4
         for node in body:
             node.decorator_list = []
         constants = {node.targets[0].id: ast.literal_eval(node.value)
@@ -47,6 +47,7 @@ class BinaryMemory(Memory):
                        pcc_gc_frame_enter=self.frame_enter, pcc_gc_frame_leave=self.frame_leave,
                        pcc_gc_root_copy_borrowed_lease=self.copy,
                        pcc_gc_pin=self.pin, pcc_gc_take_pinned_slot=self.take,
+                       pcc_gc_take_slot=self.take_slot,
                        py_tls_exc_swap_slot=self.swap,
                        pcc_gc_store_root=self.drop,
                        pcc_platform_abort=lambda: pytest.fail('invalid set owner lease'))
@@ -67,9 +68,9 @@ class BinaryMemory(Memory):
 
     def frame_leave(self, base):
         self.collect('unregister')
+        # One collector: a registered value needs no pin at frame leave.
         for handle in self.frames.pop(base):
-            value = self.read(self.roots.pop(handle), 0)
-            assert value is None or value in self.pins
+            self.roots.pop(handle)
 
     def pin(self, value):
         assert value.alive
@@ -77,6 +78,15 @@ class BinaryMemory(Memory):
             value.leases += 1
             self.pins.add(value)
         value.fields[12] = 64
+
+    def take_slot(self, slot):
+        # pcc_gc_take_slot: transfer the owner; nothing pinned (item 2 (d)).
+        assert not self.frames and self.depth == 0
+        value = self.read(slot, 0)
+        self.write(slot, 0, None)
+        if value is not None:
+            assert value.alive and value.refs == 1
+        return value
 
     def take(self, slot, prior):
         assert not self.frames and self.depth == 0

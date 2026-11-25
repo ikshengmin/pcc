@@ -28,8 +28,6 @@ SITES = (
     ("py_coroutine.py", "py_coroutine_class", IMMORTAL),
     ("py_coroutine.py", "py_continuation_class", IMMORTAL),
     ("py_os_path.py", "_path_clear_root_prefix", PINNED),
-    ("py_os_mkdir.py", "_mkdir_drop", PINNED),
-    ("py_os_mkdir.py", "_mkdir_finish", PINNED),
     ("py_tempfile.py", "_td_drop", PINNED),
     ("py_tempfile.py", "_td_init", PINNED),
     ("py_tempfile.py", "_nt_finish", PINNED),
@@ -159,9 +157,8 @@ class MetadataRuntime(Runtime):
             assert n[name]() is obj  # Cached class must not rewrite its header.
             assert (self.pin_calls, self.unpin_calls, obj.pins) == (0, 0, 0)
             return
-        if name in ("_path_clear_root_prefix", "_mkdir_drop", "_td_drop"):
-            count = 12 if name == "_mkdir_drop" else 24
-            slots, pins = self.frame(count)
+        if name in ("_path_clear_root_prefix", "_td_drop"):
+            slots, pins = self.frame(24)
             obj.pins = 1
             n["store_ptr"](slots, 0, obj)
             n["store_i64"](pins, 0, PINNED)
@@ -169,8 +166,8 @@ class MetadataRuntime(Runtime):
             self.frames.remove(slots)
             assert (self.pin_calls, self.unpin_calls, obj.pins) == (0, 1, 0)
             assert self.events == ["unpin", "collector", "metadata", "clear"]
-        elif name in ("_mkdir_finish", "_nt_finish"):
-            slots, pins = self.frame(12 if name == "_mkdir_finish" else 24)
+        elif name == "_nt_finish":
+            slots, pins = self.frame(24)
             # A pre-existing pin is independent of this scope's counted pin.
             obj.flags |= PINNED
             self.error = obj
@@ -210,8 +207,8 @@ class MetadataRuntime(Runtime):
             raise AssertionError(name)
         assert not self.frames and not self.leases
         assert obj.pins == 0 and self.pin_calls == self.unpin_calls - int(name in (
-            "_path_clear_root_prefix", "_mkdir_drop", "_td_drop"))
-        if name not in ("_path_clear_root_prefix", "_mkdir_drop", "_td_drop"):
+            "_path_clear_root_prefix", "_td_drop"))
+        if name not in ("_path_clear_root_prefix", "_td_drop"):
             index = self.events.index("metadata")
             assert self.events[index - 2:index + 2] == ["unpin", "collector", "metadata", "swap"]
 
@@ -237,8 +234,9 @@ def test_metadata_preserves_concurrent_header(site, transition, preset, legacy):
             assert bool(observed & GRAY) == bool(runtime.credit) == bool(runtime.tokens)
 
 
-def test_all_eleven_metadata_sites_use_relaxed_atomic_or():
-    assert len(SITES) == 11
+def test_all_nine_metadata_sites_use_relaxed_atomic_or():
+    # os.mkdir's drop and finish no longer write a pin bit (item 2 (d)).
+    assert len(SITES) == 9
     for filename, name, bit in SITES:
         tree = ast.parse((RUNTIME / filename).read_text())
         node = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name)
@@ -255,7 +253,7 @@ def test_all_eleven_metadata_sites_use_relaxed_atomic_or():
                        and call.func.id == "store_i32" for call in ast.walk(node)), name
 
 
-@pytest.mark.parametrize("name", ["_path_clear_root_prefix", "_mkdir_drop", "_td_drop"])
+@pytest.mark.parametrize("name", ["_path_clear_root_prefix", "_td_drop"])
 def test_alias_pin_restoration_keeps_reverse_release_order(name):
     site = next(site for site in SITES if site[1] == name)
     runtime = MetadataRuntime(site, "shade", False)

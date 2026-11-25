@@ -306,12 +306,12 @@ def test_mkdir_error_uses_real_shared_metadata_and_exception_owners(phase):
     memory.maps['pcc_mkdir_frame_map']=12
     n=memory.namespace.copy()
     bodies(ROOT/'pcc/runtime/py/py_os_mkdir.py', n)
-    slots=n['stack_alloc'](12*8);pins=n['stack_alloc'](12*8)
-    n['memset'](slots,0,12*8);n['memset'](pins,0,12*8)
+    slots=n['stack_alloc'](12*8)
+    n['memset'](slots,0,12*8)
     n['pcc_gc_frame_enter'](n['global_addr']('pcc_mkdir_frame_map'),slots)
-    n['_mkdir_hold'](slots,pins,n['_MKDIR_NORMALIZED'],memory.string('/missing/owned',0))
-    n['_mkdir_os_error'](slots,pins,-2)
-    assert n['_mkdir_finish'](slots,pins) is None
+    n['_mkdir_hold'](slots,n['_MKDIR_NORMALIZED'],memory.string('/missing/owned',0))
+    n['_mkdir_os_error'](slots,-2)
+    assert n['_mkdir_finish'](slots) is None
     error=memory.pending.fields[0]
     assert error.fields[16].fields['exception_tag']==34
     memory.store_root(memory.handled,error);n['py_clear_exception']()

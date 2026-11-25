@@ -44,7 +44,8 @@ class CacheMemory(_Memory):
             pcc_gc_frame_leave=self.frame_leave, pcc_gc_store_root=self.store_root,
             pcc_gc_note_write_barrier=lambda *_args: None,
             pcc_gc_note_slot_write_barrier=lambda *_args: None,
-            pcc_gc_take_pinned_slot=self.take_slot, py_tls_exc_swap_slot=self.swap_error,
+            pcc_gc_take_pinned_slot=self.take_pinned_slot, pcc_gc_take_slot=self.take_slot,
+            py_tls_exc_swap_slot=self.swap_error,
             pcc_gc_load_ptr=lambda _owner, slot: self.read(slot, 0),
             pcc_gc_scheduler_root_register_handle=self.register_global,
             pcc_gc_root_copy_lease=self.copy_lease,
@@ -153,12 +154,20 @@ class CacheMemory(_Memory):
         self.write(slot, 0, value)
         self.decref(old)
 
-    def take_slot(self, slot, prior):
+    def take_pinned_slot(self, slot, prior):
         value = self.read(slot, 0)
         self.write(slot, 0, None)
         if isinstance(value, _Block):
             assert value.alive and value.pin
             value.pin = bool(prior)
+        return value
+
+    def take_slot(self, slot):
+        # pcc_gc_take_slot: transfer the owner; nothing pinned (item 2 (d)).
+        value = self.read(slot, 0)
+        self.write(slot, 0, None)
+        if isinstance(value, _Block):
+            assert value.alive
         return value
 
     def swap_error(self, slot):

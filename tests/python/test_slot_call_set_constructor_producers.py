@@ -148,8 +148,7 @@ class _ConstructorModel:
                 self.store(base, offset, None)
         def leave(base):
             self.boundary()
-            if self.result_name and self.refs.get(self.result_name) == 1:
-                assert self.result_name in self.pins
+            # One collector: the result needs no pin at frame leave.
             del self.frames[base]
         def take(slot, prior):
             self.boundary()
@@ -158,6 +157,15 @@ class _ConstructorModel:
             if value is not None:
                 assert value in self.pins and self.refs[value] == 1
                 self.pins.remove(value)
+            self.store(slot, 0, None)
+            return value
+        def take_slot(slot):
+            # pcc_gc_take_slot: transfer the owner; nothing pinned (item 2 (d)).
+            self.boundary()
+            assert not self.frames and not self.leases
+            value = self.load(slot, 0)
+            if value is not None:
+                assert self.refs[value] == 1
             self.store(slot, 0, None)
             return value
         def error(kind, message):
@@ -183,6 +191,7 @@ class _ConstructorModel:
                     pcc_gc_load_ptr=lambda owner, slot: self.load(slot, 0),
                     pcc_gc_pin=lambda value: self.pins.add(value),
                     pcc_gc_take_pinned_slot=take,
+                    pcc_gc_take_slot=take_slot,
                     pcc_py_gc_minor_graph_lock=self.boundary,
                     pcc_py_gc_minor_graph_unlock=self.boundary,
                     py_tls_exc_swap_slot=self.swap,
@@ -198,11 +207,11 @@ class _ConstructorModel:
 def test_actual_set_constructor_result_lifetime(failure, relocate):
     path = Path(__file__).parents[2] / 'pcc/runtime/py/py_set.py'
     tree = ast.parse(path.read_text())
-    names = {'_set_constructor_drop', '_set_constructor_pin', 'py_set_from_iterable'}
+    names = {'_set_constructor_drop', 'py_set_from_iterable'}
     selected = ast.Module(body=[node for node in tree.body
                                if isinstance(node, ast.FunctionDef) and node.name in names],
                           type_ignores=[])
-    assert len(selected.body) == 3
+    assert len(selected.body) == 2
     model = _ConstructorModel(failure, relocate)
     env = model.environment()
     constants = {node.targets[0].id: ast.literal_eval(node.value)
