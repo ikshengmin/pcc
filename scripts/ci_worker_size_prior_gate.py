@@ -335,7 +335,7 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               'tests/python/test_worker_observation_scope.py',
               'tests/python/test_lambda_rejection_diagnostics.py',
               'tests/python/test_lambda_scaffold_capture_owner.py')
-# Expected default-marker inventory: 87 modules, 3796 ordinary raw nodes.
+# Expected default-marker inventory: 87 modules, 3789 ordinary raw nodes.
 # Single-collector migration replaces 117 retired relocation tests with one
 # live Stage1 input inventory regression. Historical counts below predate it.
 # Source-matched 87b58370 AArch64 CI collected all 3957: 3956 passed and
@@ -349,10 +349,10 @@ HOST_COUNTS = (
     106, 3, 327, 0, 6, 29, 28, 7, 25, 49, 19, 21, 447, 17,
     4, 5, 61, 67, 24, 13, 100, 55, 16, 136, 19, 117, 23, 55,
     89, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1,
-    116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6,
-    43, 8, 1, 11, 153, 232, 9, 12, 3, 14, 30, 9, 76, 84,
-    35, 23, 36, 36, 10, 41, 11, 23, 10, 65, 7, 92, 20, 2, 13,
-    33, 27,
+    116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 18, 6,
+    44, 8, 1, 11, 153, 232, 9, 12, 3, 14, 30, 9, 76, 84,
+    35, 23, 36, 36, 5, 41, 11, 23, 10, 65, 7, 92, 20, 2,
+    13, 33, 27,
 )
 PHASES = ("preflight", "stage1", "pcc1")
 

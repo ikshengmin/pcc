@@ -313,6 +313,15 @@ in the relevant section or issue and removes the entry.
    advance (b) on independent obsolete test migrations while the collector
    codegen slice remains claimed. The two-root evidence needs a generic
    bounded representation change, not another replay or relaxed guard.
+   #20 Worker prior inventory at `3b5598d0`: the exact 87-module
+   ordinary collection now has 3789 nodes. Cleanup IR 21 -> 18,
+   exception cleanup 43 -> 44, float callback 10 -> 5 reflect the
+   already-landed single-collector migrations. No file or marker removed;
+   the three guarded process tests remain included. Reconcile the fixed
+   inventory and its controls (including stale and missing-node rejection).
+   All 394 affected ordinary tests passed on Linux; full six-worker
+   execution remains for CI, not qualified by collection.
+   Next: inspect hosted worker-prior execution failures separately.
    #20 on the local Mac at `25a309945`: the named CI-contract files and the
    shared frame tests pass. `tests/test_ci_native_object_regressions.py`'s
    host-only model controls failed only on macOS, from the gate's
@@ -327,7 +336,7 @@ in the relevant section or issue and removes the entry.
    native callback evidence as recorded in Checkpoint above.
 
    Claims:
-   - #20 worker prior collection: Codex, Linux, 2026-11-25T09:04Z, area checkpoint
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State
