@@ -561,6 +561,21 @@ in the relevant section or issue and removes the entry.
    `scripts/run_process_tree_sample.py` with a 2.75 GiB tree cap, after an
    earlier oversubscribed local run (six streams of six workers) pushed the
    Mac into swap. pcc1 and Linux were not run.
+   (d), step 4a (Claude, local Mac, `d4e33e666`): code generation takes
+   through the new `pcc_gc_take_slot(slot)` (load, clear, return) and no
+   longer reads a prior pin bit, calls `pcc_gc_pin_slot_for_take` or takes
+   the graph lock around a root reload: call results, returns, valueclass
+   payload roots, extern roots (now `(slot, owned)` pairs), generator frames
+   and yields, and module attribute stores. A sample program's IR fell from
+   4709 to 4639 lines. Tests reading the emitted take were rewritten (51
+   files with the code); host pcc0, by node id against HEAD, the 130 files
+   naming the take, its labels or the changed helpers show no other
+   difference. Not run: four heavy qualification files
+   (`test_fallback_baseline.py` and three infrastructure gates), the
+   integration suites (the maintainer asked not to run them on this Mac
+   for now), pcc1 and Linux. One native program (object returns,
+   generator yields, extern text, a finalizer, an exception) matches
+   CPython.
    Correction: `pcc_gc_backend4_auto_step_pending` is the one collector's
    live automatic-collection request (young and full collections are
    scheduled through it), not a leftover; it may only be renamed, before
@@ -706,7 +721,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (d) 4a lease-free take: Claude, macOS, 2026-11-25T13:28Z, area runtime-codegen
+   - none
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
