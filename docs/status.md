@@ -1322,6 +1322,23 @@ in the relevant section or issue and removes the entry.
    backend (save callee-saved registers only on the paths that use them),
    checked first on one helper's fast path with `instr`; a design note
    before the change, which needs the native and bootstrap gates.
+   Self backend against LLVM on the same runtime IR (Claude, 2026-11-26,
+   local Mac, a labeled reference experiment, not a product route): the
+   current runtime's 183 archive modules (`build_owned/.../*.ll`) compiled
+   with Homebrew clang 20.1.8 `-O2`, plus a 12-instruction stub for the
+   `llvm.pcc.capture.gc.registers` intrinsic, linked by the owned linker into
+   the same self-compiled handler program (the in-process provenance check
+   skipped for the experiment only; the linker drops `__eh_frame`; the
+   handler checks every response body). Per request, three runs each,
+   1000 minus 200 requests: self runtime 268261 instructions, 57421 cycles,
+   59105 req/s; clang runtime 174947 instructions (-35%), 37554 cycles
+   (-35%), 85631 req/s (+45%); asyncio about 155k instructions and 30k
+   cycles. The runtime's code generation alone accounts for about 93k of the
+   115k extra instructions. Next for (c): rank the self AArch64 backend's
+   gaps by comparing each hot runtime function's machine code with clang's
+   for the same IR (entry/exit saves, call-result spills, address
+   materialization, register copies; see the self-aarch64-* investigations)
+   and measure each fix with `pcc_perf.py instr` against this bound.
    J2. Fewer root stores and release chains in code generation: 104 of the
        304 calls per request clear a slot that is already empty.
    J3. TaskScope (5x CPython), `time.perf_counter` (7x), `str.encode` (5x).
