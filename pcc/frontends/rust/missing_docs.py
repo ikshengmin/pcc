@@ -22,7 +22,9 @@ still rejected; no lint group, cap, Clippy or rustdoc execution is inferred.
 """
 from __future__ import annotations
 
-from .syntax import ConstItem, Enumeration, Module, Record, RustError, StaticItem, Trait
+from .syntax import (
+    ConstItem, Enumeration, ExternalCrateAlias, Module, Record, RustError, StaticItem, Trait,
+)
 
 LEVELS = ('allow', 'warn', 'deny', 'forbid')
 
@@ -164,7 +166,8 @@ def check_missing_docs(crate, attributes, *, test=False, namespaces=None):
     def consider(declaration):
         # A local use (even a public re-export) does not move its definition
         # into this crate. The provider has already checked its own levels.
-        if declaration.identity.module.crate != root.crate:
+        if (declaration.identity.module.crate != root.crate or
+                isinstance(declaration.syntax, ExternalCrateAlias)):
             return
         syntax = declaration.syntax
         if id(syntax) in seen:

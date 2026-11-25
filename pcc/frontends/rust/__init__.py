@@ -242,9 +242,10 @@ def compile_rust_crate(crate_root: str, sources, *, crate_name: str, edition: in
     without flattening its scopes, then checked and lowered exactly as
     compile_rust checks and lowers a single source (owned admission, no
     attestation). `cfg` and `env` are as for compile_rust. An optional
-    `extern_sources` dict binds extern-prelude aliases to single-file
-    RustSourceDependency leaves. Each is compiled (not merely parsed) for
-    the same target with its own name, edition and digest. Only monomorphic
+    `extern_sources` dict binds extern-prelude aliases (Rust 2018+) or explicit
+    extern crate bindings to closed RustSourceDependency source crates. Each is
+    compiled (not merely parsed) for the same target with its own name, edition
+    and source-closure digest. Only monomorphic
     scalar functions cross the boundary. This path does not supply a sysroot,
     an external-check token, or arbitrary build cfg/environment.
     """
@@ -259,10 +260,10 @@ def compile_rust_crate(crate_root: str, sources, *, crate_name: str, edition: in
     if extern_sources is not None:
         if cfg is not None or env is not None:
             raise RustError('source dependency builds do not yet bind cfg/environment in their link identity')
-        inputs = checked_inputs(extern_sources, target, edition)
-        for alias, spec, text in inputs:
+        inputs = checked_inputs(extern_sources, target)
+        for alias, spec, files in inputs:
             provider = _compile_source_unit(
-                spec.root_path, {spec.root_path: text}, crate_name=spec.crate_name,
+                spec.root_path, files, crate_name=spec.crate_name,
                 edition=spec.edition, target=target, module_name=spec.crate_name,
                 configuration=None, environment=None, providers={}, context=link_context(target, {}))
             if any(p.resolution.root == provider.resolution.root for p in providers.values()):
@@ -289,7 +290,8 @@ def _compile_source_unit(crate_root, sources, *, crate_name, edition, target, mo
     from .source_dependencies import CompiledSourceLibrary
     crate, parsers = _load_crate_sources(crate_root, sources, crate_name=crate_name, edition=edition,
                                         parser_type=Parser, configuration=configuration,
-                                        environment=environment, link_context_sha256=context)
+                                        environment=environment, link_context_sha256=context,
+                                        external_crate_names=tuple(providers))
     root = parsers[0]
     if providers:
         # The consumer's lint pass must see exactly the imports, visibility

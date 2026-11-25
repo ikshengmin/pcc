@@ -132,11 +132,12 @@ def _join_path(directory, relative, token):
 
 
 class _Loader:
-    def __init__(self, sources, parser_type=Parser, configuration=None, environment=None):
+    def __init__(self, sources, parser_type=Parser, configuration=None, environment=None, external_crate_names=()):
         self.sources = sources
         self.parser_type = parser_type
         self.configuration = configuration
         self.environment = environment
+        self.external_crate_names = tuple(external_crate_names)
         self.context_parsers = []
         self.active_files = []
         self.module_count = 0
@@ -152,6 +153,8 @@ class _Loader:
             options = {} if self.configuration is None else {'configuration': self.configuration}
             if self.environment is not None:
                 options['environment'] = self.environment
+            if self.external_crate_names:
+                options['external_crate_names'] = self.external_crate_names
             parser = self.parser_type(source.text, source_path=path, edition=identity.crate.edition, **options)
             if self.context_parsers:
                 # One crate's expansion marks, and the macro_rules! textually
@@ -256,7 +259,7 @@ def _parse_crate_sources(crate_root, sources, *, crate_name, edition, parser_typ
 
 
 def _load_crate_sources(crate_root, sources, *, crate_name, edition, parser_type, configuration=None,
-                        environment=None, link_context_sha256=None):
+                        environment=None, link_context_sha256=None, external_crate_names=()):
     """Load the original lexical tree. Resolution and linting share this tree."""
     root = _logical_path(crate_root)
     if (not isinstance(crate_name, str) or not crate_name.isascii()
@@ -288,7 +291,7 @@ def _load_crate_sources(crate_root, sources, *, crate_name, edition, parser_type
         digest.update(encoded)
         digest.update(bytes.fromhex(source.sha256))
     identity = CrateId(crate_name, root, edition, digest.hexdigest(), link_context_sha256)
-    loader = _Loader(frozen, parser_type, configuration, environment)
+    loader = _Loader(frozen, parser_type, configuration, environment, external_crate_names)
     graph = loader.parse_file(root, ModuleId(identity, ()), PurePosixPath(root).parent)
     return CrateSyntax(graph, edition, frozen), loader.context_parsers
 

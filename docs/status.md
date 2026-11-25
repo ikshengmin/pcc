@@ -879,9 +879,17 @@ in the relevant section or issue and removes the entry.
    Run 45619704293's Commons Numbers and ZXing gates still require nominal static
    reference storage and class construction after #13; the six JDK-only failed
    nodes retain the normative conformance obligations, not a changed oracle.
+   Rust CI next: the original fallible-streaming-iterator still fails at
+   lib.rs:22:1 (core::cmp) in run 45619704293, artifact 15033286334. Closed
+   source dependencies now admit edition-2015 explicit extern crates and
+   nested module aliases with per-file pins; 552 focused tests and two native
+   ELF link controls pass on Linux. This is not a core implementation. Next
+   supply real pinned core source closure and owned no_core/lang-item semantics
+   (the retained Rust 1.90.0 core root stops at line 75), then actual prelude
+   trait/type identities. The strict original project remains a failure;
+   neither an external token nor a caller-provided crate named core waives it.
 
    Claims:
-   - Rust original no_std core source resolution (45619704293): Codex, Linux x86_64, 2026-11-25 15:29 UTC, area frontend-rust
    - TinyXML2 generic virtual destructor exception specifications (explicit destruction): Codex, Linux, 2026-11-25 15:15 UTC, area frontend-cpp
 5. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value

@@ -193,11 +193,13 @@ def test_missing_docs_does_not_invent_missing_or_out_of_scope_imports():
     with pytest.raises(RustError) as private:
         consumer(STRICT_CONSUMER + 'pub use dep::f;', {'dep': leaf('pub(crate) fn f()->i32{27}')})
     assert str(private.value).endswith("lib.rs: 3:5: private item 'f' is inaccessible from this module")
-    # A re-export is still subject to this slice's direct-root boundary.
-    with pytest.raises(RustError) as nested:
-        consumer(STRICT_CONSUMER + 'pub use dep::nested::f;', {'dep': leaf('pub mod nested{pub fn f()->i32{27}}')})
-    assert str(nested.value).endswith('lib.rs: 3:5: only direct root function paths into a source dependency '
-                                      'are implemented')
+    # A nested public re-export does not move the definition into this crate.
+    nested = consumer(STRICT_CONSUMER + 'pub use dep::nested::f;\n/// Read.\npub fn read()->i32{f()}',
+                      {'dep': leaf('pub mod nested{pub fn f()->i32{27}}')})
+    provider = dict(nested.source_dependencies)['dep']
+    assert provider.symbols['nested::f'] in nested.ir_text
+    with pytest.raises(RustError, match="private item 'nested'"):
+        consumer(STRICT_CONSUMER + 'pub use dep::nested::f;', {'dep': leaf('mod nested{pub fn f()->i32{27}}')})
 
 
 @pytest.mark.parametrize(('provider', 'call', 'message'), [
@@ -368,3 +370,172 @@ def test_same_original_meson_two_crates_and_main_rustc_reference(tmp_path):
                        env=env, timeout=30)
     assert _reference_command('execute Meson main', [str(exe)], env=env, timeout=5) == b'246\n'
     assert originals() == (a, b)
+
+
+def nested_leaf(*, value=27, root='pub mod numbers;', child_public='pub'):
+    # A real outlined provider (distinct crate/link identity); not a stand-in
+    # for core or any other compiler-owned system library.
+    child = f'{child_public} mod inner {{ pub fn read() -> i32 {{ {value} }} }}'.encode()
+    return replace(leaf(root, name='provider'),
+                   module_sources=(('numbers.rs', child, sha256(child).hexdigest()),))
+
+
+@pytest.mark.parametrize(('edition', 'prefix'), [
+    (2015, 'extern crate dep as arithmetic;'),
+    (2018, 'use dep as arithmetic;'),
+    (2021, 'extern crate dep as arithmetic;'),
+])
+def test_named_source_module_aliases_resolve_real_nested_definition(edition, prefix, monkeypatch):
+    monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('external tool in owned source resolution'))
+    text = ('#![no_std]\n' + prefix + '\nuse arithmetic::numbers as numbers;\n'
+            'use numbers::inner::read as get;\npub fn result() -> i32 { get() + numbers::inner::read() }')
+    result = consumer(text, {'dep': nested_leaf()}, edition=edition)
+    provider = dict(result.source_dependencies)['dep']
+    target = provider.symbols['numbers::inner::read']
+    assert sum('call i32' in line and target in line for line in result.ir_text.splitlines()) == 2
+    assert provider.source_crate_id.name == 'provider'
+    assert set(provider.symbols) == {'numbers::inner::read'}
+    assert result.emit_object().startswith(b'\x7fELF') and provider.emit_object().startswith(b'\x7fELF')
+
+
+def test_outlined_source_pins_and_visibility_are_not_bypassed():
+    dependency = nested_leaf()
+    text = 'use dep::numbers::inner::read; pub fn result()->i32{read()}'
+    first = consumer(text, {'dep': dependency})
+    second = consumer(text, {'dep': nested_leaf(value=28)})
+    assert first.symbols['result'] != second.symbols['result']
+    assert dict(first.source_dependencies)['dep'].symbols != dict(second.source_dependencies)['dep'].symbols
+    with pytest.raises(RustError, match='private item'):
+        consumer(text, {'dep': nested_leaf(child_public='')})
+    with pytest.raises(RustError, match='private item'):
+        consumer(text, {'dep': nested_leaf(root='mod numbers;')})
+    name, raw, digest = dependency.module_sources[0]
+    with pytest.raises(RustError, match='SHA-256'):
+        consumer(text, {'dep': replace(dependency, module_sources=((name, raw + b' ', digest),))})
+    with pytest.raises(RustError, match='module source missing'):
+        consumer(text, {'dep': replace(dependency, module_sources=())})
+    with pytest.raises(RustError, match='duplicate external source path'):
+        consumer(text, {'dep': replace(dependency, module_sources=dependency.module_sources * 2)})
+    with pytest.raises(RustError, match='external source module glob'):
+        consumer('extern crate dep; use dep::numbers::*;', {'dep': dependency})
+
+
+def test_nested_public_function_import_is_not_limited_to_leaf_root():
+    source = leaf('mod details { pub mod numbers { pub fn get() -> i32 { 31 } } }\n'
+                  'pub use details::numbers as math;')
+    result = consumer('use dep::math; pub fn result()->i32{math::get()}', {'dep': source})
+    provider = dict(result.source_dependencies)['dep']
+    assert provider.symbols['details::numbers::get'] in result.ir_text
+    with pytest.raises(RustError, match='private item'):
+        consumer('use dep::details::numbers;', {'dep': source})
+
+
+def test_rust_2015_declared_crate_and_module_scope_keep_normal_privacy():
+    dep = nested_leaf()
+    with pytest.raises(RustError, match='shadowing primitive'):
+        consumer('mod m { extern crate dep as i32; }', {'dep': dep})
+    with pytest.raises(RustError, match='2015 extern crate'):
+        consumer('use dep::numbers::inner::read; fn f()->i32{read()}', {'dep': dep}, edition=2015)
+    root = ('extern crate dep as linked;\n'
+            'mod worker { use linked::numbers::inner::read; pub fn go()->i32{read()} }\n'
+            'pub fn run()->i32{worker::go()}')
+    got = consumer(root, {'dep': dep}, edition=2015)
+    assert dict(got.source_dependencies)['dep'].symbols['numbers::inner::read'] in got.ir_text
+    with pytest.raises(RustError, match='private use binding'):
+        consumer('mod left { extern crate dep as local; }\n'
+                 'mod right { fn f()->i32{crate::left::local::numbers::inner::read()} }',
+                 {'dep': dep})
+    with pytest.raises(RustError, match='unknown type-namespace'):
+        consumer('mod left { extern crate dep as local; }\n'
+                 'mod right { fn f()->i32{local::numbers::inner::read()} }',
+                 {'dep': dep})
+
+
+NESTED_ORIGINAL = ('#![no_std]\nextern crate dep as linked;\n'
+                   'use linked::numbers as arithmetic;\n'
+                   'pub fn run() -> i32 { arithmetic::inner::read() + 5 }')
+
+
+@pytest.mark.integration
+@pytest.mark.xdist_group(name='rust-native-reference')
+@pytest.mark.pcc_gate(unavailable=NATIVE)
+def test_rust_2015_multifile_dependency_links_its_actual_defining_elf_object(tmp_path, monkeypatch):
+    from pcc.backend.elf_x86_64 import ElfError, link_static_executable, parse_relocatable
+    from pcc.backend.x86_64_asm_driver import assemble_file
+
+    original = NESTED_ORIGINAL
+    with monkeypatch.context() as deny:
+        deny.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('external tool in owned compile/link'))
+        result = consumer(original, {'dep': nested_leaf(value=27)}, edition=2015)
+        provider = dict(result.source_dependencies)['dep']
+        owner_symbol = provider.symbols['numbers::inner::read']
+        call = result.symbols['run']
+        observer = assemble_file(f'''.intel_syntax noprefix
+.text
+.globl _start
+_start:
+ call {call}
+ push rax
+ mov rsi, rsp
+ mov edx, 4
+ mov eax, 1
+ mov edi, 1
+ syscall
+ mov eax, 60
+ xor edi, edi
+ syscall
+''')
+        own = parse_relocatable(result.emit_object())
+        defining = parse_relocatable(provider.emit_object())
+        with pytest.raises(ElfError, match=owner_symbol):
+            link_static_executable([observer, own])
+        image = link_static_executable([observer, own, defining])
+    binary = tmp_path / 'owned-2015-source-dependency'
+    binary.write_bytes(image)
+    binary.chmod(0o700)
+    ran = subprocess.run([str(binary)], capture_output=True, timeout=5)
+    assert (ran.returncode, ran.stdout, ran.stderr) == (0, (32).to_bytes(4, 'little'), b'')
+
+
+@pytest.mark.integration
+@pytest.mark.xdist_group(name='rust-native-reference')
+@pytest.mark.pcc_gate(unavailable=NATIVE or actual_check_prerequisite())
+def test_same_2015_multifile_crate_originals_match_audited_reference(tmp_path):
+    from tests.rust.test_rust_certified_references import toolchain
+
+    audited = toolchain()
+    rustc = audited.root / 'bin/rustc'
+    assert sha256(rustc.read_bytes()).hexdigest() == audited.compiler_sha256
+    env = _reference_environment(os.environ, None, windows=False)
+    common = [str(rustc), '--target=' + TARGET, '-Coverflow-checks=off']
+    dep = nested_leaf(value=27)
+    originals = ((dep.root_path, dep.source, dep.source_sha256), *dep.module_sources)
+    source_dir = tmp_path / 'provider'
+    source_dir.mkdir()
+    for name, raw, digest in originals:
+        assert sha256(raw).hexdigest() == digest
+        (source_dir / name).write_bytes(raw)
+    provider = tmp_path / 'libprovider.rlib'
+    _reference_command('original provider', [*common, '--edition=2018', '--crate-name=provider',
+                       '--crate-type=rlib', str(source_dir / dep.root_path), '-o', str(provider)],
+                       env=env, timeout=20)
+    client_source = tmp_path / 'client.rs'
+    client_source.write_bytes(NESTED_ORIGINAL.encode())
+    client = tmp_path / 'libclient.rlib'
+    _reference_command('original 2015 client', [*common, '--edition=2015', '--crate-name=client',
+                       '--crate-type=rlib', '--extern', 'dep=' + str(provider),
+                       str(client_source), '-o', str(client)], env=env, timeout=20)
+    observer = tmp_path / 'observer.rs'
+    observer.write_text('extern crate client;use std::io::Write;'
+                        'fn main(){std::io::stdout().write_all(&client::run().to_le_bytes()).unwrap();}')
+    binary = tmp_path / 'reference'
+    _reference_command('2015 client observer', [*common, '--edition=2015', '--extern',
+                       'client=' + str(client), '-L', 'dependency=' + str(tmp_path),
+                       str(observer), '-o', str(binary)],
+                       env=_reference_environment(os.environ, None, windows=False, link=True), timeout=20)
+    reference = _reference_command('execute 2015 originals', [str(binary)], env=env, timeout=5)
+    # The immediately preceding owned link test executes the same originals
+    # and observes the same four bytes without any external compiler.
+    assert reference == (32).to_bytes(4, 'little')
+    assert client_source.read_bytes() == NESTED_ORIGINAL.encode()
+    assert all((source_dir / name).read_bytes() == raw for name, raw, _ in originals)

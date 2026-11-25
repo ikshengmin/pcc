@@ -3,7 +3,8 @@
 Canonical declaration keys identify storage only after scoped lookup and privacy
 checks. They are never searched as a flattened source namespace. Private and
 `pub use` (re-export) imports resolve within the supplied module closure.
-Explicit source dependencies may supply a compiled public scalar function.
+Explicit closed source dependencies may supply scoped modules and compiled
+public scalar functions.
 No import synthesizes source or supplies missing system library definitions.
 """
 from dataclasses import replace
@@ -16,7 +17,10 @@ from .crate_context import (
 )
 from .generics import PRIMITIVES
 from .source_dependencies import CompiledSourceLibrary
-from .syntax import ConstItem, CrateSelfAlias, Enumeration, Module, ModuleBody, Record, RustError, StaticItem, Trait
+from .syntax import (
+    ConstItem, CrateSelfAlias, Enumeration, ExternalCrateAlias,
+    Function, Module, ModuleBody, Record, RustError, StaticItem, Trait,
+)
 from .types import TypeApplication
 from .visibility import scope_components, within
 
@@ -39,10 +43,16 @@ class ModuleNamespaces:
         self.crate = crate
         self.policy = crate.policy
         self.source_calls = {}
-        self.extern_prelude = {alias: library.root_declaration()
-                               for alias, library in (source_libraries or {}).items()}
-        self.extern_prelude.update({item.token.text: crate.root.items['type', item.token.text]
-                                    for item in crate.root.body.crate_aliases})
+        self._source_libraries = dict(source_libraries or {})
+        self._source_libraries_by_crate = {
+            library.resolution.root.crate: library for library in self._source_libraries.values()
+        }
+        self.extern_prelude = ({alias: library.root_declaration()
+                                for alias, library in self._source_libraries.items()}
+                               if self.policy.edition >= 2018 else {})
+        for alias in crate.root.body.crate_aliases:
+            declaration = crate.root.items['type', alias.token.text]
+            self.extern_prelude[alias.token.text] = self._alias_target(declaration)
         self.modules = {}
         self.by_key = {}
         pending = [crate.root]
@@ -63,6 +73,8 @@ class ModuleNamespaces:
             owner = module.identity
             for declaration in module.items.values():
                 self._scope(declaration.public, owner)
+                if isinstance(declaration.syntax, ExternalCrateAlias):
+                    self._alias_target(declaration)
             for record in module.body.records:
                 for visibility in record.field_public:
                     self._scope(visibility, owner)
@@ -174,10 +186,28 @@ class ModuleNamespaces:
         finally:
             self._resolving_uses.remove(key)
 
+    def _alias_target(self, declaration):
+        item = declaration.syntax
+        if isinstance(item, ExternalCrateAlias):
+            if item.token.text in _LANGUAGE_PRIMITIVE_USE_TARGETS:
+                raise item.token.error('external aliases shadowing primitive types require additional namespace resolution')
+            library = self._source_libraries.get(item.provider_name)
+            if library is None:
+                raise item.token.error('external crate dependency lacks a compiled owned source')
+            return library.root_declaration()
+        return declaration
+
+    def _source_member(self, library, parts, namespace, requester, token, *, optional, module=None):
+        member = library.member(parts, namespace, requester, token, optional=optional, module=module)
+        if member is not None and isinstance(member.syntax, Function):
+            fn = member.syntax
+            self.source_calls[fn.identity] = (fn, library.compilation.symbols[fn.export_name])
+        return member
+
     def _strong_binding(self, module, namespace, name):
         declaration = self.modules[module].items.get((namespace, name))
         if declaration is not None:
-            return declaration, self._scope(declaration.public, module)
+            return self._alias_target(declaration), self._scope(declaration.public, module)
         item = self._uses[module].get(name)
         if item is None or (item.group_self is not None and namespace != 'type'):
             return None
@@ -198,7 +228,8 @@ class ModuleNamespaces:
         strong = self._strong_binding(module, namespace, name)
         if strong is not None:
             declaration, scope = strong
-            if not self._within(requester, scope) and (namespace, name) not in self.modules[module].items:
+            if (not self._within(requester, scope) and
+                    (declaration.identity.module != module or (namespace, name) not in self.modules[module].items)):
                 raise token.error(f'private use binding {name!r} is inaccessible from this module')
             return declaration, scope
         candidates = self.globs.weak(module, namespace, name)
@@ -236,9 +267,12 @@ class ModuleNamespaces:
         return current, parts
 
     def resolve(self, path, namespace, requester, token, *, _use_path=False, _optional_final=False,
-                _reexport=_NOT_REEXPORTED):
-        current, parts = self._start(path, requester, token)
-        unqualified = path.split('::', 1)[0] not in {'crate', 'self', 'super'}
+                _reexport=_NOT_REEXPORTED, _start_module=None):
+        if _start_module is None:
+            current, parts = self._start(path, requester, token)
+        else:
+            current, parts = _start_module, path.split('::')
+        unqualified = _start_module is None and path.split('::', 1)[0] not in {'crate', 'self', 'super'}
         if _use_path and self.policy.edition == 2015 and unqualified:
             current = self.root
         for index, name in enumerate(parts):
@@ -255,6 +289,8 @@ class ModuleNamespaces:
                 if declaration is not None:
                     scope = self._scope(declaration.public, declaration.identity.module)
             if declaration is None:
+                if implicit and self.policy.edition == 2015 and name in self._source_libraries:
+                    raise token.error('a supplied Rust 2015 extern crate requires an explicit declaration in scope')
                 if implicit and name in self.policy.implicit_extern_prelude:
                     raise token.error('implicit library/prelude source dependency is unavailable; external crate loading is not implemented')
                 if _optional_final and index == len(parts) - 1:
@@ -273,16 +309,18 @@ class ModuleNamespaces:
             if isinstance(declaration.syntax, CrateSelfAlias):
                 current = self.root
             elif isinstance(declaration.syntax, CompiledSourceLibrary):
-                library = declaration.syntax
-                member = library.member(parts[index + 1:], namespace, requester, token, optional=_optional_final)
-                if member is not None:
-                    fn = member.syntax
-                    self.source_calls[fn.identity] = (fn, library.compilation.symbols[fn.export_name])
-                return member
+                return self._source_member(declaration.syntax, parts[index + 1:], namespace,
+                                           requester, token, optional=_optional_final)
             elif isinstance(declaration.syntax, Module):
                 # Imported modules retain their target owner/name. The alias
                 # spelling must not invent a child under the importing scope.
                 current = declaration.identity.module.child(declaration.identity.name)
+                if current.crate != self.root.crate:
+                    library = self._source_libraries_by_crate.get(current.crate)
+                    if library is None:
+                        raise token.error('foreign module has no defining source-library owner')
+                    return self._source_member(library, parts[index + 1:], namespace, requester,
+                                               token, optional=_optional_final, module=current)
             else:
                 raise token.error('intermediate module path component is not a module')
         raise AssertionError('empty path escaped validation')
@@ -327,7 +365,7 @@ class ModuleResolution(ModuleNamespaces):
                     self.function_bounds(function, module.identity)
             for declaration in module.items.values():
                 item = declaration.syntax
-                if isinstance(item, (Module, CrateSelfAlias, Trait)):
+                if isinstance(item, (Module, CrateSelfAlias, ExternalCrateAlias, Trait)):
                     continue  # traits are collected with their module above
                 if isinstance(item, Record) and declaration.identity.namespace == 'value':
                     continue  # a tuple struct's constructor; the type entry owns its identity

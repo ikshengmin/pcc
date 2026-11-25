@@ -75,6 +75,8 @@ class ModuleGlobImports:
                 source = self.ns.root
             elif isinstance(decl.syntax, Module):
                 source = decl.identity.module.child(decl.identity.name)
+                if source.crate != self.ns.root.crate:
+                    raise item.glob.error('external source module glob imports are not implemented')
             else:
                 raise item.glob.error('glob import of non-module or enum variants is not implemented')
         if source == owner:

@@ -478,6 +478,15 @@ class CrateSelfAlias:
 
 
 @dataclass(frozen=True)
+class ExternalCrateAlias:
+    """Local binding of a supplied external source crate; never a fake definition."""
+    token: Token
+    provider_name: str
+    public: bool
+    documentation: tuple[Documentation, ...]
+
+
+@dataclass(frozen=True)
 class ExternCrateItem:
     token: Token
     crate: Token
@@ -559,7 +568,7 @@ class ModuleBody:
     traits: list[Trait]
     modules: list[Module]
     documentation: tuple[Documentation, ...]
-    crate_aliases: list[CrateSelfAlias] = field(default_factory=list)
+    crate_aliases: list[CrateSelfAlias | ExternalCrateAlias] = field(default_factory=list)
     crate_policy: CratePolicy = field(default_factory=CratePolicy)
     conditional_items: tuple = ()
     uses: list[UseDeclaration] = field(default_factory=list)
@@ -614,7 +623,8 @@ class Parser:
     _inactive_cfg_statement = False
 
     def __init__(self, source: str, *, source_path=None, edition=2021, rustc_check=None,
-                 configuration=None, environment=None):
+                 configuration=None, environment=None, external_crate_names=()):
+        self.external_crate_names = frozenset(external_crate_names)
         if type(edition) is not int or edition not in {2015, 2018, 2021, 2024}:
             raise RustError('Rust parser crate policy requires an explicit recognized edition')
         if configuration is not None:
@@ -1306,9 +1316,17 @@ class Parser:
 
     def register_extern_crate(self, item):
         # Inactive dependency declarations never enter this semantic owner.
-        # Active external dependencies retain their existing explicit boundary.
+        # A real external name must be present in the selected source graph.
+        # System library names are not supplied by arbitrary callers.
         if item.crate.text != 'self':
-            raise item.crate.error('external crate dependency loading is not implemented; only an explicit crate-self alias is supported')
+            if item.crate.text not in self.external_crate_names:
+                raise item.crate.error('external crate dependency loading is not implemented without a supplied owned source dependency')
+            binding = item.alias or item.crate
+            if binding.text == '_':
+                raise binding.error('anonymous crate aliases are not implemented')
+            self.crate_aliases.append(ExternalCrateAlias(binding, item.crate.text, item.public,
+                                                         item.documentation))
+            return
         if item.alias is None:
             raise item.crate.error("expected 'as' for an explicit crate-self alias")
         if item.alias.text == '_':
