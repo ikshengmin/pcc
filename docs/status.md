@@ -832,6 +832,15 @@ in the relevant section or issue and removes the entry.
      the server path; GC0 request CPU by mechanism (2026-11-15 census):
      reference counting, allocation, free, root stores, pins and leases
      about 53%, syscalls 8.7%, calls and frames 8.7%, attribute lookup 6.4%.
+   User instruction of 2026-11-26 to Claude, while other agents do item 2's
+   stabilization: "他们搞稳定性。你能推进GC优化吗。特别是融合之后还没有达到预期的。没有超过asyncio 的部分。"
+   ("They do the stability work. Can you push the GC optimization forward,
+   especially where the fused collector has not met expectations: the
+   parts that do not beat asyncio yet.") This lets Claude run (c) beside
+   item 2's stabilization, which the instruction of 2026-11-24 had put
+   first; it changes no other agent's order. Each candidate still needs
+   its ceiling recorded first and an `ab --control-arm` result, and it
+   avoids the files of active item 2 claims.
    Next, in order: (a) four-carrier measurement: `web_frameworks_app.py`
    fixes `carrier_count=1` and the runner records one carrier, so add a
    carrier count to the app and runner and a four-process aiohttp
@@ -853,7 +862,7 @@ in the relevant section or issue and removes the entry.
    function profile taken before this fix against `nm` before using it.
 
    Claims:
-   - none
+   - (c) handler one-worker gap to asyncio, profiling first: Claude, local Mac, 2026-11-25T16:09Z, area runtime-gc (files named before any edit; none shared with active claims)
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
