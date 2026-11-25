@@ -129,7 +129,9 @@ _INVERSE = {
 }
 
 
-def fold_cond_branch_to_fallthrough_records(ctx, records, eligible_edges):
+def fold_cond_branch_to_fallthrough_records(
+    ctx, records, eligible_edges, *, source_edge_index=None,
+):
     label_index = {}
     for index, record_id in enumerate(records):
         label = _local(ctx, record_id)
@@ -144,12 +146,18 @@ def fold_cond_branch_to_fallthrough_records(ctx, records, eligible_edges):
         label = _local(ctx, record_id)
         if label is not None:
             if not ctx.symbol(label).startswith("L_pcc_smap"):
-                error = None
-                success = None
-                for source, error_target, success_target in eligible_edges:
-                    if label == source:
-                        error, success = error_target, success_target
-                        break
+                if source_edge_index is not None:
+                    error, success = source_edge_index.get(label, (None, None))
+                else:
+                    error = None
+                    success = None
+                    # Caller-owned iterables can have observable callbacks;
+                    # retain their original search order. Only the producer-
+                    # owned integer proof table uses the indexed path.
+                    for source, error_target, success_target in eligible_edges:
+                        if label == source:
+                            error, success = error_target, success_target
+                            break
         elif _function(ctx, record_id):
             error = None
             success = None
@@ -220,12 +228,16 @@ def thread_trampoline_branches(fragments, semantics, span, metadata_labels=()):
     return ctx.write_span(thread_trampoline_branches_records(ctx, ctx.read_span(span), metadata_labels))
 
 
-def fold_cond_branch_to_fallthrough(fragments, semantics, span, eligible_edges):
+def fold_cond_branch_to_fallthrough(
+    fragments, semantics, span, eligible_edges, *, source_edge_index=None,
+):
     from .self_backend_aarch64_typed_pass_context import TypedPassContext
     ctx = TypedPassContext(fragments, semantics)
     # Public proof and owner callbacks can mutate the original span's nodes
     # without changing its root identity. Rebuild from the captured output IDs.
-    return ctx.write_span(fold_cond_branch_to_fallthrough_records(ctx, ctx.read_span(span), eligible_edges))
+    return ctx.write_span(fold_cond_branch_to_fallthrough_records(
+        ctx, ctx.read_span(span), eligible_edges, source_edge_index=source_edge_index,
+    ))
 
 
 def drop_fallthrough_uncond_branches(fragments, semantics, span):
@@ -261,12 +273,16 @@ def run_aarch64_typed_cfg_passes(
     for name in metadata_labels:
         if name in fragments.symbol_ids:
             metadata_ids.add(fragments.symbol_ids[name])
-    edges = []
+    source_edge_index = {}
     for source, error, success in cold_fallthrough_edges:
         source_id = fragments.symbol_ids[source] if source in fragments.symbol_ids else -1
         error_id = fragments.symbol_ids[error] if error in fragments.symbol_ids else -1
         success_id = fragments.symbol_ids[success] if success in fragments.symbol_ids else -1
-        edges.append((source_id, error_id, success_id))
+        # The previous ordered search chose the first matching source, even
+        # when its target was missing. Preserve that proof exactly, rather
+        # than substituting a later and possibly different proof.
+        if source_id not in source_edge_index:
+            source_edge_index[source_id] = (error_id, success_id)
     if phase_timing is not None:
         phase_timing.complete_backend_finalize("typed_cfg_proofs", started)
     if phase_timing is not None:
@@ -276,7 +292,9 @@ def run_aarch64_typed_cfg_passes(
         phase_timing.complete_backend_finalize("typed_thread_trampoline_branches", started)
     if phase_timing is not None:
         started = phase_timing.begin_backend_finalize("typed_fold_cond_branch_to_fallthrough")
-    result = fold_cond_branch_to_fallthrough(fragments, semantics, result, edges)
+    result = fold_cond_branch_to_fallthrough(
+        fragments, semantics, result, (), source_edge_index=source_edge_index,
+    )
     if phase_timing is not None:
         phase_timing.complete_backend_finalize("typed_fold_cond_branch_to_fallthrough", started)
     if phase_timing is not None:

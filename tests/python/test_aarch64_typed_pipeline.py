@@ -156,6 +156,57 @@ def _forbid_text(patch):
     patch.setattr(reference, "append_emitted_instruction_record", forbidden)
 
 
+@pytest.mark.parametrize("valid_first", [True, False])
+def test_owned_cfg_proof_index_retains_first_edge_and_exact_typed_output(monkeypatch, valid_first):
+    fragments = AArch64EmissionFragments(capture_semantics=True)
+    try:
+        semantics = fragments.semantics
+        ctx = TypedPassContext(fragments, semantics)
+        events = fragments.new_fragment()
+        fragments.append_label(events, "_f")
+        fragments.append_label(events, "L_source")
+        fragments.append_label(events, "L_pcc_smap_1")
+        fragments.append_branch(events, "b.eq", "L_success")
+        fragments.append_branch(events, "b", "L_error")
+        fragments.append_label(events, "L_success")
+        fragments.spans.append(events, ctx.emit("ret", []))
+        fragments.append_label(events, "L_error")
+        fragments.spans.append(events, ctx.emit("ret", []))
+        good = ("L_source", "L_error", "L_success")
+        missing = ("L_source", "L_missing_error", "L_success")
+        unknown = ("L_missing_source", "L_error", "L_success")
+        edges = ([good, missing] if valid_first else [missing, good]) + [unknown]
+        ids = [tuple(fragments.symbol_ids.get(name, -1) for name in edge) for edge in edges]
+        original = cfg.fold_cond_branch_to_fallthrough
+        observed = []
+
+        def signature(span):
+            return [(ctx.record(record), ctx.opcode(record), ctx.operands(record))
+                    for record in ctx.read_span(span)]
+
+        def check_index(owner, semantic_owner, span, eligible_edges, *, source_edge_index=None):
+            assert source_edge_index is not None
+            observed.append(source_edge_index)
+            first = ids[0]
+            assert source_edge_index[first[0]] == (first[1], first[2])
+            assert "L_missing_source" not in fragments.symbol_ids
+            assert "L_missing_error" not in fragments.symbol_ids
+            baseline = original(owner, semantic_owner, span, ids)
+            indexed = original(owner, semantic_owner, span, eligible_edges,
+                               source_edge_index=source_edge_index)
+            assert signature(indexed) == signature(baseline)
+            return indexed
+
+        monkeypatch.setattr(cfg, "fold_cond_branch_to_fallthrough", check_index)
+        result = cfg.run_aarch64_typed_cfg_passes(fragments, semantics, events, set(), edges)
+        assert len(observed) == 1
+        opcodes = [ctx.opcode(record) for record in ctx.read_span(result)]
+        assert ("b.ne" in opcodes) == valid_first
+        assert ("b.eq" in opcodes) != valid_first
+    finally:
+        fragments.close()
+
+
 def _reg(name):
     return (sem.TOKEN_REGISTER, sem.semantic_register_id(name), 0, 0)
 

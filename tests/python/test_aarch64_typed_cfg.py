@@ -133,6 +133,44 @@ def test_cold_fallthrough_requires_exact_proof_and_condition_alias(opcode, proof
     assert ctx.text(typed.fold_cond_branch_to_fallthrough_records(ctx, records, ids)) == expected
 
 
+@pytest.mark.parametrize("size", [8, 32, 128])
+def test_owned_cold_fallthrough_index_has_linear_label_lookup_count(size):
+    ctx = Events()
+    records = [ctx.mark("_f")]
+    edges = []
+    for i in range(size):
+        source, success, error = ("L_source_" + str(i), "L_success_" + str(i),
+                                  "L_error_" + str(i))
+        records.extend([
+            ctx.mark(source), ctx.mark("L_pcc_smap_" + str(i)),
+            ctx.branch("b.eq", success), ctx.branch("b", error),
+            ctx.mark(success), ctx.add("  ret", "ret"),
+            ctx.mark(error), ctx.add("  ret", "ret"),
+        ])
+        edges.append((ctx.intern(source), ctx.intern(error), ctx.intern(success)))
+    expected = ctx.text(typed.fold_cond_branch_to_fallthrough_records(ctx, records, edges))
+
+    class IndexedProofs(dict):
+        def __init__(self):
+            super().__init__((source, (error, success)) for source, error, success in edges)
+            self.probes = 0
+
+        def get(self, source, default=None):
+            self.probes += 1
+            return super().get(source, default)
+
+    class NoIteration:
+        def __iter__(self):
+            raise AssertionError("owned proof index must not scan the edge list")
+
+    index = IndexedProofs()
+    actual = typed.fold_cond_branch_to_fallthrough_records(
+        ctx, records, NoIteration(), source_edge_index=index,
+    )
+    assert ctx.text(actual) == expected
+    assert index.probes == 3 * size  # three ordinary labels per site, not the stack map
+
+
 @pytest.mark.parametrize("middle", ["empty", "directive", "nop", "label"])
 def test_fallthrough_deletion_crosses_only_empty_events(middle):
     ctx = Events()

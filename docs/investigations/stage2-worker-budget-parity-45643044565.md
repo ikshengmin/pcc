@@ -402,3 +402,163 @@ COMPLETE under 90 s / 1 GiB. Its real 102-module wire output was exactly
 1,816,064 B with the projected input SHA above; no timings compared here
 and no native execution of the new full `type_infer` module or complete
 self-host chain. Current-source native bootstrap remains a CI obligation.
+
+## Follow-up: ARM Stage1 typed CFG fold owner
+
+Run 45643044565 also produced the actual ARM Stage1 compiler and diagnostics
+(artifact 15046205794). Its 621 source modules, 17,764,805 source bytes,
+4,336,051 IR blocks, 43,983 functions and 18,169,668 IR instructions match
+x86 Stage1 module for module. Both admitted four workers. Sampled worker
+CPU seconds/wall seconds are 3.684 on x86 and 3.728 on ARM; median
+individual worker CPU/wall is 0.947 versus 0.956. Neither receipt observes
+an exact CPU quota/affinity. These observations do not indicate a loss of
+admitted parallelism and cannot establish a hardware speed ratio.
+
+| Stage1 measure | x86-64 | AArch64 |
+| --- | ---: | ---: |
+| Wall | 1466.275 s | 3993.340 s |
+| Process-tree peak | 2,589,310,976 B | 4,383,186,944 B |
+| Summed worker frontend generate | 970.456 s | 786.015 s |
+| Summed worker function emit | 1792.44 s | 2207.34 s |
+| Summed worker backend finalize | 0.268 s | 9386.229 s |
+
+The ARM backend finalize phase accounts for about 96.8% of the extra
+codegen worker seconds (not additive across inclusive phases). Its largest
+measured child phases are typed conditional-fallthrough folding (1372.02
+worker seconds), adjacent 64-bit memory pairing (1320.36 s), trampoline
+threading (1273.18 s), empty-local-label removal (751.78 s) and TLV
+resolver-save elision (645.71 s). This is an owned backend hotspot, not
+evidence that the frontend or worker count is responsible. The ARM Stage2
+owner still timed out under the old two-worker configuration; the
+export/summary/preload phase reached 860.78 s and only one codegen module
+retired before the original 1800 s deadline.
+
+`self_backend_aarch64_typed_cfg.fold_cond_branch_to_fallthrough_records`
+searched the entire eligible-edge list anew for each ordinary local label.
+The producer in `run_aarch64_typed_cfg_passes` already owns translated
+integer symbol IDs. It now builds one source-ID-to-first-target-pair
+index before the pass, retaining the first proof even when its error or
+success name was missing. Stack-map labels, missing IDs, branch/opcode,
+target-identity and event-distance checks and all semantic validation
+remain unchanged. The public wrapper and arbitrary caller-owned
+iterables retain their existing ordered search and callback behavior;
+there is no weakening or skipping of the pass.
+
+### Same actual generated typed input
+
+Use frozen source `5f101c61`, the 102-module export cohort described above
+(full graph SHA256
+`d6ee0e846d385484f420974584b65b5637d350531da32252e9ae2521d90e1734`),
+and actual module `pcc.frontends.python.worker_resource_plan` (48,417
+source bytes, SHA256
+`190055cdf7e3c4eca3c645efecb53b96bcb31a59e1057334cbc5933c0f43a954`).
+The frozen host CPython 3.15 compiler ran its real
+`pipeline.run_python_multi_codegen_worker` singleton manifest for cohort
+index 71; the export wire is full v1, source is parsed/lifted by the worker,
+and the target is concretely `aarch64-unknown-linux-gnu` before lowering.
+Keep `PCC_DIRECT_INDEXED_KERNEL_CAPTURE=1`,
+`PCC_DIRECT_INDEXED_KERNEL_EMIT=1`,
+`PCC_DIRECT_INDEXED_NATIVE_OBJECT=1`, `PCC_PYTHON_IR_PASSES=off`,
+frontend/object caches disabled and both worker widths 1. This is
+Linux x86 host CPython cross-target evidence, not native ARM elapsed
+time or the entire 621-module bootstrap.
+
+The actual worker completed 103 functions and 48,390 instructions with
+zero fallback records through `indexed-native-sections`. Capture the
+pre-fold event IDs and complete aligned record/header/token arenas at
+the existing fold wrapper, after typed trampoline threading. The
+actual frozen input is 202,676 events, 206,280 records, 341,063 tokens,
+13,467 ordinary local labels and 733 eligible edges. The old search
+performs 9,603,033 edge comparisons; the new one builds 733 entries and
+does one lookup per ordinary local label. Captured snapshot SHA256
+`3874023cdb4e6a69442f38d7659c560ab9dd7a9969f3fce799e609308ff99339`.
+Restore independent exact copies of those arenas/IDs for every measured
+arm. Measure the complete fold wrapper (including validation, span read
+and output rebuild, and candidate index construction). For each arm
+the unchanged adjacent unconditional-fallthrough pass on an independent
+copy is the control. Alternate order for five same-input pairs under
+the original 90 s / 1 GiB process-tree guard and exclusive performance
+window. Both old and index-assisted actual full workers separately
+emitted identical 1,831,384-byte PCOs, SHA256
+`9010efe52c977814b30c9cc160221ff3948c3742a9cf64b1116ea07210648470`;
+the full-worker runs are correctness, not paired timing.
+
+| Pair | Old fold s | Indexed fold s | Old control s | Candidate control s |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 1.4290 | 1.1911 | 0.8437 | 0.8264 |
+| 2 | 1.4295 | 1.2428 | 0.8702 | 0.8143 |
+| 3 | 1.4655 | 1.1704 | 0.9220 | 0.8672 |
+| 4 | 1.3567 | 1.2128 | 0.8124 | 0.8824 |
+| 5 | 1.5099 | 1.2942 | 0.8343 | 0.8247 |
+
+Median 1.429547 → 1.212801 s (-15.16%, 5/5), unchanged-control medians
+0.843700 → 0.826399 s; median pairwise control-normalized gain 14.90%.
+The entire guard completed in 38.652 s with 126,119,936 B peak. The
+full output arenas and selected IDs were byte-identical across all
+ten fold runs (digest
+`bff335455ad9966bdcaa1567ee2289e1c9c3a8d827b7d8d5f582b9874318c193`).
+This module has no selected conditional rewrite after trampoline
+threading; it measures the real proof-search work even when no rewrite
+is selected. Tests independently exercise both successful and denied
+rewrites. The same-data structural fixture at n/4n/16n (128/512/2048
+sites, five alternating pairs each, excluding fixture construction)
+gave old 1.518/13.489/224.436 ms and indexed 0.663/2.687/12.904 ms,
+equal outputs. The permanent probe also asserts exactly three ordinary
+label lookups per site and forbids any edge iteration on the owned-index
+path.
+
+### Changed-path correctness and known unrelated reds
+
+Five added tests first failed on the unmodified implementation, then
+passed. The production full typed route is compared with the original
+search on actual typed spans with duplicate first valid or missing
+proofs, ensuring the first proof wins, unknown symbols are not interned,
+stack-map events retain their established semantics, and selected
+words, fixups and operands match exactly. Public proof mutation,
+corruption, independent roots, exact distances and pass ordering
+remain exercised unchanged.
+
+The full current changed module independently emitted 985 KiB of IR
+including its actual new four-argument fold and production definitions
+(1.324 s, 68,411,392 B, guard COMPLETE). A correctness-only native x86
+ELF program compiled the exact candidate fold body (source SHA256
+`3d24abaed34cb50a0575e8321b5840b6102b3a31d3791185a9f535a11d6fa618`),
+its unchanged branch/label/retarget helpers and a controlled event fixture,
+using verified frozen `5f101c61` host and source-matched historical runtime.
+Compile 5.459 s / 130,334,720 B, execution 0.015 s / 8,589,312 B; both
+valid-first and missing-first outputs exactly equaled CPython and the
+original fold. This executes the changed body, not a new full native
+compiler or an ARM binary.
+
+Expanded adjacent test files under 90 s / 1 GiB:
+
+```sh
+PCC_TEST_NO_NATIVE_PROVISIONING=1 PCC_NO_AUTO_PCC1=1 python -m pytest -q -n0 \
+  tests/python/test_aarch64_typed_cfg.py \
+  tests/python/test_aarch64_typed_cfg_snapshot.py \
+  tests/python/test_aarch64_typed_pipeline.py \
+  tests/python/test_aarch64_typed_pass_context.py \
+  tests/python/test_aarch64_typed_pair.py tests/python/test_aarch64_typed_tlv.py \
+  tests/python/test_aarch64_checked_pass_spans.py \
+  tests/python/test_aarch64_noop_span_snapshot.py \
+  tests/python/test_aarch64_span_owner_transfer.py \
+  tests/python/test_backend_finalize_phase_timing.py \
+  tests/python/test_aarch64_branch_layout_parity.py
+```
+
+1048 passed, 168 failed, 5 deselected, 1 setup error; this is **not** a
+green batch. Every failure is in the unchanged
+`test_backend_finalize_phase_timing.py`: 160 failure-path mock sink
+fixtures lack the production `_owned_stack_windows` field, and all
+eight empty-module cases try to encode zero object sections. Re-running
+that exact file with the complete preimage CFG source reinstated
+produces the identical 168 failing node IDs and same provisioning setup
+error (84 passed, 3 deselected). The one native pcc0 diagnostic fixture
+was not executed: explicit existing current runtime is stale under the
+new compiler codegen identity and automatic provisioning was disabled.
+All other adjacent CFG/typed-span/branch files are green. The existing
+timing fixtures are a separate correctness test unit; preserve the
+timing/cleanup contracts rather than suppress these failures.
+Measure the next largest actual ARM finalize owner independently.
+No ARM execution, full Stage1/Stage2/Stage3 speedup or fixed point is
+claimed.

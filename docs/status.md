@@ -1263,14 +1263,22 @@ in the relevant section or issue and removes the entry.
    The shared x86 retarget/forward scan on 66 frozen real functions has a
    17.0% raw native owner gain (9.86% control-normalized median, 5/5 wins),
    identical packed object and assembly outputs; 14 new tests pass with
-   all 12 existing x86 reds unchanged. Next: CI full equal-ceiling Stage2/3,
-   fix the existing x86 correctness/diagnostic witnesses, then measure
-   frame-register/strong-liveness and remaining per-root reconstruction
-   independently. No full Stage2/3 speedup claim.
+   all 12 existing x86 reds unchanged in that comparison. ARM Stage1
+   3993.340 s vs x86 1466.275 s (same 621 modules, four workers): typed
+   backend finalize accounts for 96.8% of the extra codegen worker time.
+   First owner fix indexes conditional-fallthrough proofs once: actual
+   202,676-event frozen compiler module, five paired host cross-target
+   timings 1.430→1.213 s (-15.16%, control-normalized -14.90%, 5/5),
+   identical AArch64 PCO; exact changed body executed as x86 ELF.
+   1048 adjacent tests pass; all 168 existing red timing-fixture nodes
+   unchanged against preimage, one native setup unavailable. Next: fix
+   those timing fixtures; measure pairing/trampoline and frame-register/
+   strong-liveness owners independently, and await actual equal-ceiling
+   Stage2/3 CI. No full Stage2/3 speedup or ARM execution claim.
    [Phase investigation](investigations/stage2-worker-budget-parity-45643044565.md).
 
    Claims:
-   - ARM typed conditional fallthrough proof-edge index: Codex, Linux, 2026-11-25 17:27 UTC, area backend
+   - none
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
