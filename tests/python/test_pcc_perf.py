@@ -695,3 +695,46 @@ def test_handler_receipts_keep_peak_pause_memory_and_p99_per_pair(tmp_path, monk
 def test_handler_p99_refuses_invalid_timed_sample_sets(samples):
     with pytest.raises(SystemExit, match="latency receipt missing"):
         PERF._handler_p99_ms({"requests": 1, "latencies_ms": samples})
+
+
+def test_frontend_cache_identity_follows_the_compiler_not_the_runtime():
+    # An arm that changes code generation must not reuse another arm's
+    # frontend IR; arms that differ only in the runtime's sources share it.
+    files = {"pcc/frontends/python/codegen/a.py": "1" * 64,
+             "pcc/backend/b.py": "2" * 64,
+             "pcc/runtime/py/py_list.py": "3" * 64,
+             "tests/python/test_x.py": "4" * 64}
+    base = PERF.frontend_cache_identity(files)
+    assert base == PERF.frontend_cache_identity(dict(files))
+    changed_codegen = dict(files, **{"pcc/frontends/python/codegen/a.py": "5" * 64})
+    assert PERF.frontend_cache_identity(changed_codegen) != base
+    added_frontend = dict(files, **{"pcc/frontends/python/new.py": "6" * 64})
+    assert PERF.frontend_cache_identity(added_frontend) != base
+    changed_runtime = dict(files, **{"pcc/runtime/py/py_list.py": "7" * 64})
+    assert PERF.frontend_cache_identity(changed_runtime) == base
+    changed_test = dict(files, **{"tests/python/test_x.py": "8" * 64})
+    assert PERF.frontend_cache_identity(changed_test) == base
+
+
+def test_counted_runs_parse_darwin_and_linux_counters():
+    darwin = ("        0.31 real         0.25 user         0.02 sys\n"
+              "             9962257  instructions retired\n"
+              "             6056643  cycles elapsed\n")
+    assert PERF.parse_counted_run(darwin, True) == (9962257, 6056643)
+    linux = "12345678,,instructions:u,1000,100.00,,\n2345678,,cycles:u,1000,100.00,,\n"
+    assert PERF.parse_counted_run(linux, False) == (12345678, 2345678)
+    with pytest.raises(SystemExit):
+        PERF.parse_counted_run("no counters here", True)
+
+
+def test_instruction_rows_take_the_difference_of_two_run_lengths():
+    # 10 and 50 rounds of 20 requests: 800 requests apart, start-up cancels.
+    assert PERF.per_request((1_000_000, 2_000_000), (1_800_000, 3_600_000), 10, 50) == (1000.0, 2000.0)
+    rows = PERF.instruction_rows({
+        "base": [(1000.0, 2000.0), (1002.0, 2100.0), (998.0, 1900.0)],
+        "new": [(990.0, 1800.0), (989.0, 1850.0), (991.0, 1750.0)],
+    })
+    assert rows[0]["instructions"] == 1000.0 and "instruction_change" not in rows[0]
+    assert rows[0]["instruction_spread"] == pytest.approx(0.4)
+    assert rows[1]["instruction_change"] == pytest.approx(-1.0)
+    assert rows[1]["cycle_change"] == pytest.approx(-10.0)

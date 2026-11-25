@@ -1211,6 +1211,18 @@ in the relevant section or issue and removes the entry.
    `test_list_container_lock_races.py::test_list_lock_is_the_container_lock_without_the_probe`,
    `test_virtual_thread_pcc_py_carriers.py::test_threaded_pcc_python_archive_runs_persistent_carriers_and_pin_metrics`,
    `test_gc_object_cell_fast_paths.py::test_object_cell_fast_paths_publish_and_retire_exact_cells`.
+   Measurement tool (Claude, 2026-11-26): `pcc_perf.py instr BASE ARM...`
+   reports instructions and cycles per handler request from two run
+   lengths; on J1's arms it gives base 272705, control +0.05%, J1 -1.27%
+   instructions (cycles -2.23% and -4.12%) at load 5.3. Arm builds already
+   reused program objects through the object cache; the frontend IR cache,
+   though, fell back to the fixed identity `pcc-perf` and keyed the
+   compiler by the Python interpreter, so an arm that changed code
+   generation would have measured the IR of an arm built before it. Its
+   identity is now the digest of the sealed `pcc/` files outside
+   `pcc/runtime/py`. Earlier arms changed the runtime, the backend (keyed
+   by its sources) or IR passes (after the cache boundary), so their
+   results stand.
    J2. Fewer root stores and release chains in code generation: 104 of the
        304 calls per request clear a slot that is already empty.
    J3. TaskScope (5x CPython), `time.perf_counter` (7x), `str.encode` (5x).
@@ -1259,7 +1271,7 @@ in the relevant section or issue and removes the entry.
    4 nodes (`fallback_instruction_count` is 0; the test expects 1).
 
    Claims:
-   - (c) measurement tool: instructions per request and program reuse across arms: Claude, macOS, 2026-11-25T18:25Z, area proof (scripts/pcc_perf.py, tests/python/test_pcc_perf.py only)
+   - none
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:

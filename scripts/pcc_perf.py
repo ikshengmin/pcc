@@ -9,6 +9,10 @@
                         wins, stopped time and graph-lock waits; with
                         --control-arm NAME, the noise floor and a verdict
                         for every row
+    instr BASE ARM...   instructions and cycles one handler request executes
+                        (Darwin /usr/bin/time -l, Linux perf stat), the
+                        difference of two run lengths, against the first arm;
+                        a control arm shows how far each moves unchanged
     table NAME          one and four workers, against the recorded asyncio
                         figure for the same worker count
     asyncio             measure the CPython asyncio counterpart with one and
@@ -58,6 +62,8 @@ Rates are wall-clock and need idle cores: ``ab`` and ``table`` print the
 machine's load, and beside each rate the processor time one request cost,
 which other work on the machine barely moves (it does not see time spent
 waiting for a lock, so it is the cost of the work, not the scaling).
+On a loaded machine ``instr`` is the result: the instructions a request
+executes do not depend on other work, and its cycles barely do.
 """
 
 from __future__ import annotations
@@ -345,6 +351,24 @@ def build(name: str, timeout: int, max_tree_rss: int,
         ])
 
 
+def frontend_cache_identity(files: dict) -> str:
+    """The frontend IR cache's namespace for an arm: its sealed compiler files.
+
+    That cache keys a program's IR by the program's sources, the code
+    generation options and the compiler executable, which for a host compile
+    is the Python interpreter, not pcc. Without this namespace an arm that
+    changes code generation reused the IR of an arm built before it and
+    measured the old code. The runtime's own sources (pcc/runtime/py) are
+    left out: code generation does not read them, so arms that differ only in
+    the runtime still share the program's IR.
+    """
+    digest = hashlib.sha256(b"pcc-perf-frontend-v1\0")
+    for relative in sorted(files):
+        if relative.startswith("pcc/") and not relative.startswith("pcc/runtime/py/"):
+            digest.update(relative.encode() + b"\0" + files[relative].encode() + b"\0")
+    return "pcc-perf-frontend-" + digest.hexdigest()[:32]
+
+
 def build_child(arm: Path) -> int:
     """Runs inside the sealed source: runtime archive, programs, smoke runs."""
     import pcc
@@ -386,6 +410,9 @@ def build_child(arm: Path) -> int:
         # the emitter's own source identity).
         PCC_SELF_BACKEND_OBJECT_CACHE_IDENTITY="pcc-perf",
         PCC_SELF_BACKEND_OBJECT_CACHE_DIR=str(HOME / "object-cache"),
+        # The frontend IR cache otherwise falls back to the object cache's
+        # fixed identity; see frontend_cache_identity.
+        PCC_PY_FRONTEND_IR_CACHE_IDENTITY=frontend_cache_identity(identity["files"]),
     )
     if percent is not None:
         report["gc2_pacer_attested"] = _attest_gc2_pacer(arm, runtime, percent, compile_python)
@@ -677,6 +704,96 @@ def compare(a: str, b: str, pairs: int, collectors, workers, rounds: int,
                 row["gc2_pacer_percent_by_arm"] = pacer_modes
             results.append(row)
     return results
+
+
+INSTR_CONCURRENCY = 20
+
+
+def parse_counted_run(stderr: str, darwin: bool) -> tuple[int, int]:
+    """The instructions and cycles one counted run reports: ``/usr/bin/time
+    -l`` on Darwin, ``perf stat -x,`` on Linux."""
+    if darwin:
+        instructions = re.search(r"(\d+)\s+instructions retired", stderr)
+        cycles = re.search(r"(\d+)\s+cycles elapsed", stderr)
+    else:
+        instructions = re.search(r"^(\d+),[^,\n]*,instructions", stderr, re.M)
+        cycles = re.search(r"^(\d+),[^,\n]*,cycles", stderr, re.M)
+    if instructions is None or cycles is None:
+        raise SystemExit("the counted run reported no instructions or cycles")
+    return int(instructions.group(1)), int(cycles.group(1))
+
+
+def counted_run(binary: Path, rounds: int, workers: int) -> tuple[int, int]:
+    """One handler run under the platform's counters."""
+    darwin = sys.platform == "darwin"
+    if darwin:
+        prefix = ["/usr/bin/time", "-l"]
+    elif sys.platform.startswith("linux") and shutil.which("perf"):
+        prefix = ["perf", "stat", "-x,", "-e", "instructions,cycles"]
+    else:
+        raise SystemExit("instr needs /usr/bin/time -l (Darwin) or perf (Linux)")
+    process = subprocess.run(
+        prefix + [str(binary), str(INSTR_CONCURRENCY), "0", str(rounds), "--summary", str(workers)],
+        capture_output=True, text=True, timeout=600, env=_sealed_runtime_env(binary, 0),
+    )
+    if process.returncode != 0:
+        raise SystemExit(f"{binary} failed under the counters: {process.stderr[-400:]}")
+    return parse_counted_run(process.stderr, darwin)
+
+
+def per_request(short: tuple[int, int], long: tuple[int, int],
+                short_rounds: int, long_rounds: int) -> tuple[float, float]:
+    """Instructions and cycles of one request: the difference of two run
+    lengths, so start-up and warm-up cancel."""
+    requests = (long_rounds - short_rounds) * INSTR_CONCURRENCY
+    return (long[0] - short[0]) / requests, (long[1] - short[1]) / requests
+
+
+def measure_instructions(names: list[str], repeats: int, short_rounds: int,
+                         long_rounds: int, workers: int) -> dict[str, list]:
+    """Per-request instructions and cycles of each arm, the arms alternating."""
+    results: dict[str, list] = {name: [] for name in names}
+    for _ in range(repeats):
+        for name in names:
+            binary = binary_of(name)
+            short = counted_run(binary, short_rounds, workers)
+            long = counted_run(binary, long_rounds, workers)
+            results[name].append(per_request(short, long, short_rounds, long_rounds))
+    return results
+
+
+def instruction_rows(results: dict[str, list]) -> list[dict]:
+    """Medians, the spread of the runs, and the change against the first arm.
+
+    The number of instructions a request executes hardly moves with the
+    machine's load; its cycles do. A control arm (a second build of the first
+    arm) shows how far each moves without a change."""
+    rows = []
+    base = None
+    for name, runs in results.items():
+        instructions = statistics.median(run[0] for run in runs)
+        cycles = statistics.median(run[1] for run in runs)
+        spread = 100.0 * (max(run[0] for run in runs) - min(run[0] for run in runs)) / instructions
+        row = {"arm": name, "instructions": instructions, "cycles": cycles,
+               "instruction_spread": spread, "runs": [round(run[0]) for run in runs]}
+        if base is None:
+            base = row
+        else:
+            row["instruction_change"] = 100.0 * (instructions / base["instructions"] - 1.0)
+            row["cycle_change"] = 100.0 * (cycles / base["cycles"] - 1.0)
+        rows.append(row)
+    return rows
+
+
+def print_instructions(rows: list[dict]) -> None:
+    for row in rows:
+        change = ""
+        if "instruction_change" in row:
+            change = (f"  {row['instruction_change']:+.2f}% instructions"
+                      f"  {row['cycle_change']:+.2f}% cycles")
+        print(f"{row['arm']:14s} {row['instructions']:10.0f} instructions"
+              f" (runs within {row['instruction_spread']:.2f}%)"
+              f" {row['cycles']:10.0f} cycles per request{change}")
 
 
 def load_note(load: float) -> str:
@@ -1321,6 +1438,14 @@ def main(argv: list[str] | None = None) -> int:
                     help="a second build of arm A, rotated with A and B; "
                          "its pairs set the noise floor")
 
+    instr = commands.add_parser(
+        "instr", help="instructions and cycles per handler request; the first arm is the base")
+    instr.add_argument("names", nargs="+")
+    instr.add_argument("--repeats", type=int, default=3)
+    instr.add_argument("--short-rounds", type=int, default=10)
+    instr.add_argument("--long-rounds", type=int, default=50)
+    instr.add_argument("--workers", type=int, default=1)
+
     table = commands.add_parser("table")
     table.add_argument("name")
     table.add_argument("--rounds", type=int, default=100)
@@ -1424,6 +1549,14 @@ def main(argv: list[str] | None = None) -> int:
         apply_control(rows)
         print_comparison(rows)
         append_ledger(rows)
+        return 0
+    if args.command == "instr":
+        if args.long_rounds <= args.short_rounds:
+            raise SystemExit("--long-rounds must exceed --short-rounds")
+        print(load_note(os.getloadavg()[0]))
+        rows = instruction_rows(measure_instructions(
+            args.names, args.repeats, args.short_rounds, args.long_rounds, args.workers))
+        print_instructions(rows)
         return 0
     if args.command == "table":
         with performance_lock():
