@@ -1281,6 +1281,29 @@ in the relevant section or issue and removes the entry.
    test_generator_frame_initialization, test_generator_frame_owner_transfer,
    test_virtual_thread_pcc_py_carriers, test_generator_bulk_frame_save,
    test_gc_coroutine_scheduler_roots_production, test_generator_moving_frame_take;
+   Open item (1), Claude, 2026-11-26: all nine functions fail on HEAD too.
+   Fixed: `test_generator_terminal_clear_activation.py` (10 pass); it
+   required a `pcc_gc_load_ptr` call, which the root-read lowering of
+   887c56b7d turned into icmp/select/load. `RootSlotContract.root_read`
+   now names the slot of either form. `test_virtual_thread_lowering_ownership.py`
+   now also accepts both read forms and the `py_gen_frame_move` saves of
+   dc7f4b578, and stops at its lease assertions. Still failing, and why:
+   `test_virtual_thread_lowering_ownership.py`,
+   `test_generator_method_owned_result.py::test_generator_method_owned_result_ir`
+   and `test_generator_result_lexical_root.py` pin the
+   `pcc_gc_foreign_lease_*`/`pcc_gc_root_copy_lease` calls the one collector no
+   longer emits ((d) U7-U10 rewrites lease tests);
+   `test_generator_frame_take_group.py::test_no_log_generator_group_finalization_and_cleanup_matches_reference`
+   fails in `tests/python/promoted_restore_contract.py`, which accepts a
+   promoted owner flag only in a select or a branch, while dc7f4b578 passes
+   it as `py_gen_frame_move`'s `owned` argument (the contract must prove
+   the caller clears the flag after the move); the native tests of
+   `test_generator_frame_take_group.py` and `test_generator_frame_take_protocol.py`
+   link removed tracing functions (`pcc_gc_gray_count_load_acquire`,
+   `pcc_gc_set_mark_color`, store-buffer functions);
+   `test_generator_root_groups_native.py` needs `PCC_THREADED_RUNTIME_ARCHIVE`.
+   The 19 files that use `RootSlotContract` fail on 82 nodes on the tree and
+   87 on HEAD, none new.
    (3) coroutines check "already executing" and then store the state with
    a plain store, so two threads may both pass; a probe decides.
    J2. Fewer root stores and release chains in code generation: 104 of the
@@ -1331,7 +1354,7 @@ in the relevant section or issue and removes the entry.
    4 nodes (`fallback_instruction_count` is 0; the test expects 1).
 
    Claims:
-   - open item (1) of the generator re-entrance result: the failing generator and virtual-thread IR tests (terminal_clear_activation, method_owned_result, result_lexical_root, vthread_lowering_ownership, frame_take_group's promoted owner): Claude, macOS, 2026-11-25T20:40Z, area frontend-python (those test files and tests/python/root_slot_contract.py; code generation only if a test shows a real missing root)
+   - none
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:

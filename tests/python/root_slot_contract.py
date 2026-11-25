@@ -25,6 +25,9 @@ _PLAIN_FRAME_ENTRIES = frozenset((
     "pcc_gc_frame_enter", "pcc_gc_frame_leave",
     "pcc_gc_frame_enter_lifo", "pcc_gc_frame_leave_lifo",
 ))
+# The constant NULL cell a lowered root read selects for a NULL slot
+# (pcc/frontends/python/fused_protocol_pass.py, NULL_SLOT).
+_NULL_SLOT = ".pcc.gc.null.slot"
 
 
 class RootSlotContract:
@@ -40,6 +43,37 @@ class RootSlotContract:
                         if ins.kind == "cast" and ins.data[0] == "bitcast"}
         self.geps = {ins.data[0]: ins for _, _, ins in self.rows if ins.kind == "gep"}
         self.globals = {item.name.lstrip("@"): item for item in globals_}
+        self.definitions = {}
+        for _, _, ins in self.rows:
+            if ins.kind in ("select", "load", "call"):
+                self.definitions[ins.data[0]] = ins
+            elif ins.kind == "icmp":
+                self.definitions[ins.data[1]] = ins
+
+    def root_read(self, ins):
+        """The root slot ``ins`` freshly reads, in either compiled form, or None.
+
+        Code generation reads a root with pcc_gc_load_ptr(owner, slot) or
+        pcc_gc_load_borrowed_ptr. The fused-protocol pass lowers that call on
+        a register slot to ``icmp eq slot, null``, a ``select`` of
+        @.pcc.gc.null.slot or the slot, and a load through the selected
+        address; on a global slot, to a direct load. Each reads the cell anew.
+        """
+        if self.called(ins, "pcc_gc_load_ptr") or self.called(ins, "pcc_gc_load_borrowed_ptr"):
+            return self.args(ins)[1]
+        if ins.kind != "load":
+            return None
+        address = ins.data[3]
+        if address.startswith("@"):
+            return address
+        select = self.definitions.get(address)
+        if select is None or select.kind != "select" or select.data[3] != "@" + _NULL_SLOT:
+            return None
+        test = self.definitions.get(select.data[2])
+        if (test is None or test.kind != "icmp" or test.data[0] != "eq"
+                or tuple(test.data[3:]) != (select.data[4], "null")):
+            return None
+        return select.data[4]
 
     def symbol(self, value):
         seen = set()

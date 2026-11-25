@@ -393,7 +393,15 @@ def _prepare_callback_slot_contract(module, mutate_cleanup=None):
             for index, instruction in enumerate(block.instructions)]
     addresses = RootSlotContract(blocks, module.globals_)
     slot = addresses.slot
-    loads = {ins.data[0]: ins.data[3] for _, _, ins in rows if ins.kind == "load"}
+    # The cell each loaded value came from; a root read lowered by the
+    # fused-protocol pass loads through a select, so name its root slot.
+    loads = {}
+    for _, _, ins in rows:
+        source = addresses.root_read(ins)
+        if source is not None:
+            loads[ins.data[0]] = source
+        elif ins.kind == "load":
+            loads[ins.data[0]] = ins.data[3]
 
     def called(ins, name):
         return (ins.kind == "call" and not ins.data[3]
@@ -527,9 +535,15 @@ def _prepare_callback_slot_contract(module, mutate_cleanup=None):
     assert set(roots + item_slots) <= set(restored)
     saved_groups = []
     for candidate in blocks:
-        saves = {slot(loads[args(ins)[2]]): args(ins)[1]
-                 for ins in candidate.instructions
-                 if called(ins, "py_gen_frame_set") and args(ins)[2] in loads}
+        saves = {}
+        for ins in candidate.instructions:
+            if called(ins, "py_gen_frame_set") and args(ins)[2] in loads:
+                saves[slot(loads[args(ins)[2]])] = args(ins)[1]
+            elif called(ins, "py_gen_frame_move"):
+                # A suspension saves an owned local by handing its slot to
+                # py_gen_frame_move (dc7f4b578): the frame cell then holds
+                # the slot's reference, or a retained copy of it.
+                saves[slot(args(ins)[2])] = args(ins)[1]
         if callable_slot in saves and item_slots[0] in saves and result_slot not in saves:
             saved_groups.append(saves)
     assert saved_groups, "no callable/first-argument owner save across argument suspension"

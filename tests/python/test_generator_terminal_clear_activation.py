@@ -98,9 +98,11 @@ def assert_terminal_clear_contract(blocks, globals_):
             continue
         receiver, index, count = roots.args(call)
         reload = block.instructions[position - 1]
-        assert roots.called(reload, "pcc_gc_load_ptr") and reload.data[0] == receiver, "batch receiver must freshly reload"
-        keeper = roots.slot(roots.args(reload)[1])
-        assert roots.args(reload)[0] == "null"
+        source = roots.root_read(reload)
+        assert source is not None and reload.data[0] == receiver, "batch receiver must freshly reload"
+        keeper = roots.slot(source)
+        if reload.kind == "call":
+            assert roots.args(reload)[0] == "null"
         roots.require_owning(keeper, allow_lifo=True)
         select = definitions[count]
         assert select.kind == "select" and select.data[4] == "16", "bounded count must be min(remaining,16)"
@@ -133,9 +135,10 @@ def assert_terminal_clear_contract(blocks, globals_):
         assert len(setters) == 1
         at, setter = setters[0]
         current = clear.instructions[at - 1]
-        assert roots.called(current, "pcc_gc_load_ptr"), "fallback receiver must reload after a declined/parking call"
+        current_source = roots.root_read(current)
+        assert current_source is not None, "fallback receiver must reload after a declined/parking call"
         assert current.data[0] == roots.args(setter)[0]
-        assert roots.slot(roots.args(current)[1]) == keeper
+        assert roots.slot(current_source) == keeper
         assert clear.terminator.kind == "br" and clear.terminator.data[0] == scalar_test.name, "decline must retain original serial remainder"
         _assert_terminal_index_progress(
             roots, definitions, index, count, length,
