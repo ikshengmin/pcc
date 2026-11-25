@@ -1,9 +1,10 @@
-"""fused-protocol: calls the fused collector (GC0) answers without work.
+"""fused-protocol: calls the one collector answers without work.
 
-PCC_GC_FUSED_PROTOCOL=1 removes pin/unpin and store-barrier calls and
-replaces address-lease calls by their 0 answer after code generation
-(pcc/frontends/python/fused_protocol_pass.py). No block is split. A program
-compiled this way runs only on the fused collector.
+The pass removes pin/unpin and store-barrier calls, replaces address-lease
+calls by their 0 answer, the root reads pcc_gc_load_ptr and
+pcc_gc_load_borrowed_ptr by a load of their slot (NULL for a NULL slot), and
+pcc_gc_resolve_owned_ptr by its argument, after code generation
+(pcc/frontends/python/fused_protocol_pass.py). No block is split.
 """
 from __future__ import annotations
 
@@ -23,10 +24,13 @@ MODULE = textwrap.dedent("""
       call void (ptr, ptr, ptr) @pcc_gc_note_slot_write_barrier(ptr null, ptr %slot, ptr %value)
       call void (ptr, ptr) @pcc_gc_note_write_barrier(ptr %slot, ptr %value)
       %loaded = call ptr (ptr, ptr) @pcc_gc_load_ptr(ptr null, ptr %slot)
+      %global = call ptr (ptr, ptr) @pcc_gc_load_borrowed_ptr(ptr %value, ptr @module.slot)
+      %none = call ptr (ptr, ptr) @pcc_gc_load_ptr(ptr null, ptr null)
+      %owned = call ptr (ptr) @pcc_gc_resolve_owned_ptr(ptr %loaded)
       %status = call i64 (ptr, i64) @pcc_gc_foreign_lease_release(ptr %slot, i64 %token)
       call void (ptr) @pcc_gc_unpin(ptr %value)
       call void (ptr, ptr) @pcc_gc_store_root(ptr %slot, ptr %value)
-      ret ptr %loaded
+      ret ptr %owned
     }
     """).lstrip()
 
@@ -40,12 +44,21 @@ def test_inert_calls_are_removed_or_answered_and_the_rest_stay():
         "entry:",
         "%token = add i64 0, 0",
         "%borrowed = add i64 0, 0",
-        "%loaded = call ptr (ptr, ptr) @pcc_gc_load_ptr(ptr null, ptr %slot)",
+        "%loaded.pcc.null = icmp eq ptr %slot, null",
+        "%loaded.pcc.slot = select i1 %loaded.pcc.null, ptr @.pcc.gc.null.slot, ptr %slot",
+        "%loaded = load ptr, ptr %loaded.pcc.slot",
+        "%global = load ptr, ptr @module.slot",
+        "%none = load ptr, ptr @.pcc.gc.null.slot",
+        "%owned = select i1 1, ptr %loaded, ptr %loaded",
         "%status = add i64 0, 0",
         "call void (ptr, ptr) @pcc_gc_store_root(ptr %slot, ptr %value)",
-        "ret ptr %loaded",
+        "ret ptr %owned",
         "}",
+        "@.pcc.gc.null.slot = internal constant ptr null",
     ]
+    # A module that already defines the NULL word does not get another.
+    again, _ = fused_protocol_text(MODULE + "@.pcc.gc.null.slot = internal constant ptr null\n")
+    assert again.count("@.pcc.gc.null.slot = ") == 1
     declarations = "declare void @pcc_gc_pin(ptr)\n"
     assert fused_protocol_text(declarations) == (declarations, False)
 
@@ -107,13 +120,23 @@ _REFERENCE_ZERO = r"^(\s*)(%[\w.$-]+) = call i64 \((?:ptr|ptr, i64)\) " + (
 )
 
 
+_REFERENCE_LOAD = r"^(\s*)(%[\w.$-]+) = call ptr \(ptr, ptr\) " + (
+    r"@(?:pcc_gc_load_ptr|pcc_gc_load_borrowed_ptr)\("
+    rf"ptr {_VALUE}, ptr ({_VALUE})\)\s*$"
+)
+_REFERENCE_RESOLVE = r"^(\s*)(%[\w.$-]+) = call ptr \(ptr\) " + (
+    rf"@pcc_gc_resolve_owned_ptr\(ptr ({_VALUE})\)\s*$"
+)
+
+
 def _reference_text(text):
     import re
 
     drop, zero = re.compile(_REFERENCE_DROP), re.compile(_REFERENCE_ZERO)
+    load, resolve = re.compile(_REFERENCE_LOAD), re.compile(_REFERENCE_RESOLVE)
     if "@pcc_gc_" not in text:
         return text, False
-    output, changed, inside = [], False, False
+    output, changed, inside, null_slot = [], False, False, False
     for line in text.split("\n"):
         if not inside:
             inside = line.startswith("define ") and line.rstrip().endswith("{")
@@ -132,8 +155,35 @@ def _reference_text(text):
                 output.append(f"{match.group(1)}{match.group(2)} = add i64 0, 0")
                 changed = True
                 continue
+            match = load.match(line)
+            if match:
+                indent, name, slot = match.groups()
+                if slot == "null":
+                    output.append(f"{indent}{name} = load ptr, ptr @.pcc.gc.null.slot")
+                    null_slot = True
+                elif slot.startswith("@"):
+                    output.append(f"{indent}{name} = load ptr, ptr {slot}")
+                else:
+                    output.append(f"{indent}{name}.pcc.null = icmp eq ptr {slot}, null")
+                    output.append(f"{indent}{name}.pcc.slot = select i1 {name}.pcc.null, "
+                                  f"ptr @.pcc.gc.null.slot, ptr {slot}")
+                    output.append(f"{indent}{name} = load ptr, ptr {name}.pcc.slot")
+                    null_slot = True
+                changed = True
+                continue
+            match = resolve.match(line)
+            if match:
+                indent, name, value = match.groups()
+                output.append(f"{indent}{name} = select i1 1, ptr {value}, ptr {value}")
+                changed = True
+                continue
         output.append(line)
-    return ("\n".join(output), True) if changed else (text, False)
+    if not changed:
+        return text, False
+    if null_slot and "@.pcc.gc.null.slot = " not in text:
+        definition = "@.pcc.gc.null.slot = internal constant ptr null"
+        output[-1:] = [definition, ""] if output and output[-1] == "" else [output[-1], definition]
+    return "\n".join(output), True
 
 
 EDGE_LINES = [
@@ -169,6 +219,18 @@ EDGE_LINES = [
     "  %s.12 = call i64 (ptr) @pcc_gc_foreign_lease_acquire(ptr %root)  ",
     "  @s = call i64 (ptr) @pcc_gc_foreign_lease_acquire(ptr %root)",
     "  %loaded = call ptr (ptr, ptr) @pcc_gc_load_ptr(ptr null, ptr %slot)",
+    "\t%l.1 = call ptr (ptr, ptr) @pcc_gc_load_borrowed_ptr(ptr %o, ptr @g.slot)  ",
+    "  %l.2 = call ptr (ptr, ptr) @pcc_gc_load_ptr(ptr null, ptr null)",
+    "  %l.3 = call ptr (ptr) @pcc_gc_load_ptr(ptr %slot)",
+    "  %l.4 = call ptr (ptr, ptr) @pcc_gc_load_ptr(ptr null, ptr %slot, ptr %x)",
+    "  %l.5 = call i64 (ptr, ptr) @pcc_gc_load_ptr(ptr null, ptr %slot)",
+    "  %l.6 = call ptr (ptr, ptr) @pcc_gc_load_ptr(ptr null, ptr %slot) ; tail",
+    "  %l.7 = call ptr (ptr, ptr) @pcc_gc_load_ptr(ptr null, ptr %ü)",
+    "  call ptr (ptr, ptr) @pcc_gc_load_ptr(ptr null, ptr %slot)",
+    "  %r.1 = call ptr (ptr) @pcc_gc_resolve_owned_ptr(ptr %v.1)",
+    "  %r.2 = call ptr (ptr) @pcc_gc_resolve_owned_ptr(ptr null)",
+    "  %r.3 = call ptr (ptr, ptr) @pcc_gc_resolve_owned_ptr(ptr %v)",
+    "  %r.4 = call ptr (ptr) @pcc_gc_resolve_owned_ptr(ptr %v, ptr %w)",
     "  call void (ptr, ptr) @pcc_gc_store_root(ptr %slot, ptr %value)",
     "",
 ]
@@ -218,7 +280,7 @@ def test_scanner_equals_the_former_expressions_on_the_pass_inputs(tmp_path, monk
                        python_library=source != program, backend="self")
     seen = "\n".join(inputs)
     assert len(inputs) >= len(sources)
-    assert seen.count("@pcc_gc_pin(") > 1 and seen.count("@pcc_gc_foreign_lease_acquire(") > 1
+    assert seen.count("@pcc_gc_load_ptr(") > 1 and seen.count("@pcc_gc_load_borrowed_ptr(") > 1
 
 
 def test_the_scanner_runs_natively_where_the_expressions_did_not(tmp_path):

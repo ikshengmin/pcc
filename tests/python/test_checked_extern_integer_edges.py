@@ -131,8 +131,16 @@ def second(value):
     )
     assert call is not None
     current = call[1]
-    assert "@pcc_gc_load_ptr(ptr null, ptr " in definitions[current]
-    root_pointer = re.findall(r"%[^ ,)]+", definitions[current])[-1]
+    # The root read: a pcc_gc_load_ptr call before the fused-protocol pass,
+    # a load of the slot through its NULL-word select after it.
+    read = definitions[current]
+    through = re.fullmatch(r"load ptr, ptr (%[^ ,)]+\.pcc\.slot)", read)
+    if through:
+        read = definitions[through[1]]
+        assert re.fullmatch(r"select i1 %[^ ,]+, ptr @\.pcc\.gc\.null\.slot, ptr %[^ ,)]+", read), read
+    else:
+        assert "@pcc_gc_load_ptr(ptr null, ptr " in read
+    root_pointer = re.findall(r"%[^ ,)]+", read)[-1]
     stored = [value for slot, value in re.findall(
         r"@pcc_gc_store_root\(ptr (%[^ ,)]+), ptr (%[^ ,)]+)\)", body
     ) if slot == root_pointer]

@@ -1182,11 +1182,25 @@ def test_typed_int_direct_call_defaults_to_boxed_tagged_shape_and_runs(tmp_path)
     assert "int.tag.fast" in add_body, add_body
     assert "tag.add" in add_body, add_body
     assert "@py_obj_add" in add_body, add_body
+    # The borrowed read of ``n``: a pcc_gc_load_borrowed_ptr call before the
+    # fused-protocol pass, a load of its slot through the NULL-word select
+    # after it.
     argument = re.search(
         r"(%[\w.]+) = call ptr (?:\([^)]*\)\s*)?"
         r"@pcc_gc_load_borrowed_ptr\(ptr null, ptr %n\.addr[\w.]*\)",
         bench_body,
     )
+    if argument is None:
+        for select in re.finditer(
+            r"(%[\w.]+)\.pcc\.slot = select i1 [^,]+, ptr @\.pcc\.gc\.null\.slot, "
+            r"ptr %n\.addr[\w.]*\n", bench_body,
+        ):
+            argument = re.search(
+                "(" + re.escape(select.group(1)) + r") = load ptr, ptr "
+                + re.escape(select.group(1)) + r"\.pcc\.slot\n", bench_body,
+            )
+            if argument is not None:
+                break
     assert argument is not None, bench_body
     assert re.search(
         r"call\s+ptr\s+(?:\([^)]*\)\s*)?@user_[A-Za-z0-9_]*_add\s*\(ptr\s+"

@@ -363,7 +363,13 @@ def _assert_dynamic_callback_continuation_ir(ir_text: str) -> None:
     assert releases, "args operand release is missing"
     args_release = min(releases)
     marker_check = body.index("@py_gen_is_continuation(", args_release)
-    inspect_reload = body.rindex("@pcc_gc_load_ptr(", args_release, marker_check)
+    # The root reread: a pcc_gc_load_ptr call before the fused-protocol pass,
+    # a load of the root through its NULL-word select after it.
+    rereads = [match.start() for match in re.finditer(
+        r"@pcc_gc_load_ptr\(|= load ptr, ptr %[-\w.]+\.pcc\.slot\b", body[:marker_check])
+        if match.start() > args_release]
+    assert rereads, "root reread before the continuation check is missing"
+    inspect_reload = rereads[-1]
     assert call_result < result_root < args_release < inspect_reload < marker_check
 
     direct = re.search(r"^vthread\.call\.direct[^\n]*:\n(.*?)(?=^\S|\Z)", body, re.M | re.S)

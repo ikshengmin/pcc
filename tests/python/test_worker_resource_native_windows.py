@@ -501,7 +501,14 @@ def _assert_diagnostic_address_lane(body):
     boxed = tagged.group(1)
     assert re.fullmatch(r"call i64 \(ptr, ptr\) @py_int_to_i64_lane\(ptr "
                         + re.escape(boxed) + r", ptr %[\w.]+\)", definitions[slow])
+    # The root read: a pcc_gc_load_ptr call before the fused-protocol pass,
+    # a load of the slot through its NULL-word select after it.
     load = re.fullmatch(r"call ptr \(ptr, ptr\) @pcc_gc_load_ptr\(ptr null, ptr (%[\w.]+)\)", definitions[boxed])
+    if load is None:
+        through = re.fullmatch(r"load ptr, ptr (%[\w.]+\.pcc\.slot)", definitions[boxed])
+        assert through, definitions[boxed]
+        load = re.fullmatch(r"select i1 %[\w.]+, ptr @\.pcc\.gc\.null\.slot, ptr (%[\w.]+)",
+                            definitions[through.group(1)])
     assert load
     # The root slot is loaded directly, or through an identity pointer alias.
     root = load.group(1)

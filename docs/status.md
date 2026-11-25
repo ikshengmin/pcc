@@ -883,9 +883,29 @@ in the relevant section or issue and removes the entry.
    entry poll that only a moving collector needed. Their self time is
    about 1.0 us of 21.7 us at w1 (4.6%) and 1.8 of 31.8 us at w4 (5.8%),
    plus the two flag loads of the AArch64 short path at each program load.
-   The fused-protocol pass, which runs for every program and runtime
-   module, lowers them to a load; deleting the pass in item 2 (d)(3) moves
-   this lowering into code generation.
+   Result: the fused-protocol pass, which runs for every program and
+   runtime module, lowers them to a load of the slot (through a NULL word
+   when the slot may be NULL) and to the identity. `ab` against a second
+   build of the base (local Mac, load 9.2, five pairs): w1 53,685 to
+   57,262 req/s, +6.7%, 5/5 pairs, floor 1.5%: a gain; w4 124,685 to
+   129,614, +4.0%, 5/5, floor 4.1%: within noise. Processor time a request
+   22.5 to 21.2 us and 34.0 to 32.7 us. The arm's primitives all matched
+   CPython. Of the 149 test files naming the helpers, run file by file
+   fail-fast with and without the change, four IR-shape tests trace the
+   root read in either form now; every other failing file stops at the
+   same node without the change, or names removed collectors (item 2
+   (b)). Deleting the pass in item 2 (d)(3) moves this lowering into code
+   generation; the AArch64 short path for the two loads then has no call
+   left to shorten.
+   Measured and not to be pursued (reference experiment, system clang on
+   the local Mac, 2026-11-26): an uncontended atomic count update costs
+   1.26-1.37 ns against 1.03-1.17 ns plain, and a biased update 1.23-1.58
+   ns (owner compared through a thread-local or the thread pointer), so
+   biased reference counting has no ceiling here; the per-request cost
+   is the number of runtime operations, not their atomicity.
+   Next for (c): fewer operations a request. Containers that take the
+   reference a literal produces instead of retaining it and releasing the
+   temporary; then borrowed temporaries in code generation.
    Next, in order: (a) four-carrier measurement: `web_frameworks_app.py`
    fixes `carrier_count=1` and the runner records one carrier, so add a
    carrier count to the app and runner and a four-process aiohttp
@@ -907,7 +927,7 @@ in the relevant section or issue and removes the entry.
    function profile taken before this fix against `nm` before using it.
 
    Claims:
-   - (c) handler gap to asyncio; now: the three load helpers become plain loads in the fused-protocol pass: Claude, local Mac, 2026-11-25T16:12Z, area runtime-codegen (files: pcc/frontends/python/fused_protocol_pass.py and its tests; not a file of the (d) 4b batch)
+   - none
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
