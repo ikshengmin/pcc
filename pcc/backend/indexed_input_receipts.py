@@ -533,7 +533,7 @@ def begin_capture(module, context, passes):
             raise ValueError("indexed receipt snapshot destination already exists")
         # The capture lock and exclusive claim own this fixed temporary.
         # max_bytes checks raw arena/cold budgets before their materialization.
-        encode_indexed_module_file(temporary, module, max_bytes=remaining, diagnostic=state)
+        encode_indexed_module_file(temporary, module, max_bytes=remaining, diagnostic=state, compact=True)
         state["stage"] = "snapshot-hash"
         digest, size = _hash(temporary, remaining)
         state["observed_bytes"] = size

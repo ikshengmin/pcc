@@ -359,22 +359,23 @@ in the relevant section or issue and removes the entry.
    completed at 78.57 s, peak process-tree RSS 1,460,609,024 bytes.
    Local cap 4 GiB (stricter than hosted 16 GiB), so this is the
    ordinary subgate, not the entire hosted prior/stage1 qualification.
-   #20 native object gate at `32544f6f`: six-worker actual pcc0
-   run on the verified 192-member archive, one super-result PASS,
-   four failures (object identity, dict copy/pop and two-root) due to
-   missing indexed completion manifests. All four have codec-preflight
-   size rejections. An independent diagnostic build of the dict-copy
-   witness proves the exact plain-wire walk (not just the conservative
-   estimate) crosses 2 MiB: observed prefixes 2,097,160 and 2,100,320
-   bytes. Diagnostic instrumentation was removed; no cap changed.
-   This is not an assertion mismatch or failed native link. Fix the
-   bounded receipt representation generically (compact signed scalar
-   columns with lossless roundtrip, explicit version, bounded decoded
-   allocation and full same-invocation identity); preserve the existing
-   wire and aggregate caps. Others can advance independent source
-   regressions while this backend unit is investigated.
-   Next: compact receipt representation; verify all five native nodes,
-   then native prior/changed-module and remaining source regressions.
+   #20 native object gate: prior failure was real wire oversize, not
+   false budget accounting. Receipt v4 uses canonical signed LEB128 and
+   fixed-order arena inventories, with a separate 16 MiB decoded-wire
+   bound; the 2 MiB wire/aggregate/output/JSON limits remain unchanged.
+   Host retention v2 losslessly compresses bounded artifacts; independent
+   replay still binds every original byte, digest and native execution.
+   Marker selection recognizes the actual immortal static str object
+   layout and requires a real local operand use. Linux pcc0 with a fresh
+   verified 192-member archive: 5/5 native nodes, six workers, 21.79 s;
+   outer verifier admits all six executions and two-root slot evidence;
+   838 focused host controls, signed i64 native arena roundtrip PASS.
+   Four previously rejected full captures roundtrip byte-identically to
+   the ordinary representation (16 modules), compressed input totals
+   1,549,152–2,036,400 bytes; final evidence JSON stays below 955 KiB.
+   Not a hosted Stage1 or native-pcc1 gate qualification.
+   Next: native prior/changed-module and remaining source regressions;
+   inspect the current checkpoint before requesting a new one.
    #20 on the local Mac at `25a309945`: the named CI-contract files and the
    shared frame tests pass. `tests/test_ci_native_object_regressions.py`'s
    host-only model controls failed only on macOS, from the gate's
@@ -389,7 +390,7 @@ in the relevant section or issue and removes the entry.
    native callback evidence as recorded in Checkpoint above.
 
    Claims:
-   - #20 compact receipt encoding: Codex, Linux, 2026-11-25T14:07Z, area backend
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State

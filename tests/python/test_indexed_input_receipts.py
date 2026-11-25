@@ -693,7 +693,7 @@ def test_capture_first_failure_reports_real_operation(tmp_path, monkeypatch, sta
     elif stage in ("codec-preflight", "codec-wire-size"):
         monkeypatch.setattr(receipts, "_remaining", lambda *args: 16)
         if stage == "codec-wire-size":
-            monkeypatch.setattr(codec, "_bounded_capture_budget", lambda *args: None)
+            monkeypatch.setattr(codec, "_check_compact_capture_budget", lambda *args: None)
     elif stage == "codec-shape":
         monkeypatch.setattr(codec, "_function_to_wire", _raise_diagnostic)
     elif stage == "codec-header":
@@ -1220,7 +1220,10 @@ def test_real_worker_large_ascii_capture_preserves_same_invocation_identity(
         assert receipt[key] == claim[key] == context[key] == captured[key]
     assert (receipt["index"], receipt["module"], receipt["passes"]) == (0, "probe", [])
     actual = (dump / receipt["input"]["name"]).read_bytes()
-    assert actual == expected.read_bytes()
+    roundtrip = tmp_path / "same-compile-roundtrip.pidx"
+    restored = decode_indexed_module_file(str(dump / receipt["input"]["name"]), max_bytes=receipts.LIMIT)
+    codec.encode_indexed_module_file(str(roundtrip), restored)
+    assert roundtrip.read_bytes() == expected.read_bytes()
     assert receipt["input"]["bytes"] == len(actual) <= receipts.LIMIT
     assert receipt["input"]["sha256"] == hashlib.sha256(actual).hexdigest()
     restored = decode_indexed_module_file(

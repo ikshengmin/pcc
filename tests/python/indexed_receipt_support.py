@@ -15,10 +15,11 @@ from pathlib import Path
 import re
 import stat
 import tempfile
+import zlib
 
 
 LIMIT = 2 * 1024 * 1024
-CODEC_SCHEMAS = tuple("pcc.self-backend.indexed-module.v" + str(v) for v in (1, 2, 3))
+CODEC_SCHEMAS = tuple("pcc.self-backend.indexed-module.v" + str(v) for v in (1, 2, 3, 4))
 
 
 def unique_json(raw):
@@ -272,6 +273,48 @@ def _has_local_operand_use(module, symbol):
     return False
 
 
+def _marker_literal(global_, wanted):
+    """Recognize the two actual literal layouts, never arbitrary substrings."""
+    from pcc.runtime.py.py_abi_constants import PY_TYPE_STR, PY_FLAG_IMMORTAL
+
+    type_ = global_.type
+    if global_.is_constant:
+        payload = re.fullmatch(r'c"((?:\\[0-9a-fA-F]{2})*)"', global_.initializer)
+        if payload is None:
+            return None
+        literal = bytes.fromhex(payload[1].replace("\\", ""))
+        if literal not in wanted:
+            return None
+        assert (type_.kind == "array" and type_.elem is not None
+                and type_.elem.kind == "int" and type_.elem.width == 8
+                and type_.count == len(literal)), "INVALID: marker array length differs"
+        return literal
+    # A Python static str is writable for hash/cache initialization, but its
+    # immortal internal object has an exact typed header and inline UTF-8
+    # payload. It is not a constant byte array any more.
+    payload = re.fullmatch(
+        r'\{ i64 1, i32 ([0-9]+), i32 ([0-9]+), i64 ([0-9]+), i64 -1, i64 -1, '
+        r'\[([0-9]+) x i8\] c"((?:\\[0-9a-fA-F]{2})*)" \}', global_.initializer,
+    )
+    if payload is None:
+        return None
+    literal = bytes.fromhex(payload[5].replace("\\", ""))
+    if literal not in wanted:
+        return None
+    fields = type_.fields
+    assert (global_.is_internal and int(payload[1]) == PY_TYPE_STR
+            and int(payload[2]) == PY_FLAG_IMMORTAL
+            and literal.endswith(b"\0") and int(payload[3]) == len(literal)-1
+            and int(payload[4]) == len(literal)
+            and type_.kind == "struct" and len(fields) == 7
+            and all(field.kind == "int" and field.width == width
+                    for field, width in zip(fields[:6], (64, 32, 32, 64, 64, 64)))
+            and fields[6].kind == "array" and fields[6].count == len(literal)
+            and fields[6].elem is not None and fields[6].elem.kind == "int"
+            and fields[6].elem.width == 8), "INVALID: static string marker layout differs"
+    return literal
+
+
 def select_indexed_program_ir(raw_modules, marker):
     assert raw_modules and all(isinstance(raw, bytes) for raw in raw_modules), (
         "MALFORMED: mixed executable IR representations"
@@ -284,18 +327,8 @@ def select_indexed_program_ir(raw_modules, marker):
         with decoded_module(raw) as module:
             matches = []
             for global_ in module.globals_:
-                if not global_.is_constant:
+                if _marker_literal(global_, wanted) is None:
                     continue
-                payload = re.fullmatch(r'c"((?:\\[0-9a-fA-F]{2})*)"', global_.initializer)
-                if payload is None:
-                    continue
-                literal = bytes.fromhex(payload[1].replace("\\", ""))
-                if literal not in wanted:
-                    continue
-                type_ = global_.type
-                assert (type_.kind == "array" and type_.elem is not None
-                        and type_.elem.kind == "int" and type_.elem.width == 8
-                        and type_.count == len(literal)), "INVALID: marker array length differs"
                 assert sum(other.name == global_.name for other in module.globals_) == 1, (
                     "AMBIGUOUS: marker local definition"
                 )
@@ -375,15 +408,16 @@ def read_indexed_inputs(dump, record, binary, read_bounded, *,
     assert all(0 <= sizes[name] <= module_limit for name in output_names), "OVERSIZE: emitted output bytes"
     assert sum(sizes[name] for name in output_names) <= total_limit, "OVERSIZE: total emitted output bytes"
     assert set(files) == set(json_names + input_names + output_names), "MALFORMED: mixed or unknown dump files"
-    # Base64 length is known from stat sizes, so reject a guaranteed oversize
-    # retained JSON artifact before reading any payload or constructing strings.
-    envelope = {"schema": "pcc.indexed-input-retention.v1", "invocation": record.get("indexed_input_invocation"),
+    # v1 has an exact stat-derived base64 size. v2 may compress the bounded
+    # input/output inventory, so its pre-read bound is metadata only.
+    compressed = record.get("indexed_retention_format") == "compressed-v2"
+    schema = "pcc.indexed-input-retention.v2" if compressed else "pcc.indexed-input-retention.v1"
+    envelope = {"schema": schema, "invocation": record.get("indexed_input_invocation"),
                 "files": [{"name": name, "bytes": sizes[name], "sha256": "0" * 64,
                            "encoding": "base64", "format": _file_format(name), "base64": ""}
                           for name in sorted(files)]}
-    encoded_size = len(json.dumps(envelope).encode("utf-8")) + sum(
-        4 * ((sizes[name] + 2) // 3) for name in files
-    )
+    encoded_payload = 0 if compressed else sum(4 * ((sizes[name] + 2) // 3) for name in files)
+    encoded_size = len(json.dumps(envelope).encode("utf-8")) + encoded_payload
     assert encoded_size <= json_limit, "OVERSIZE: retained indexed JSON bytes"
     wrapper = indexed_evidence_shell(
         record, module_limit=module_limit, total_limit=total_limit,
@@ -391,9 +425,7 @@ def read_indexed_inputs(dump, record, binary, read_bounded, *,
     )
     wrapper["retention"] = envelope
     wrapper["observed_dump_sha256"] = {name: "0" * 64 for name in sorted(files)}
-    wrapper_size = len(json.dumps(wrapper).encode("utf-8")) + 1 + sum(
-        4 * ((sizes[name] + 2) // 3) for name in files
-    )
+    wrapper_size = len(json.dumps(wrapper).encode("utf-8")) + 1 + encoded_payload
     assert wrapper_size <= json_limit, "OVERSIZE: JSON bytes including metadata and escaping"
     raw_files, hashes = {}, {}
     for name in sorted(files):
@@ -485,12 +517,23 @@ def read_indexed_inputs(dump, record, binary, read_bounded, *,
     assert record["source_sha256"] in [row["source_sha256"] for row in rows], "IDENTITY_CHANGED: invocation source"
     # A bounded JSON envelope carries every input/output byte through existing
     # JSON-only artifact selection. Do not silently truncate to make it fit.
-    envelope = {"schema": "pcc.indexed-input-retention.v1", "invocation": token,
-                "files": [{"name": name, "bytes": sizes[name], "sha256": hashes[name],
-                           "encoding": "base64", "format": _file_format(name),
-                           "base64": base64.b64encode(raw_files[name]).decode("ascii")}
-                          for name in sorted(files)]}
+    rows = []
+    for name in sorted(files):
+        raw = raw_files[name]
+        payload, encoding = raw, "base64"
+        if compressed:
+            packed = zlib.compress(raw, 6)
+            if len(packed) < len(raw):
+                payload, encoding = packed, "zlib+base64"
+        rows.append({"name": name, "bytes": sizes[name], "sha256": hashes[name],
+                     "encoding": encoding, "format": _file_format(name),
+                     "base64": base64.b64encode(payload).decode("ascii")})
+    envelope = {"schema": schema, "invocation": token, "files": rows}
     assert len(json.dumps(envelope).encode("utf-8")) <= json_limit, "OVERSIZE: retained indexed JSON bytes"
+    wrapper["retention"] = envelope
+    assert len(json.dumps(wrapper).encode("utf-8")) + 1 <= json_limit, (
+        "OVERSIZE: JSON bytes including metadata and escaping"
+    )
     return {"raw_modules": modules, "inventory": hashes, "retention": envelope,
             "invocation": invocation, "link": link}
 
@@ -509,8 +552,6 @@ def has_indexed_marker_definition(raw_modules, marker):
     for raw in raw_modules:
         with decoded_module(raw) as module:
             for global_ in module.globals_:
-                payload = re.fullmatch(r'c"((?:\\[0-9a-fA-F]{2})*)"', global_.initializer)
-                if global_.is_constant and payload is not None:
-                    if bytes.fromhex(payload[1].replace("\\", "")) in wanted:
-                        return True
+                if _marker_literal(global_, wanted) is not None:
+                    return True
     return False

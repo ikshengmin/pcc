@@ -29,6 +29,7 @@ from pcc.unsafe import (
     realloc,
     store_i64,
     store_i32,
+    store_i8,
     write as raw_write,
 )
 from pcc.extern import c_int64, c_ptr, extern, c_obj
@@ -833,6 +834,102 @@ class CompilerIntArena:
                 raise OSError("compiler arena raw read was truncated")
             offset += consumed
         self._length = count
+
+    def sleb_size(self) -> int:
+        """Exact signed LEB128 size for the logical i64 column."""
+        size = 0
+        index = 0
+        while index < self._length:
+            value = self.get_unchecked(index)
+            while True:
+                byte = value & 127
+                value >>= 7
+                size += 1
+                if (value == 0 and byte & 64 == 0) or (value == -1 and byte & 64 != 0):
+                    break
+            index += 1
+        return size
+
+    def pack_sleb_bytes(self) -> bytes:
+        size = self.sleb_size()
+        if size == 0:
+            return b""
+        if self._address == 0:
+            data = bytearray()
+            index = 0
+            while index < self._length:
+                value = self.get_unchecked(index)
+                while True:
+                    byte = value & 127
+                    value >>= 7
+                    done = (value == 0 and byte & 64 == 0) or (value == -1 and byte & 64 != 0)
+                    data.append(byte if done else byte | 128)
+                    if done:
+                        break
+                index += 1
+            return bytes(data)
+        allocation = malloc(size)
+        if ptr_is_null(allocation):
+            raise MemoryError("compiler arena compact allocation failed")
+        try:
+            index = 0
+            offset = 0
+            while index < self._length:
+                value = self.get_unchecked(index)
+                while True:
+                    byte = value & 127
+                    value >>= 7
+                    done = (value == 0 and byte & 64 == 0) or (value == -1 and byte & 64 != 0)
+                    store_i8(allocation, offset, byte if done else byte | 128)
+                    offset += 1
+                    if done:
+                        break
+                index += 1
+            result = _py_bytes_new(allocation, size)
+            if ptr_is_null(result):
+                raise MemoryError("compiler arena compact bytes allocation failed")
+            return result
+        finally:
+            free(allocation)
+
+    def read_sleb_bytes(self, raw: bytes, count: int) -> None:
+        """Read exactly count canonical signed i64 values."""
+        if count < 0 or self._length != 0 or self._closed:
+            raise ValueError("compiler arena compact read requires empty arena")
+        size = len(raw)
+        if size < count or size > count * 10:
+            raise ValueError("compiler arena compact size mismatch")
+        index = 0
+        offset = 0
+        while index < count:
+            value = 0
+            shift = 0
+            previous = 0
+            while True:
+                if offset >= size:
+                    raise ValueError("compiler arena compact payload is truncated")
+                byte = raw[offset]
+                offset += 1
+                if shift == 63:
+                    if byte != 0 and byte != 127:
+                        raise ValueError("compiler arena compact integer out of range")
+                    if byte == 127:
+                        value |= -9223372036854775808
+                else:
+                    value |= (byte & 127) << shift
+                if byte & 128 == 0:
+                    if shift > 0 and ((byte == 0 and previous & 64 == 0)
+                                      or (byte == 127 and previous & 64 != 0)):
+                        raise ValueError("compiler arena compact integer is not canonical")
+                    if shift < 63 and byte & 64:
+                        value |= -1 << (shift + 7)
+                    break
+                previous = byte
+                shift += 7
+            self.append(value)
+            index += 1
+        if offset != size:
+            raise ValueError("compiler arena compact payload has trailing bytes")
 
     def pack_u32_bytes(self) -> bytes:
         """Pack proven uint32 words into one bytes allocation."""

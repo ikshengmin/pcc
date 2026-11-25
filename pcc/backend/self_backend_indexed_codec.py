@@ -43,6 +43,8 @@ def _wire_bool(value, name: str) -> bool:
 _SCHEMA = "pcc.self-backend.indexed-module.v1"
 _DEBUG_SCHEMA = "pcc.self-backend.indexed-module.v2"
 _ODR_SCHEMA = "pcc.self-backend.indexed-module.v3"
+_COMPACT_SCHEMA = "pcc.self-backend.indexed-module.v4"
+_COMPACT_DECODED_LIMIT = 16 * 1024 * 1024
 _MAGIC = b"PCCIDXMOD1\n"
 _MAX_HEADER_BYTES = 512 * 1024 * 1024
 
@@ -575,15 +577,30 @@ def _check_capture_budget(module, max_bytes, diagnostic):
     raise BackendUnavailable("indexed module diagnostic exceeds the size limit")
 
 
+def _check_compact_capture_budget(module, max_bytes, diagnostic):
+    # Even the empty v4 header plus magic and length requires over 128 bytes.
+    if max_bytes < 128:
+        if diagnostic is not None:
+            diagnostic["observed_bytes"] = 128
+        raise BackendUnavailable("indexed module diagnostic exceeds the size limit")
+    # Bound decoded work by the original complete wire, independently of
+    # the smaller on-disk receipt budget.
+    _check_capture_budget(module, _COMPACT_DECODED_LIMIT, diagnostic)
+
+
 def encode_indexed_module_file(
-    path: str, module: ParsedModule, *, max_bytes: int = 0, diagnostic=None,
+    path: str, module: ParsedModule, *, max_bytes: int = 0, diagnostic=None, compact: bool = False,
 ) -> None:
     """Write one direct module with raw scalar arenas and a JSON cold header."""
 
     if diagnostic is not None:
         diagnostic["stage"] = "codec-preflight"
         diagnostic["remaining_bytes"] = max_bytes
-    if max_bytes:
+    if compact:
+        _check_compact_capture_budget(module, max_bytes, diagnostic)
+        if diagnostic is not None:
+            diagnostic["remaining_bytes"] = max_bytes
+    elif max_bytes:
         _check_capture_budget(module, max_bytes, diagnostic)
     if diagnostic is not None:
         diagnostic["stage"] = "codec-shape"
@@ -638,14 +655,33 @@ def encode_indexed_module_file(
         # instead of silently strengthening an ODR definition. v3 may also
         # carry source_debug; ordinary v1/v2 bytes remain unchanged.
         header["schema"] = _ODR_SCHEMA
+    payload_bytes = total_scalars * 8
+    if compact:
+        header["schema"] = _COMPACT_SCHEMA
+        payload_bytes = 0
+        arena_index = 0
+        for row in functions:
+            lengths = []
+            for arena_row in row["arenas"]:
+                arena = raw_arenas[arena_index]
+                size = arena.sleb_size()
+                lengths.append([arena_row[1], size])
+                payload_bytes += size
+                arena_index += 1
+            # v4 has the same fixed inventory order as v1-v3, but omits the
+            # repeated names and records encoded byte lengths explicitly.
+            row["arenas"] = lengths
     if diagnostic is not None:
         diagnostic["stage"] = "codec-header"
-    header_bytes = json.dumps(header, sort_keys=True).encode("utf-8")
+    if compact:
+        header_bytes = json.dumps(header, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    else:
+        header_bytes = json.dumps(header, sort_keys=True).encode("utf-8")
     if diagnostic is not None:
         diagnostic["observed_bytes"] = len(header_bytes)
     if len(header_bytes) > _MAX_HEADER_BYTES:
         raise BackendUnavailable("indexed module header exceeds the size limit")
-    wire_size = len(_MAGIC) + len(str(len(header_bytes))) + 1 + len(header_bytes) + total_scalars * 8
+    wire_size = len(_MAGIC) + len(str(len(header_bytes))) + 1 + len(header_bytes) + payload_bytes
     if diagnostic is not None:
         diagnostic["stage"] = "codec-wire-size"
         diagnostic["observed_bytes"] = wire_size
@@ -660,6 +696,10 @@ def encode_indexed_module_file(
         stream.write((str(len(header_bytes)) + "\n").encode("utf-8"))
         stream.write(header_bytes)
         if not raw_arenas:
+            return
+        if compact:
+            for arena in raw_arenas:
+                stream.write(arena.pack_sleb_bytes())
             return
         native = raw_arenas[0].uses_native_storage
         if native:
@@ -699,6 +739,22 @@ def _read_native_arena(fd: int, count: int) -> CompilerIntArena:
     except BaseException:
         # The arena is still private until the read succeeds. Keep the read
         # failure authoritative even if releasing its payload also fails.
+        try:
+            arena.close()
+        except BaseException:
+            pass
+        raise
+    return arena
+
+
+def _read_compact_arena(stream, count: int, size: int) -> CompilerIntArena:
+    raw = stream.read(size)
+    if len(raw) != size:
+        raise BackendUnavailable("indexed module compact payload is truncated")
+    arena = CompilerIntArena(count)
+    try:
+        arena.read_sleb_bytes(raw, count)
+    except BaseException:
         try:
             arena.close()
         except BaseException:
@@ -1119,7 +1175,7 @@ def decode_indexed_module_file(path: str, *, max_bytes: int = 0) -> ParsedModule
             raise BackendUnavailable("indexed module header is invalid") from exc
         if (
             not isinstance(header, dict)
-            or header.get("schema") not in (_SCHEMA, _DEBUG_SCHEMA, _ODR_SCHEMA)
+            or header.get("schema") not in (_SCHEMA, _DEBUG_SCHEMA, _ODR_SCHEMA, _COMPACT_SCHEMA)
             or header.get("scalar_width") != 8
             or header.get("byte_order") != "little"
         ):
@@ -1134,6 +1190,41 @@ def decode_indexed_module_file(path: str, *, max_bytes: int = 0) -> ParsedModule
         functions = []
         inventories = []
         total_scalars = 0
+        compact = header["schema"] == _COMPACT_SCHEMA
+        compact_sizes: list[int] = []
+        compact_payload = 0
+        if compact:
+            if header_size > _COMPACT_DECODED_LIMIT:
+                raise BackendUnavailable("indexed module compact decoded size exceeds the size limit")
+            # Validate encoded and decoded scalar extent before constructing
+            # any seed or allocating any arena. The fixed order is versioned.
+            for row in function_rows:
+                if not isinstance(row, dict):
+                    raise BackendUnavailable("invalid compact function record")
+                lengths = row.get("arenas")
+                if not isinstance(lengths, list) or len(lengths) != len(_ARENA_FIELDS):
+                    raise BackendUnavailable("invalid compact arena inventory")
+                ordinary = []
+                arena_index = 0
+                for lengths_row in lengths:
+                    if not isinstance(lengths_row, list) or len(lengths_row) != 2:
+                        raise BackendUnavailable("invalid compact arena record")
+                    count = _wire_int(lengths_row[0], "compact scalar count")
+                    size = _wire_int(lengths_row[1], "compact arena bytes")
+                    if (count < 0 or size < count
+                            or count > (_COMPACT_DECODED_LIMIT - header_size) // 8 - total_scalars
+                            or size > count * 10
+                            or size > initial_size - compact_payload):
+                        raise BackendUnavailable("invalid compact arena extent")
+                    total_scalars += count
+                    compact_payload += size
+                    compact_sizes.append(size)
+                    ordinary.append([_ARENA_FIELDS[arena_index][0], count])
+                    arena_index += 1
+                row["arenas"] = ordinary
+            if int(stream.tell()) + compact_payload != initial_size:
+                raise BackendUnavailable("indexed module file size is inconsistent")
+            total_scalars = 0
         for row in function_rows:
             function, inventory = _seed_from_wire(row)
             functions.append(function)
@@ -1141,7 +1232,7 @@ def decode_indexed_module_file(path: str, *, max_bytes: int = 0) -> ParsedModule
             for _name, count in inventory:
                 total_scalars += count
         has_odr = any(function.definition_linkage == "external_odr" for function in functions)
-        if has_odr != (header["schema"] == _ODR_SCHEMA):
+        if not compact and has_odr != (header["schema"] == _ODR_SCHEMA):
             raise BackendUnavailable("indexed module definition linkage version mismatch")
         header_total_scalars = _wire_int(
             header.get("total_scalars", -1), "total scalar count"
@@ -1149,14 +1240,14 @@ def decode_indexed_module_file(path: str, *, max_bytes: int = 0) -> ParsedModule
         if total_scalars != header_total_scalars:
             raise BackendUnavailable("indexed module scalar total is inconsistent")
         payload_start = int(stream.tell())
-        expected_size = payload_start + total_scalars * 8
+        expected_size = payload_start + (compact_payload if compact else total_scalars * 8)
         if os.path.getsize(path) != expected_size:
             raise BackendUnavailable("indexed module file size is inconsistent")
         probe = CompilerIntArena(0)
         native = probe.uses_native_storage
         probe.close()
         fd = -1
-        if native and total_scalars:
+        if native and total_scalars and not compact:
             stream.seek(payload_start)
             fd = int(stream.fileno())
         function_index = 0
@@ -1174,11 +1265,15 @@ def decode_indexed_module_file(path: str, *, max_bytes: int = 0) -> ParsedModule
                 while arena_index < len(_ARENA_FIELDS):
                     wire_name, _kernel_field, seed_field = _ARENA_FIELDS[arena_index]
                     count = inventory[arena_index][1]
-                    arena = (
-                        _read_native_arena(fd, count)
-                        if native
-                        else _read_host_arena(stream, count)
-                    )
+                    if compact:
+                        size = compact_sizes[function_index * len(_ARENA_FIELDS) + arena_index]
+                        arena = _read_compact_arena(stream, count, size)
+                    else:
+                        arena = (
+                            _read_native_arena(fd, count)
+                            if native
+                            else _read_host_arena(stream, count)
+                        )
                     if seed_field:
                         _replace_seed_arena(seed, seed_field, arena)
                     elif wire_name == "value_scalars":

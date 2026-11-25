@@ -872,3 +872,64 @@ def test_first_failure_serialization_error_omits_optional_record(tmp_path, monke
     evidence, caught = _failure_shell(args, completed=True)
     assert caught is original and attempts == [True]
     assert "first_recorded_failure" not in evidence
+
+
+def test_compressed_retention_keeps_all_bytes_and_replays(tmp_path):
+    import zlib
+    args = _inputs(tmp_path)
+    dump, record, source, binary, _archive = args
+    record["indexed_retention_format"] = "compressed-v2"
+    # Build a valid, compressible input independently, with a raw envelope
+    # that would fail the original base64 gate.
+    raw = _encode(tmp_path)
+    output = b"owned-output-fixture-" * 90000
+    _publish(dump, [raw], source, binary)
+    output_path = dump / "self_backend_output_0.pco"
+    output_path.write_bytes(output)
+    emission_path = dump / "self_backend_input_0.json"
+    emission = json.loads(emission_path.read_text())
+    emission["output"].update(bytes=len(output), sha256=_sha(output))
+    _write_json(emission_path, emission)
+    link_path = dump / "link.json"
+    link = json.loads(link_path.read_text())
+    link["modules"][0]["output_sha256"] = _sha(output)
+    _write_json(link_path, link)
+    evidence = _record(args)
+    assert evidence["retention"]["schema"] == "pcc.indexed-input-retention.v2"
+    assert len((tmp_path / "executable-ir-dump.json").read_bytes()) <= indexed.LIMIT
+    for row in evidence["retention"]["files"]:
+        raw = base64.b64decode(row["base64"], validate=True)
+        if row["encoding"] == "zlib+base64":
+            decoder = zlib.decompressobj()
+            raw = decoder.decompress(raw, row["bytes"] + 1)
+            assert decoder.eof and not decoder.unused_data and not decoder.unconsumed_tail
+        assert raw == (dump / row["name"]).read_bytes()
+        assert row["bytes"] == len(raw) and row["sha256"] == _sha(raw)
+    assert gate.verify_indexed_ir(tmp_path, record, "object-identity", TARGET) == evidence
+
+
+@pytest.mark.parametrize("mutation", ["valid", "wrong-tag", "nonimmortal", "external", "wrong-size", "unused"])
+def test_static_string_marker_requires_exact_typed_object_and_use(tmp_path, mutation):
+    literal = MARKER.encode() + b"\0"
+    encoded = "".join("\\%02X" % b for b in literal)
+    layout = "{ i64, i32, i32, i64, i64, i64, [%d x i8] }" % len(literal)
+    initializer = ('{ i64 1, i32 4, i32 1, i64 %d, i64 -1, i64 -1, [%d x i8] c"%s" }'
+                   % (len(literal)-1, len(literal), encoded))
+    text = "@literal = internal global " + layout + " " + initializer + "\n"
+    text += "define ptr @f() {\nentry:\n ret ptr @literal\n}\n"
+    if mutation == "wrong-tag":
+        text = text.replace("i32 4, i32 1", "i32 5, i32 1")
+    elif mutation == "nonimmortal":
+        text = text.replace("i32 4, i32 1", "i32 4, i32 0")
+    elif mutation == "external":
+        text = text.replace("internal global", "global")
+    elif mutation == "wrong-size":
+        text = text.replace("i64 %d, i64 -1" % (len(literal)-1), "i64 0, i64 -1")
+    elif mutation == "unused":
+        text = text.replace("ret ptr @literal", "ret ptr null")
+    raw = _encode(tmp_path, text)
+    if mutation == "valid":
+        assert _select([raw]) == (0,)
+    else:
+        with pytest.raises(AssertionError, match="INVALID|MISSING"):
+            _select([raw])

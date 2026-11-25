@@ -405,6 +405,7 @@ def assert_owned_program(
                 dump = fresh_dump
                 patch.setenv("PCC_DEBUG_SELF_IR_DUMP_DIR", str(dump))
                 receipt["indexed_input_invocation"] = uuid.uuid4().hex
+                receipt["indexed_retention_format"] = "compressed-v2"
                 patch.setenv("PCC_DEBUG_SELF_IR_INVOCATION", receipt["indexed_input_invocation"])
                 receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
             compiler_started = True

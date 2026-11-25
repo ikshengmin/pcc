@@ -439,12 +439,33 @@ def _pidx_header(path, expected_target):
         _require(len(raw) == size, "truncated PIDX header")
         header = json.loads(raw, object_pairs_hook=_unique)
         _require(type(header) is dict and header.get("schema") in (
-            "pcc.self-backend.indexed-module.v1", "pcc.self-backend.indexed-module.v3")
+            "pcc.self-backend.indexed-module.v1", "pcc.self-backend.indexed-module.v3",
+            "pcc.self-backend.indexed-module.v4")
             and header.get("scalar_width") == 8 and header.get("byte_order") == "little"
             and header.get("triple") == expected_target and "source_debug" not in header,
             "PIDX target/debug/framing contract mismatch")
         total = header.get("total_scalars")
-        _require(type(total) is int and total >= 0 and stream.tell() + total * 8 == path.stat().st_size,
+        _require(type(total) is int and total >= 0, "PIDX scalar count mismatch")
+        payload = total * 8
+        if header["schema"] == "pcc.self-backend.indexed-module.v4":
+            rows = header.get("functions")
+            _require(type(rows) is list, "PIDX compact inventory mismatch")
+            counts = []
+            sizes = []
+            for function in rows:
+                _require(type(function) is dict and type(function.get("arenas")) is list,
+                         "PIDX compact inventory mismatch")
+                for row in function["arenas"]:
+                    _require(type(row) is list and len(row) == 2
+                             and all(type(v) is int for v in row)
+                             and 0 <= row[0] <= row[1] <= row[0] * 10,
+                             "PIDX compact inventory mismatch")
+                    counts.append(row[0])
+                    sizes.append(row[1])
+            _require(sum(counts) == total and size + total * 8 <= 16 * 1024 * 1024,
+                     "PIDX compact decoded size mismatch")
+            payload = sum(sizes)
+        _require(stream.tell() + payload == path.stat().st_size,
                  "PIDX payload length mismatch")
         return {"schema": header["schema"], "triple": expected_target,
                 "source_debug": False, "total_scalars": total,
