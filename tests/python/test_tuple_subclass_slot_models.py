@@ -710,11 +710,12 @@ def test_canonical_tuple_failure_never_publishes_partial_class(failure):
     assert memory.error is not None and not memory.locked and not memory.frame_handles
 
 
-def test_canonical_tuple_warm_read_occurs_after_moving_mutex_acquisition():
+def test_canonical_tuple_warm_read_occurs_after_mutex_acquisition():
     memory=CanonicalTupleMemory('mutex_lock',warm=True)
     old=memory.global_value('pcc_type_cls_tuple')
     result=memory.ns['py_tuple_type_new']()
-    assert memory.moves>0 and result is not old and result.alive
+    # One collector: the mutex's collection point moves nothing (item 2 (d)).
+    assert memory.collections>0 and memory.moves==0 and result is old and result.alive
     assert result is memory.global_value('pcc_type_cls_tuple') and memory.initializations==0
     assert not memory.locked and not memory.frame_handles
 

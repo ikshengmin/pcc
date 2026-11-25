@@ -85,7 +85,8 @@ def test_actual_bitwise_exports_survive_movement(operation, phase, values):
         assert memory.values(memory.read(memory.caller, index * 8)) == value
         assert result is not memory.read(memory.caller, index * 8)
     if phase not in ('allocation', 'callback'):
-        assert memory.moves > 0
+        # One collector: the point is reached and moves nothing (item 2 (d)).
+        assert memory.collections > 0 and memory.moves == 0
 
 
 @pytest.mark.parametrize('operation', OPERATIONS)

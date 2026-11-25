@@ -17,8 +17,6 @@ __pcc_runtime_port__ = True
 
 from pcc.runtime.py.py_abi_constants import (
     C_POINTER_SIZE,
-    PYOBJECTHEADER_FLAGS_OFFSET,
-    PY_FLAG_GC_PINNED,
     PY_TYPE_STR,
 )
 
@@ -31,7 +29,6 @@ from pcc.unsafe import (
     global_load_ptr,
     is_tagged_int,
     load_i8,
-    load_i32,
     load_i64,
     load_ptr,
     malloc,
@@ -141,11 +138,7 @@ pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_p
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
-pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
-pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
-pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
 py_clear_exception = extern("py_clear_exception", (), c_void)
 py_runtime_error_if_unset = extern("py_runtime_error_if_unset", (c_ptr, c_ptr), c_ptr)
@@ -200,20 +193,12 @@ def _import_finish(slots, tokens, borrowed, keep: int) -> c_ptr:
         pcc_gc_frame_leave(borrowed)
         return null()
     result_slot = ptr_add(slots, keep * C_POINTER_SIZE)
-    # A temporary terminal pin spans frame removal only; restore its old bit.
-    pcc_py_gc_minor_graph_lock()
-    result = pcc_gc_load_ptr(null(), result_slot)
-    prior: int = 0
-    if not ptr_is_null(result) and not is_tagged_int(result):
-        prior = load_i32(result, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
-        pcc_gc_pin(result)
-    pcc_py_gc_minor_graph_unlock()
     if pcc_gc_foreign_lease_release(result_slot, load_i64(tokens, keep * C_POINTER_SIZE)) != 0:
         pcc_platform_abort()
         return null()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(result_slot, prior)
+    return pcc_gc_take_slot(result_slot)
 
 
 def _builtin_import_body(slots, tokens) -> int:

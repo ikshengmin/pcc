@@ -176,12 +176,10 @@ pcc_gc_scheduler_root_register_handle = extern(
 pcc_gc_scheduler_root_unregister_handle = extern(
     "pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void
 )
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
 pcc_gc_foreign_lease_release = extern(
     "pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64
 )
-pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 py_gc_track = extern("py_gc_track", (c_ptr,), c_void)
 py_incref = extern("py_incref", (c_ptr,), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
@@ -4712,8 +4710,6 @@ def py_virtual_thread_pin_enter(vthread, reason) -> int:
         _scheduler_unlock()
         return -1
     pinned = load_i64(vthread, 48)
-    if pinned == 0:
-        pcc_gc_pin(vthread)
     pinned = pinned + 1
     store_i64(vthread, 48, pinned)
     _counter_add(global_addr("pcc_vthread_pin_depth_py"), 1)
@@ -4736,8 +4732,6 @@ def py_virtual_thread_pin_leave(vthread) -> int:
         store_i64(vthread, 48, pinned)
         if _counter(global_addr("pcc_vthread_pin_depth_py")) > 0:
             _counter_add(global_addr("pcc_vthread_pin_depth_py"), -1)
-        if pinned == 0:
-            pcc_gc_unpin(vthread)
     _scheduler_unlock()
     return pinned
 

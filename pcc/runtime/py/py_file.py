@@ -15,7 +15,7 @@ from pcc.runtime.py.py_abi_constants import (
     PYBYTESOBJECT_BYTE_LEN_OFFSET, PYBYTESOBJECT_DATA_OFFSET,
     PYMEMORYVIEWOBJECT_BASE_OFFSET, PYOBJECTHEADER_FLAGS_OFFSET,
     PYOBJECTHEADER_REFCOUNT_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET,
-    PY_FLAG_GC_MALLOC_ALLOC, PY_FLAG_GC_PINNED, PY_FLAG_IMMORTAL, PY_TYPE_BOOL,
+    PY_FLAG_GC_MALLOC_ALLOC, PY_FLAG_IMMORTAL, PY_TYPE_BOOL,
     PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_FILE, PY_TYPE_INT,
     PY_TYPE_LIST, PY_TYPE_MEMORYVIEW, PY_TYPE_STR, PY_TYPE_TUPLE,
 )
@@ -272,10 +272,7 @@ pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
-pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
 py_text_codec_id = extern("py_text_codec_id", (c_ptr,), c_int64)
@@ -1105,13 +1102,6 @@ def _file_guarded(first, second, encoding, errors, newline, operation: int, limi
         index = index - 1
     py_clear_exception()
     py_tls_exc_swap_slot(pending)
-    pcc_py_gc_minor_graph_lock()
-    value = pcc_gc_load_ptr(null(), result)
-    prior: int = 0
-    if not ptr_is_null(value) and not is_tagged_int(value):
-        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
-        pcc_gc_pin(value)
-    pcc_py_gc_minor_graph_unlock()
     token = load_i64(tokens, _FILE_RESULT * _FILE_BYTES)
     if token >= 0:
         if pcc_gc_foreign_lease_release(result, token) < 0:
@@ -1119,7 +1109,7 @@ def _file_guarded(first, second, encoding, errors, newline, operation: int, limi
             return null()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(result, prior)
+    return pcc_gc_take_slot(result)
 
 
 @c_abi_export("py_file_open_options")

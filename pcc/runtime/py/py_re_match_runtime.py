@@ -19,7 +19,6 @@ pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
-pcc_gc_pin_slot_for_take = extern("pcc_gc_pin_slot_for_take", (c_ptr, c_int64), c_int64)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 py_runtime_error_if_unset = extern("py_runtime_error_if_unset", (c_ptr, c_ptr), c_ptr)
 py_err_occurred = extern("py_err_occurred", (), c_int64)
@@ -123,12 +122,13 @@ def _re_finish(slots: c_ptr, tokens: c_ptr) -> int:
     store_i64(tokens, _RE_ERROR * 8, 0)
     py_tls_exc_swap_slot(error)
     result: c_ptr = ptr_add(slots, _RE_RESULT * 8)
-    prior: int = pcc_gc_pin_slot_for_take(result, 0)
     if pcc_gc_foreign_lease_release(result, load_i64(tokens, _RE_RESULT * 8)) != 0:
         pcc_platform_abort()
         return 0
     store_i64(tokens, _RE_RESULT * 8, 0)
-    return prior
+    # The entry takes the result slot through pcc_gc_take_slot; the one
+    # collector pins nothing, so there is no prior pin to return.
+    return 0
 
 
 def _re_error(slots: c_ptr, tokens: c_ptr, tag: int, message: c_ptr) -> None:

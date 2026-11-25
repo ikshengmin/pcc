@@ -22,7 +22,6 @@ pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
-pcc_gc_pin_slot_for_take = extern("pcc_gc_pin_slot_for_take", (c_ptr, c_int64), c_int64)
 pcc_gc_note_frame_enter_checked = extern("pcc_gc_note_frame_enter_local_checked", (c_ptr, c_ptr), c_int64)
 pcc_gc_note_frame_leave = extern("pcc_gc_note_frame_leave_local", (c_ptr,), c_void)
 pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
@@ -442,12 +441,13 @@ def _method_finish(slots: c_ptr, tokens: c_ptr, view: c_ptr, raw_result: c_ptr) 
     store_i64(tokens, _METHOD_ERROR * 8, 0)
     py_tls_exc_swap_slot(error)
     result: c_ptr = ptr_add(slots, _METHOD_RESULT * 8)
-    prior: int = pcc_gc_pin_slot_for_take(result, 0)
     if pcc_gc_foreign_lease_release(result, load_i64(tokens, _METHOD_RESULT * 8)) != 0:
         pcc_platform_abort()
         return 0
     store_i64(tokens, _METHOD_RESULT * 8, 0)
-    return prior
+    # The caller takes the result slot through pcc_gc_take_slot; the one
+    # collector pins nothing, so there is no prior pin to return.
+    return 0
 
 
 @c_abi_export("pcc_capi_method_call_into")

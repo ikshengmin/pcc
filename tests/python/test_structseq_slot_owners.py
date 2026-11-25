@@ -88,7 +88,8 @@ def test_structseq_retains_distinct_visible_and_hidden_owners(phase):
     extras = memory.ns['py_structseq_hidden'](result)
     assert memory.values(extras) == ('timezone name', 19800)
     memory.assert_balanced()
-    assert memory.moves > 0
+    # One collector: the point is reached and moves nothing (item 2 (d)).
+    assert memory.collections > 0 and memory.moves == 0
 
 
 def test_structseq_instance_allocation_failure_returns_original_exception():

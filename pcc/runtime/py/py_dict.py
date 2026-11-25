@@ -41,7 +41,6 @@ from pcc.runtime.py.py_abi_constants import (
     PYDICTOBJECT_SIZE,
     PYOBJECTHEADER_TYPE_TAG_OFFSET,
     PYOBJECTHEADER_FLAGS_OFFSET,
-    PY_FLAG_GC_PINNED,
     PYLISTOBJECT_ITEMS_OFFSET,
     PYLISTOBJECT_LENGTH_OFFSET,
     PYTUPLEOBJECT_ITEMS_OFFSET,
@@ -2453,8 +2452,7 @@ _DICT_MATERIALIZE_SLOT_COUNT = 16
 
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 pcc_gc_mode_lease_shard_index = extern("pcc_gc_mode_lease_shard_index", (c_ptr,), c_int64)
 pcc_gc_mode_lease_reserve_shard = extern("pcc_gc_mode_lease_reserve_shard", (c_int64,), c_int64)
 pcc_gc_mode_lease_release_shard = extern("pcc_gc_mode_lease_release_shard", (c_int64,), c_int64)
@@ -2732,14 +2730,9 @@ def _dict_materialize_raw(receiver, kind: int):
         py_clear_exception()
         py_tls_exc_swap_slot(error_slot)
         token = 0
-    prior: int = 0
-    result = load_ptr(result_slot, 0)
-    if ptr_is_null(result) == 0:
-        prior = load_i32(result, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
-        pcc_gc_pin(result)
     pcc_gc_frame_leave(result_slot)
     pcc_gc_frame_leave(borrowed)
     if pcc_gc_foreign_lease_release(result_slot, token) != 0:
         pcc_platform_abort()
         return null()
-    return pcc_gc_take_pinned_slot(result_slot, prior)
+    return pcc_gc_take_slot(result_slot)

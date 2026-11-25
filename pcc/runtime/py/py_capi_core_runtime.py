@@ -27,7 +27,6 @@ py_incref = extern("py_incref", (c_ptr,), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
 pcc_refcount_forget = extern("pcc_refcount_forget", (c_ptr,), c_void)
 py_dict_new = extern("py_dict_new", (), c_ptr)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
 pcc_thread_blocking_enter = extern(
     "pcc_thread_blocking_enter", (c_ptr,), c_int64
 )
@@ -57,10 +56,8 @@ def PyEval_GetBuiltins():
         builtins = py_dict_new()
         if ptr_is_null(builtins):
             return null()
-        # PyEval_GetBuiltins returns a borrowed process-lifetime mapping.
-        # Pin the cache so tracing/relocating collectors see the same lifetime
-        # contract as CPython's interpreter-owned builtins dictionary.
-        pcc_gc_pin(builtins)
+        # PyEval_GetBuiltins returns a borrowed process-lifetime mapping, as
+        # CPython's interpreter-owned builtins dictionary is.
         global_store_ptr("pcc_capi_builtins", builtins)
     return builtins
 

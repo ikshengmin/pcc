@@ -345,7 +345,8 @@ def test_method_lifetime_under_relocation_and_index_callbacks(phase,method):
     assert result==("value",1 if method=="count" else True)
     assert events==["start","end"]
     if phase != "allocation":
-        assert mem.moves>0
+        # One collector: the point is reached and moves nothing (item 2 (d)).
+        assert mem.collections > 0 and mem.moves == 0
 
 @pytest.mark.parametrize("method",("count","startswith","endswith"))
 def test_prefix_validation_and_index_exception_order(method):
@@ -574,7 +575,8 @@ def test_len_descriptor_counts_codepoints_from_owned_subclass_payload(phase):
             assert memory.invoke("__len__", value) == ("value", str.__len__(value))
             assert not memory.root_groups
             if phase in ("register", "copy", "acquire", "release", "drop", "frame_enter", "frame_leave"):
-                assert memory.moves > 0
+                # One collector: the point is reached and moves nothing (item 2 (d)).
+                assert memory.collections > 0 and memory.moves == 0
 
 
 @pytest.mark.parametrize("args", ((), ("abc", 1), (42,), (None,), (b"abc",)))

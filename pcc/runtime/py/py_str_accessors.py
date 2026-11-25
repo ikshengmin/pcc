@@ -110,7 +110,6 @@ py_list_get = extern("py_list_get", (c_ptr, c_int64), c_ptr)
 py_dict_new = extern("py_dict_new", (), c_ptr)
 py_dict_set = extern("py_dict_set", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
 pcc_gc_pointer_register = extern("pcc_gc_pointer_register", (c_ptr,), c_int64)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_debug_bad_str_concat = extern(
@@ -381,7 +380,8 @@ def py_str_utf8(s):
 
 @c_abi_export("pcc_capi_str_utf8_pinned")
 def pcc_capi_str_utf8_pinned(s):
-    pcc_gc_pin(s)
+    # The one collector never moves s, so its UTF-8 bytes stay put while the
+    # caller holds a reference; nothing is pinned (item 2 (d)).
     return py_str_utf8(s)
 
 

@@ -15,10 +15,6 @@ from pcc.extern import (
     c_size_t,
     c_void,
 )
-from pcc.runtime.py.py_abi_constants import (
-    PYOBJECTHEADER_FLAGS_OFFSET,
-    PY_FLAG_GC_PINNED,
-)
 from pcc.unsafe import (
     define_global_i32,
     global_addr,
@@ -1043,14 +1039,10 @@ define_global_i32("pcc_listdir_owned_map", 5)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
-pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
-pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
-pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
 py_clear_exception = extern("py_clear_exception", (), c_void)
@@ -1163,13 +1155,6 @@ def _listdir_owned(path):
     _listdir_drop(slots, tokens, _LISTDIR_PATH)
     py_clear_exception()
     py_tls_exc_swap_slot(error)
-    pcc_py_gc_minor_graph_lock()
-    value = pcc_gc_load_ptr(null(), result)
-    prior: int = 0
-    if ptr_is_null(value) == 0:
-        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
-        pcc_gc_pin(value)
-    pcc_py_gc_minor_graph_unlock()
     token = load_i64(tokens, _LISTDIR_RESULT * _LISTDIR_BYTES)
     if token >= 0:
         if pcc_gc_foreign_lease_release(result, token) < 0:
@@ -1177,7 +1162,7 @@ def _listdir_owned(path):
             return null()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(result, prior)
+    return pcc_gc_take_slot(result)
 
 
 @c_abi_export("py_os_listdir")

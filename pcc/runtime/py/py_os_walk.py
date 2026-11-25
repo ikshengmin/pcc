@@ -13,7 +13,6 @@ from pcc.extern import (
 )
 from pcc.runtime.py.py_abi_constants import (
     C_POINTER_SIZE, PYBYTESOBJECT_BYTE_LEN_OFFSET, PYBYTESOBJECT_DATA_OFFSET,
-    PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_GC_PINNED,
     PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_TYPE_BYTES,
 )
 from pcc.unsafe import (
@@ -55,12 +54,9 @@ pcc_gc_root_move = extern("pcc_gc_root_move", (c_ptr, c_ptr), c_int64)
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
-pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
-pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 
 # Each index names one registered owning slot and its counted address lease.
@@ -471,20 +467,13 @@ def _walk_c_object(path, topdown, followlinks, scan: int):
     _walk_close(slots, tokens, null(), 0, 1, 1)
     output = ptr_add(slots, _WALK_RESULT * C_POINTER_SIZE)
     # Leases protect the produced tuple/string until the no-safepoint return
-    # handoff. The Boolean pin is independent and preserves any earlier pin.
-    pcc_py_gc_minor_graph_lock()
-    value = load_ptr(output, 0)
-    prior_pin: int = 0
-    if not ptr_is_null(value) and not is_tagged_int(value):
-        prior_pin = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
-        pcc_gc_pin(value)
-    pcc_py_gc_minor_graph_unlock()
+    # handoff.
     token: int = load_i64(tokens, _WALK_RESULT * C_POINTER_SIZE)
     if pcc_gc_foreign_lease_release(output, token) != 0:
         pcc_platform_abort()
         return null()
     pcc_gc_frame_leave(slots)
-    return pcc_gc_take_pinned_slot(output, prior_pin)
+    return pcc_gc_take_slot(output)
 
 
 @c_abi_export("py_os_walk_scan")

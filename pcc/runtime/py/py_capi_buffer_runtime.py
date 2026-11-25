@@ -58,7 +58,6 @@ from pcc.unsafe import (
     memset,
     null,
     ptr_add,
-    ptr_eq,
     ptr_is_null,
     ptr_to_int,
     stack_alloc,
@@ -82,7 +81,6 @@ PyMem_Malloc = extern("PyMem_Malloc", (c_int64,), c_ptr)
 PyMem_Free = extern("PyMem_Free", (c_ptr,), c_void)
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_gc_memoryview_initialize_owned_buffer = extern(
@@ -285,21 +283,8 @@ def PyObject_GetBuffer(obj, view, flags: int) -> int:
     store_i64(meta, 8, 1)  # strides
     store_ptr(meta, 16, lease_owner)
     store_ptr(meta, 24, obj)
-    scan = global_load_ptr("pcc_capi_buffer_lease_head")
-    owner_already_leased: int = 0
-    view_already_leased: int = 0
-    while not ptr_is_null(scan):
-        if ptr_eq(load_ptr(scan, 16), lease_owner) or ptr_eq(load_ptr(scan, 24), lease_owner):
-            owner_already_leased = 1
-        if ptr_eq(load_ptr(scan, 16), obj) or ptr_eq(load_ptr(scan, 24), obj):
-            view_already_leased = 1
-        scan = load_ptr(scan, 32)
     store_ptr(meta, 32, global_load_ptr("pcc_capi_buffer_lease_head"))
     global_store_ptr("pcc_capi_buffer_lease_head", meta)
-    if owner_already_leased == 0:
-        pcc_gc_pin(lease_owner)
-    if ptr_eq(obj, lease_owner) == 0 and view_already_leased == 0:
-        pcc_gc_pin(obj)
     store_ptr(view, 0, buf)  # buf
     store_ptr(view, 8, obj)  # obj
     store_i64(view, 16, length)  # len

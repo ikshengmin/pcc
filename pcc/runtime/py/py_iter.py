@@ -9,8 +9,6 @@ __pcc_runtime_port__ = True
 from pcc.runtime.py.py_abi_constants import (
     C_POINTER_SIZE,
     PYINSTANCEOBJECT_CLS_OFFSET,
-    PYOBJECTHEADER_FLAGS_OFFSET,
-    PY_FLAG_GC_PINNED,
     PY_TYPE_BYTEARRAY,
     PY_TYPE_BYTES,
     PY_TYPE_DICT,
@@ -112,10 +110,7 @@ pcc_gc_free_object_memory = extern(
     "pcc_gc_free_object_memory", (c_ptr,), c_void
 )
 pcc_gc_load_ptr  = extern("pcc_gc_load_ptr",  (c_ptr, c_ptr),           c_ptr)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
-pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
-pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 py_user_iter_dispatch = extern("py_user_iter_dispatch", (c_ptr,),       c_ptr)
 py_user_next_dispatch = extern("py_user_next_dispatch", (c_ptr,),       c_ptr)
 pcc_capi_is_cext_type_tag = extern(
@@ -953,19 +948,12 @@ def _tuple_iter_transaction(value, create: int):
     else:
         py_tls_exc_swap_slot(ptr_add(slots, _TUPLE_ITER_OLD_ERROR * C_POINTER_SIZE))
     result_slot = ptr_add(slots, _TUPLE_ITER_RESULT * C_POINTER_SIZE)
-    pcc_py_gc_minor_graph_lock()
-    result = pcc_gc_load_ptr(null(), result_slot)
-    prior: int = 0
-    if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
-        prior = load_i32(result, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
-        pcc_gc_pin(result)
-    pcc_py_gc_minor_graph_unlock()
     if pcc_gc_foreign_lease_release(result_slot, load_i64(tokens, _TUPLE_ITER_RESULT * C_POINTER_SIZE)) != 0:
         pcc_platform_abort()
         return null()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(result_slot, prior)
+    return pcc_gc_take_slot(result_slot)
 
 
 @c_abi_export("py_tuple_iter_new")

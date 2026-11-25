@@ -220,7 +220,8 @@ def test_find_bounds_callbacks_remain_owned_during_relocation(receiver, phase):
     assert memory.invoke_find(receiver, needle, Index("start", 2), Index("end", 6)) == ("value", 4)
     assert events == (["start", "end"] if isinstance(receiver, str) else ["start", "end", "needle"])
     if phase not in ("register", "allocation"):
-        assert memory.moves > 0
+        # One collector: the point is reached and moves nothing (item 2 (d)).
+        assert memory.collections > 0 and memory.moves == 0
 
 
 @pytest.mark.parametrize("receiver", (b"abc", bytearray(b"abc"), "abc"))

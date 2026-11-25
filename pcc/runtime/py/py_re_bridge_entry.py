@@ -2,7 +2,7 @@
 
 Every managed body writes its final NEW
 result into the provided owning slot, preserves TLS errors, retires every
-other temporary/lease, pins the result and returns its prior-pin token. Callers are registered PCC threads and
+other temporary/lease and returns 0; the entry takes the result slot. Callers are registered PCC threads and
 hold no graph/container/scheduler lock or inherited no-park region. No raw argument may cross an entry poll.
 """
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
@@ -25,7 +25,7 @@ pcc_gc_note_frame_enter_checked = extern(
     "pcc_gc_note_frame_enter_local_checked", (c_ptr, c_ptr), c_int64
 )
 pcc_gc_note_frame_leave = extern("pcc_gc_note_frame_leave_local", (c_ptr,), c_void)
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_re_engine_fullmatch_into = extern(
     "pcc_re_engine_fullmatch_into", (c_ptr, c_ptr, c_int64), c_int64
@@ -65,23 +65,22 @@ def _re_guarded(pattern: c_ptr, text: c_ptr, flags: int, kind: int) -> c_ptr:
         return null()
     pcc_thread_no_park_exit()
     # Only slot addresses cross this managed function's ordinary entry poll.
-    prior: int = 0
     if kind == 0:
-        prior = pcc_re_engine_fullmatch_into(borrowed, result, flags)
+        pcc_re_engine_fullmatch_into(borrowed, result, flags)
     elif kind == 1:
-        prior = pcc_re_match_method_into(borrowed, result)
+        pcc_re_match_method_into(borrowed, result)
     elif kind == 2:
-        prior = pcc_re_match_instance_into(result)
+        pcc_re_match_instance_into(result)
     elif kind == 3:
-        prior = pcc_re_pattern_fullmatch_into(borrowed, result)
+        pcc_re_pattern_fullmatch_into(borrowed, result)
     elif kind == 4:
-        prior = pcc_re_pattern_install_into(borrowed, result, flags)
+        pcc_re_pattern_install_into(borrowed, result, flags)
     else:
-        prior = pcc_re_compile_pattern_into(borrowed, result, flags)
+        pcc_re_compile_pattern_into(borrowed, result, flags)
     pcc_gc_note_frame_leave(result)
     pcc_gc_note_frame_leave(borrowed)
     # All potentially parking work is complete; return transfer is raw.
-    return pcc_gc_take_pinned_slot(result, prior)
+    return pcc_gc_take_slot(result)
 
 
 @c_abi_export("pcc_re_engine_fullmatch_guarded")

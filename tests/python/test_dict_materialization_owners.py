@@ -26,6 +26,7 @@ class MaterializeMemory(DictMemory):
             pcc_gc_frame_leave=self.frame_leave,
             pcc_gc_pin=self.pin,
             pcc_gc_take_pinned_slot=self.take,
+            pcc_gc_take_slot=self.take_slot,
             global_addr=lambda name: name,
             py_list_new=self.new_list,
             py_tuple_new=self.new_tuple,
@@ -191,6 +192,13 @@ class MaterializeMemory(DictMemory):
             assert value.fields[abi.PYOBJECTHEADER_FLAGS_OFFSET] & abi.PY_FLAG_GC_PINNED
             value.fields[abi.PYOBJECTHEADER_FLAGS_OFFSET]=prior
             value.leases-=1
+        self.write(slot,0,None)
+        return value
+
+    def take_slot(self, slot):
+        # pcc_gc_take_slot: transfer the slot's owner; the one collector
+        # pins nothing (item 2 (d)).
+        value=self.read(slot,0)
         self.write(slot,0,None)
         return value
 

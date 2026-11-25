@@ -180,30 +180,11 @@ class Memory:
             self.write(block, offset, None)
 
     def collect(self, phase):
+        """A collection point. The one collector moves no object (item 2
+        (d)), so it only records that the selected phase was reached."""
         if self.depth or phase != self.phase:
             return
         self.collections += 1
-        mapping = {}
-        for old in list(self.objects):
-            if old.alive and not old.leases:
-                new = self.make(old.value, old.tag)
-                new.fields, new.refs = old.fields.copy(), old.refs
-                old.alive, old.refs = False, 0
-                mapping[old] = new
-                self.moves += 1
-        for slot in self.roots.values():
-            value = self.read(slot, 0)
-            if value in mapping if isinstance(value, Object) else False:
-                self.write(slot, 0, mapping[value])
-        for obj in self.objects:
-            if obj.alive:
-                for offset, value in list(obj.fields.items()):
-                    if isinstance(value, Object) and value in mapping:
-                        obj.fields[offset] = mapping[value]
-                    elif isinstance(value, Block) and not isinstance(value, Object):
-                        for child_offset, child in list(value.fields.items()):
-                            if isinstance(child, Object) and child in mapping:
-                                value.fields[child_offset] = mapping[child]
 
     def register(self, slot):
         self.collect("register")
@@ -591,10 +572,8 @@ def test_set_call_slot_movement(method, args, expected, phase):
         assert memory.collections == 0
         return
     assert memory.collections > 0
-    # A callback can find every live object leased (symmetric difference
-    # during its deduplication pass); attempting GC then correctly moves none.
-    if phase != "callback":
-        assert memory.moves > 0
+    # One collector: the collection point moves no object (item 2 (d)).
+    assert memory.moves == 0
 
 
 @pytest.mark.parametrize("failure", (1, 2, 3, 4, 5))

@@ -6,7 +6,7 @@ file owner alive. Bounded nonblocking attempts allow stop-the-world safepoints.
 __pcc_runtime_port__ = True
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
-    cstr, fd_control, file_flock, file_lock_region, seek_file, global_load_ptr, load_i32, load_ptr,
+    cstr, fd_control, file_flock, file_lock_region, seek_file, global_load_ptr, load_ptr,
     null, ptr_add, ptr_is_null, stack_alloc, store_ptr,
 )
 py_index_i64_checked = extern("py_index_i64_checked", (c_ptr,), c_int64)
@@ -15,8 +15,6 @@ py_current_exception = extern("py_current_exception", (), c_ptr)
 py_clear_exception = extern("py_clear_exception", (), c_void)
 py_exc_new = extern("py_exc_new", (c_int64, c_ptr), c_ptr)
 py_incref = extern("py_incref", (c_ptr,), c_void)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 pcc_gc_scheduler_root_register_handle = extern("pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr)
 pcc_gc_scheduler_root_unregister_handle = extern("pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void)
 pcc_thread_safepoint = extern("pcc_thread_safepoint", (), c_void)
@@ -27,15 +25,9 @@ def _error_value():
     error = py_current_exception()
     if ptr_is_null(error):
         return py_exc_new(7, cstr("file-lock conversion failed without an exception"))
-    # TLS keeps the object alive, but incref/clear can reach graph-lock
-    # safepoints. Pin before either operation and preserve an existing pin.
-    already_pinned: int = load_i32(error, 12) & 64
-    if already_pinned == 0:
-        pcc_gc_pin(error)
+    # TLS keeps the object alive until the incref takes this owner.
     py_incref(error)
     py_clear_exception()
-    if already_pinned == 0:
-        pcc_gc_unpin(error)
     return error
 
 

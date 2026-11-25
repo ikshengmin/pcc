@@ -31,7 +31,7 @@ pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
 pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
 pcc_gc_note_frame_enter_checked = extern("pcc_gc_note_frame_enter_local_checked", (c_ptr, c_ptr), c_int64)
 pcc_gc_note_frame_leave = extern("pcc_gc_note_frame_leave_local", (c_ptr,), c_void)
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_capi_is_type_object_value = extern("pcc_capi_is_type_object_value", (c_ptr,), c_int64)
 pcc_capi_method_call_into = extern("pcc_capi_method_call_into", (c_ptr, c_ptr, c_ptr, c_int64), c_int64)
@@ -74,14 +74,14 @@ def pcc_capi_method_call_entry(captures: c_ptr, args: c_ptr) -> c_ptr:
         pcc_platform_abort()
         return null()
     pcc_thread_no_park_exit()
-    prior: int = pcc_capi_method_call_into(borrowed, slots, raw_result, invalid)
+    pcc_capi_method_call_into(borrowed, slots, raw_result, invalid)
     pcc_gc_note_frame_leave(slots)
     pcc_gc_note_frame_leave(borrowed)
     if ptr_is_null(load_ptr(raw_result, 0)) == 0:
-        # A registered native type's process-retained storage is not pinned,
-        # decrefed, or passed to the managed result-transfer primitive.
+        # A registered native type's process-retained storage is not
+        # decrefed or passed to the managed result-transfer primitive.
         return load_ptr(raw_result, 0)
-    return pcc_gc_take_pinned_slot(slots, prior)
+    return pcc_gc_take_slot(slots)
 
 
 @c_abi_export("pcc_capi_method_invoke_into")

@@ -34,6 +34,7 @@ class NamespaceMemory(DictMemory):
             'pcc_gc_frame_leave': self.frame_leave,
             'pcc_gc_pin': self.pin,
             'pcc_gc_take_pinned_slot': self.take_pinned,
+            'pcc_gc_take_slot': self.take_slot,
             'py_str_utf8': self.name,
             'py_list_get': self.list_get,
             'py_tuple_get': self.tuple_get,
@@ -146,6 +147,15 @@ class NamespaceMemory(DictMemory):
         if isinstance(value, Object):
             assert value.alive and value.leases > 0
             value.leases -= 1
+        self.write(slot, 0, None)
+        return value
+
+    def take_slot(self, slot):
+        # pcc_gc_take_slot: transfer the slot's owner; the one collector
+        # pins nothing (item 2 (d)).
+        value = self.read(slot, 0)
+        if isinstance(value, Object):
+            assert value.alive
         self.write(slot, 0, None)
         return value
 
