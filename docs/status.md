@@ -344,6 +344,14 @@ in the relevant section or issue and removes the entry.
    forwarding through the real preparation body, retaining timing,
    output, input ownership and injected-error checks. Linux: all 34
    affected Mach-O timing tests passed; no count change.
+   #20 at `ceaab313`: 3502 passed in the six-worker gate, then
+   five find-model failures from undefined live runtime dependencies.
+   The model now executes the actual bytearray length accessor and
+   supplies bounded memchr/memcmp and pointer arithmetic adapters to
+   the current string search body; no CPython find shortcut or
+   assertion removal. Linux: 157 find/string model tests and the
+   pcc0 native bound-find/str-length oracle passed on a verified
+   matching archive. No inventory change.
    Next: rerun the worker gate and fix the next failure.
    #20 on the local Mac at `25a309945`: the named CI-contract files and the
    shared frame tests pass. `tests/test_ci_native_object_regressions.py`'s
@@ -359,7 +367,7 @@ in the relevant section or issue and removes the entry.
    native callback evidence as recorded in Checkpoint above.
 
    Claims:
-   - #20 worker prior next gate: Codex, Linux, 2026-11-25T12:00Z, area checkpoint
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State

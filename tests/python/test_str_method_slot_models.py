@@ -49,6 +49,7 @@ class StringMemory(Memory):
             "load_i64":lambda ptr, offset:self.read(ptr,offset) or 0,
             "load_i32":lambda ptr, offset:self.read(ptr,offset) or 0,
             "load_i8":self.byte, "_strs_eq":lambda a,b:int(a==b),
+            "_memcmp":self.memcmp, "_memchr":self.memchr, "ptr_to_int":self.pointer_address,
             "global_addr":self.global_addr, "global_load_ptr":self.global_value,
             "pcc_gc_frame_enter":self.frame_enter, "pcc_gc_frame_leave":self.frame_leave,
             "pcc_gc_root_copy_borrowed_lease":self.copy,
@@ -234,6 +235,25 @@ class StringMemory(Memory):
         self.retain(captures);self.retain(self_obj)
         fn.fields.update({56:entry,64:captures,72:name,80:self_obj})
         return fn
+
+    def memcmp(self, left, right, count):
+        for index in range(count):
+            a, b = self.byte(left, index) & 255, self.byte(right, index) & 255
+            if a != b:
+                return a - b
+        return 0
+
+    def memchr(self, pointer, value, count):
+        for index in range(count):
+            if self.byte(pointer, index) & 255 == value & 255:
+                return self.add(pointer, index)
+        return None
+
+    def pointer_address(self, pointer):
+        block, offset = self.location(pointer, 0)
+        # Only differences of addresses within a single modeled allocation
+        # are used by the actual byte-search body.
+        return (id(block) << 32) + offset
 
     def byte(self, ptr, offset):
         if isinstance(ptr,str):return ord(ptr[offset])

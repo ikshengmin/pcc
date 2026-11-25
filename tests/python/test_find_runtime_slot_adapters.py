@@ -86,7 +86,7 @@ class FindMemory(str_support.StringMemory):
             "_utf8_byte_offset_for_codepoint", "py_str_find_range",
         })
         _load_functions(self.ns, "py_obj_stubs.py", {
-            "_type_of", "_bytes_data", "py_bytes_len", "py_bytes_find_range",
+            "_type_of", "_bytes_data", "_bytearray_length_exact", "py_bytes_len", "py_bytes_find_range",
         })
         _load_functions(self.ns, "py_obj_ops_dispatch.py", {
             "_py_bound_method", "_py_bound_method_entry", "_cstr_append",
