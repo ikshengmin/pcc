@@ -23,7 +23,9 @@ from pcc.runtime.py.py_abi_constants import (
 
 from pcc.extern import extern, c_abi_export, c_int32, c_ptr, c_int64, c_void
 from pcc.unsafe import (
+    atomic_cas_i64,
     atomic_load_i32,
+    atomic_load_i64,
     atomic_rmw_i32,
     atomic_rmw_i64,
     define_global_i32,
@@ -637,7 +639,8 @@ def py_gen_set_done(gen) -> None:
     gen = _checked_gen(gen)
     if ptr_is_null(gen):
         return
-    store_i64(gen, 40, 1)
+    # The running bit stays until the resume entry leaves the frame.
+    atomic_rmw_i64("or", gen, 40, 1, "release")
 
 
 @c_abi_export("py_gen_is_done")
@@ -645,7 +648,7 @@ def py_gen_is_done(gen) -> int:
     gen = _checked_gen(gen)
     if ptr_is_null(gen):
         return 1
-    if load_i64(gen, 40) != 0:
+    if (atomic_load_i64(gen, 40, "acquire") & 1) != 0:
         return 1
     return 0
 
@@ -671,7 +674,7 @@ def py_gen_finish(gen, value):
     gen = _checked_gen(gen)
     if ptr_is_null(gen):
         return null()
-    store_i64(gen, 40, 1)
+    atomic_rmw_i64("or", gen, 40, 1, "release")
     request = _direct_request_for(gen)
     if ptr_is_null(request) == 0:
         # The driving py_gen_next_direct takes the value from the finished
@@ -726,7 +729,9 @@ def py_gen_take_completed(gen):
     resume = load_ptr(gen, 16)
     if ptr_eq(resume, function_addr("py_gen_completed_resume")) == 0:
         return null()
-    store_i64(gen, 40, 1)
+    # Claim the completion: a concurrent resume or take finds it taken.
+    if atomic_cas_i64(gen, 40, 0, 1, "acq_rel", "relaxed") != 0:
+        return null()
     # Borrowed from gen. The caller captures this owner before releasing gen.
     return pcc_gc_load_ptr(gen, ptr_add(gen, 24))
 
@@ -842,25 +847,51 @@ def py_gen_run_may_park_sync(gen):
     return pcc_gc_take_pinned_slot(ptr_add(slots, 8), prior_result_pin)
 
 
+def _gen_enter(gen) -> int:
+    """Claim one resume of ``gen``: 1 when this caller now runs its frame.
+
+    Word 40 of a generator holds bit 0 (done) and bit 1 (running). One CAS
+    from 0 claims the frame, so a second resume, from inside the generator
+    itself or from another thread, raises ValueError ("generator already
+    executing", as CPython does) instead of entering the same frame twice.
+    A finished generator raises StopIteration as before.
+    """
+    observed: i64 = i64(atomic_cas_i64(gen, 40, 0, 2, "acquire", "relaxed"))
+    if observed == 0:
+        return 1
+    if (observed & 2) != 0:
+        running = py_exc_new(2, cstr("generator already executing"))
+        py_raise_owned(running)
+        return 0
+    stop = py_exc_new(8, null())
+    py_raise_owned(stop)
+    return 0
+
+
+def _gen_leave(gen) -> None:
+    """Clear the running bit _gen_enter set; the done bit stays."""
+    atomic_rmw_i64("and", gen, 40, -3, "release")
+
+
 @c_abi_export("py_gen_next")
 def py_gen_next(gen):
     gen = _checked_gen(gen)
     if ptr_is_null(gen):
         return null()
-    if load_i64(gen, 40) != 0:
-        exc = py_exc_new(8, null())
-        py_raise_owned(exc)
+    if _gen_enter(gen) == 0:
         return null()
     resume = load_ptr(gen, 16)
     frame = pcc_gc_load_ptr(gen, ptr_add(gen, 24))
     if (load_i32(gen, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GEN_INLINE_FRAME) != 0:
         frame = gen
     if ptr_is_null(resume):
+        _gen_leave(gen)
         exc = py_exc_new(8, null())
         py_raise_owned(exc)
         return null()
     _set_send_value(gen, global_load_ptr("py_None"))
     result = call_ptr2(resume, gen, frame)
+    _gen_leave(gen)
     # Do not pass a fresh managed result through a runtime-port helper whose
     # entry can poll before the caller captures this ownership transfer.
     if ptr_is_null(result):
@@ -912,26 +943,27 @@ def py_gen_send(gen, value):
     gen = _checked_gen(gen)
     if ptr_is_null(gen):
         return null()
-    if load_i64(gen, 40) != 0:
-        exc = py_exc_new(8, null())
-        py_raise_owned(exc)
+    if _gen_enter(gen) == 0:
         return null()
     resume = load_ptr(gen, 16)
     frame = pcc_gc_load_ptr(gen, ptr_add(gen, 24))
     if (load_i32(gen, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GEN_INLINE_FRAME) != 0:
         frame = gen
     if ptr_is_null(resume):
+        _gen_leave(gen)
         exc = py_exc_new(8, null())
         py_raise_owned(exc)
         return null()
     none = global_load_ptr("py_None")
     if load_i64(gen, 32) == 0 and not ptr_is_null(value):
         if ptr_eq(value, none) == 0:
+            _gen_leave(gen)
             exc = py_exc_new(3, null())
             py_raise_owned(exc)
             return null()
     _set_send_value(gen, value)
     result = call_ptr2(resume, gen, frame)
+    _gen_leave(gen)
     # Do not pass a fresh managed result through a runtime-port helper whose
     # entry can poll before the caller captures this ownership transfer.
     if ptr_is_null(result):
@@ -947,21 +979,21 @@ def py_gen_throw(gen, exc):
     gen = _checked_gen(gen)
     if ptr_is_null(gen):
         return null()
-    if load_i64(gen, 40) != 0:
-        stop = py_exc_new(8, null())
-        py_raise_owned(stop)
+    if _gen_enter(gen) == 0:
         return null()
     resume = load_ptr(gen, 16)
     frame = pcc_gc_load_ptr(gen, ptr_add(gen, 24))
     if (load_i32(gen, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GEN_INLINE_FRAME) != 0:
         frame = gen
     if ptr_is_null(resume):
+        _gen_leave(gen)
         stop = py_exc_new(8, null())
         py_raise_owned(stop)
         return null()
     _set_send_value(gen, global_load_ptr("py_None"))
     py_raise(exc)
     result = call_ptr2(resume, gen, frame)
+    _gen_leave(gen)
     # Do not pass a fresh managed result through a runtime-port helper whose
     # entry can poll before the caller captures this ownership transfer.
     if ptr_is_null(result):
@@ -974,112 +1006,128 @@ def py_gen_close(gen):
     gen = _checked_gen(gen)
     if ptr_is_null(gen):
         return null()
-    if load_i64(gen, 40) == 0:
-        resume = load_ptr(gen, 16)
-        if not ptr_is_null(resume):
-            gen_slot = stack_alloc(8)
-            exc_slot = stack_alloc(8)
-            store_ptr(gen_slot, 0, null())
-            store_ptr(exc_slot, 0, null())
-            gen_root = pcc_gc_scheduler_root_register_handle(gen_slot)
-            if ptr_is_null(gen_root):
-                root_error = py_exc_new(19, null())
-                py_raise(root_error)
-                py_decref(root_error)
-                return null()
-            pcc_gc_store_root(gen_slot, gen)
-            exc_root = pcc_gc_scheduler_root_register_handle(exc_slot)
-            if ptr_is_null(exc_root):
-                pcc_gc_store_root(gen_slot, null())
-                pcc_gc_scheduler_root_unregister_handle(gen_root)
-                root_error = py_exc_new(19, null())
-                py_raise(root_error)
-                py_decref(root_error)
-                return null()
-            exc = py_exc_new(55, null())      # PY_EXC_GENERATOREXIT
-            if ptr_is_null(exc):
-                pcc_gc_store_root(exc_slot, null())
-                pcc_gc_scheduler_root_unregister_handle(exc_root)
-                pcc_gc_store_root(gen_slot, null())
-                pcc_gc_scheduler_root_unregister_handle(gen_root)
-                return null()
-            pcc_gc_store_root(exc_slot, exc)
-            gen = load_ptr(gen_slot, 0)
-            _set_send_value(gen, global_load_ptr("py_None"))
-            py_raise(load_ptr(exc_slot, 0))
-            py_decref(load_ptr(exc_slot, 0))  # TLS and root own the exception
-            # Raising/decref may allocate or safepoint.  Reload the moving
-            # generator from its updateable root before reading its frame.
-            gen = load_ptr(gen_slot, 0)
-            frame = pcc_gc_load_ptr(gen, ptr_add(gen, 24))
-            if (load_i32(gen, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GEN_INLINE_FRAME) != 0:
-                frame = gen
-            resume = load_ptr(gen, 16)
-            result = call_ptr2(resume, gen, frame)
-            if not ptr_is_null(result):
-                py_decref(result)
-                pcc_gc_store_root(exc_slot, null())
-                pcc_gc_scheduler_root_unregister_handle(exc_root)
-                pcc_gc_store_root(gen_slot, null())
-                pcc_gc_scheduler_root_unregister_handle(gen_root)
-                runtime_error = py_exc_new(7, cstr("generator ignored GeneratorExit"))
-                py_raise(runtime_error)
-                py_decref(runtime_error)
-                return null()
-            if ptr_is_null(py_current_exception()):
-                _require_result(
-                    null(),
-                    cstr("py_gen_close"),
-                    cstr(
-                        "generator close resume returned NULL without setting an exception"
-                    ),
-                )
-            stop_cls = py_exc_builtin_class(8)
-            stopped = py_exc_matches(py_current_exception(), stop_cls)
-            exit_cls = py_exc_builtin_class(55)
-            exiting = py_exc_matches(py_current_exception(), exit_cls)
-            gen = load_ptr(gen_slot, 0)
-            if stopped != 0:
-                store_i64(gen, 40, 1)
-                # Python 3.13+: close() returns the generator's return value.
-                # Reuse the registered injected-exception slot for that owner
-                # before clearing the StopIteration that lends its field.
-                value = py_exc_get_message(py_current_exception())
-                if ptr_is_null(value):
-                    value = global_load_ptr("py_None")
-                pcc_gc_store_root(exc_slot, value)
-                py_clear_exception()
-                # Acquiring the graph lease can park and move the rooted
-                # result. Reload only under that lease, then pin before any
-                # cleanup operation can expose another safepoint.
-                pcc_py_gc_minor_graph_lock()
-                value = pcc_gc_load_ptr(null(), exc_slot)
-                store_ptr(exc_slot, 0, value)
-                prior_pin: int = 0
-                if is_tagged_int(value) == 0:
-                    prior_pin = load_i32(value, 12) & 64
-                    pcc_gc_pin(value)
-                pcc_py_gc_minor_graph_unlock()
-                pcc_gc_store_root(gen_slot, null())
-                pcc_gc_scheduler_root_unregister_handle(gen_root)
-                pcc_gc_scheduler_root_unregister_handle(exc_root)
-                return pcc_gc_take_pinned_slot(exc_slot, prior_pin)
-            elif exiting != 0:
-                # Any GeneratorExit is a successful close, including one
-                # explicitly raised by the body. Other BaseExceptions escape.
-                store_i64(gen, 40, 1)
-                py_clear_exception()
-            else:
-                store_i64(gen, 40, 1)
-                pcc_gc_store_root(exc_slot, null())
-                pcc_gc_scheduler_root_unregister_handle(exc_root)
-                pcc_gc_store_root(gen_slot, null())
-                pcc_gc_scheduler_root_unregister_handle(gen_root)
-                return null()
+    # As _gen_enter, except that closing a finished generator returns None.
+    observed: i64 = i64(atomic_cas_i64(gen, 40, 0, 2, "acquire", "relaxed"))
+    if (observed & 2) != 0:
+        running = py_exc_new(2, cstr("generator already executing"))
+        py_raise_owned(running)
+        return null()
+    if observed != 0:
+        finished = global_load_ptr("py_None")
+        py_incref(finished)
+        return finished
+    result = _gen_close_claimed(gen)
+    _gen_leave(gen)
+    return result
+
+
+def _gen_close_claimed(gen):
+    """py_gen_close once this caller holds the generator's running bit."""
+    resume = load_ptr(gen, 16)
+    if not ptr_is_null(resume):
+        gen_slot = stack_alloc(8)
+        exc_slot = stack_alloc(8)
+        store_ptr(gen_slot, 0, null())
+        store_ptr(exc_slot, 0, null())
+        gen_root = pcc_gc_scheduler_root_register_handle(gen_slot)
+        if ptr_is_null(gen_root):
+            root_error = py_exc_new(19, null())
+            py_raise(root_error)
+            py_decref(root_error)
+            return null()
+        pcc_gc_store_root(gen_slot, gen)
+        exc_root = pcc_gc_scheduler_root_register_handle(exc_slot)
+        if ptr_is_null(exc_root):
+            pcc_gc_store_root(gen_slot, null())
+            pcc_gc_scheduler_root_unregister_handle(gen_root)
+            root_error = py_exc_new(19, null())
+            py_raise(root_error)
+            py_decref(root_error)
+            return null()
+        exc = py_exc_new(55, null())      # PY_EXC_GENERATOREXIT
+        if ptr_is_null(exc):
             pcc_gc_store_root(exc_slot, null())
             pcc_gc_scheduler_root_unregister_handle(exc_root)
             pcc_gc_store_root(gen_slot, null())
             pcc_gc_scheduler_root_unregister_handle(gen_root)
+            return null()
+        pcc_gc_store_root(exc_slot, exc)
+        gen = load_ptr(gen_slot, 0)
+        _set_send_value(gen, global_load_ptr("py_None"))
+        py_raise(load_ptr(exc_slot, 0))
+        py_decref(load_ptr(exc_slot, 0))  # TLS and root own the exception
+        # Raising/decref may allocate or safepoint.  Reload the moving
+        # generator from its updateable root before reading its frame.
+        gen = load_ptr(gen_slot, 0)
+        frame = pcc_gc_load_ptr(gen, ptr_add(gen, 24))
+        if (load_i32(gen, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GEN_INLINE_FRAME) != 0:
+            frame = gen
+        resume = load_ptr(gen, 16)
+        result = call_ptr2(resume, gen, frame)
+        if not ptr_is_null(result):
+            py_decref(result)
+            pcc_gc_store_root(exc_slot, null())
+            pcc_gc_scheduler_root_unregister_handle(exc_root)
+            pcc_gc_store_root(gen_slot, null())
+            pcc_gc_scheduler_root_unregister_handle(gen_root)
+            runtime_error = py_exc_new(7, cstr("generator ignored GeneratorExit"))
+            py_raise(runtime_error)
+            py_decref(runtime_error)
+            return null()
+        if ptr_is_null(py_current_exception()):
+            _require_result(
+                null(),
+                cstr("py_gen_close"),
+                cstr(
+                    "generator close resume returned NULL without setting an exception"
+                ),
+            )
+        stop_cls = py_exc_builtin_class(8)
+        stopped = py_exc_matches(py_current_exception(), stop_cls)
+        exit_cls = py_exc_builtin_class(55)
+        exiting = py_exc_matches(py_current_exception(), exit_cls)
+        gen = load_ptr(gen_slot, 0)
+        if stopped != 0:
+            atomic_rmw_i64("or", gen, 40, 1, "release")
+            # Python 3.13+: close() returns the generator's return value.
+            # Reuse the registered injected-exception slot for that owner
+            # before clearing the StopIteration that lends its field.
+            value = py_exc_get_message(py_current_exception())
+            if ptr_is_null(value):
+                value = global_load_ptr("py_None")
+            pcc_gc_store_root(exc_slot, value)
+            py_clear_exception()
+            # Acquiring the graph lease can park and move the rooted
+            # result. Reload only under that lease, then pin before any
+            # cleanup operation can expose another safepoint.
+            pcc_py_gc_minor_graph_lock()
+            value = pcc_gc_load_ptr(null(), exc_slot)
+            store_ptr(exc_slot, 0, value)
+            prior_pin: int = 0
+            if is_tagged_int(value) == 0:
+                prior_pin = load_i32(value, 12) & 64
+                pcc_gc_pin(value)
+            pcc_py_gc_minor_graph_unlock()
+            pcc_gc_store_root(gen_slot, null())
+            pcc_gc_scheduler_root_unregister_handle(gen_root)
+            pcc_gc_scheduler_root_unregister_handle(exc_root)
+            return pcc_gc_take_pinned_slot(exc_slot, prior_pin)
+        elif exiting != 0:
+            # Any GeneratorExit is a successful close, including one
+            # explicitly raised by the body. Other BaseExceptions escape.
+            atomic_rmw_i64("or", gen, 40, 1, "release")
+            py_clear_exception()
+        else:
+            atomic_rmw_i64("or", gen, 40, 1, "release")
+            pcc_gc_store_root(exc_slot, null())
+            pcc_gc_scheduler_root_unregister_handle(exc_root)
+            pcc_gc_store_root(gen_slot, null())
+            pcc_gc_scheduler_root_unregister_handle(gen_root)
+            return null()
+        pcc_gc_store_root(exc_slot, null())
+        pcc_gc_scheduler_root_unregister_handle(exc_root)
+        pcc_gc_store_root(gen_slot, null())
+        pcc_gc_scheduler_root_unregister_handle(gen_root)
     none = global_load_ptr("py_None")
     py_incref(none)
     return none

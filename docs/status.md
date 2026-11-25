@@ -1241,6 +1241,48 @@ in the relevant section or issue and removes the entry.
    RecursionError; four threads drive one generator without a ValueError),
    a correctness bug independent of J2 that blocks J2's step 2.
    J2 next: step 1 (ordinary functions) with its own borrowed-local registry, after the generator re-entrance fix.
+   Generator re-entrance fixed (Claude, 2026-11-26): word 40 of a
+   generator holds bit 0 (done) and bit 1 (running); `py_gen_next`,
+   `py_gen_send`, `py_gen_throw` and `py_gen_close` claim the running bit
+   with one CAS and clear it when the frame returns, so a self re-entry or a
+   second thread raises ValueError "generator already executing" (CPython's
+   message) instead of entering the frame twice; done is set with an atomic
+   or, `py_gen_is_done` reads bit 0, `py_gen_take_completed` claims with a
+   CAS. Virtual threads resume through `py_gen_next_direct`, so their frames
+   are covered too. `tests/python/test_generator_already_executing.py`
+   compares with CPython's output (self next/send/close/throw, three rounds
+   of another thread's next/send/close); it failed before the fix
+   (RecursionError) and passes after. 339 generator, coroutine and
+   virtual-thread tests passed on the working tree. Not run: pcc1 nodes,
+   gc3/gc4/relocation nodes, `test_gc_cleared_gen_sweep_native.py` and
+   `test_generator_finalizer_context_restore.py` (they need an admitted
+   `PCC_RUNTIME_ARCHIVE`). Open, to fix next:
+   (1) failing on the working tree and not yet checked on HEAD:
+   `test_generator_frame_take_group.py` (two native tests),
+   `test_generator_frame_take_protocol.py::test_native_take_null_clear_matches_split_mark_and_remembered_state`,
+   `test_generator_method_owned_result.py::test_generator_method_owned_result_ir`,
+   `test_generator_result_lexical_root.py::test_result_handoff_uses_lexical_root_without_changing_child_or_sink`,
+   `test_generator_root_groups_native.py::test_generator_root_groups_repository_native`,
+   `test_generator_terminal_clear_activation.py::test_terminal_native_reference_and_actual_optimized_linker_input`,
+   `test_virtual_thread_lowering_ownership.py` (callback roots and the
+   callback exception owner contract);
+   (2) failing on HEAD as well (removed APIs, for (d)'s rewrite): the
+   C fixtures of `test_gc_observer_generator_native.py` and
+   `test_generator_frame_clear_pending_stop.py` (tracing and relocation
+   symbols), `test_generator_finalizer_accounting.py`
+   (`py_gen_finalize_tracing_candidate`), `test_generator_frame_root_initialization.py`
+   (all 20 cases),
+   `data_model/test_generator_state_runtime.py::test_generator_resume_boundaries_attribute_silent_null_results`
+   (a removed coroutine message), and the files that call
+   `pcc_gc_set_backend` or `pcc_gc_telemetry_reset`: test_vthread_timer_heap_scheduler,
+   test_vthread_io_ready_order, test_virtual_thread_ready_entry_pool,
+   test_tuple_generator_conversion, test_vthread_direct_generator,
+   test_generator_inline_frame, test_gc_coroutine_roots,
+   test_generator_frame_initialization, test_generator_frame_owner_transfer,
+   test_virtual_thread_pcc_py_carriers, test_generator_bulk_frame_save,
+   test_gc_coroutine_scheduler_roots_production, test_generator_moving_frame_take;
+   (3) coroutines check "already executing" and then store the state with
+   a plain store, so two threads may both pass; a probe decides.
    J2. Fewer root stores and release chains in code generation: 104 of the
        304 calls per request clear a slot that is already empty.
    J3. TaskScope (5x CPython), `time.perf_counter` (7x), `str.encode` (5x).
@@ -1289,7 +1331,7 @@ in the relevant section or issue and removes the entry.
    4 nodes (`fallback_instruction_count` is 0; the test expects 1).
 
    Claims:
-   - generator re-entrance ("generator already executing"), before J2 step 2: Claude, macOS, 2026-11-25T19:45Z, area runtime-gc (py_gen.py's resume entries and done word, py_coroutine only if it shares them, new tests; the user asked for it on 2026-11-26; (d) U3 edits py_gen.py later and rebases on this)
+   - none
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
