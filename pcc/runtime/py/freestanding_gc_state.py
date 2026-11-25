@@ -155,10 +155,18 @@ define_global_i32("pcc_gc_forwarding_population", 0)
 # missed on each of those updates, and which words did depended on where
 # the linker happened to place this module's data. Keep the count, and the
 # growth baseline read with it, on lines of their own.
+define_global_i64_array(
+    "pcc_gc_tracked_count_isolation_before",
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+)
 define_global_i32("py_gc_tracked_count", 0)
 # Tracked objects left after the last automatic collection (GC0..GC3): the
 # next is scheduled once tracking has grown by max(threshold0, this) since.
 define_global_i64("pcc_gc_tracked_after_collect", 0)
+define_global_i64_array(
+    "pcc_gc_tracked_count_isolation_after",
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+)
 define_global_i32("py_gc_collecting", 0)
 # Collector-private candidate context; nonzero only under stopped-world GC0.
 define_global_i32("pcc_gc_backend0_subset_active", 0)
@@ -173,6 +181,10 @@ define_global_i32("py_gc_callbacks_firing", 0)
 # the probe is chosen. Allocation accounting next to them (debt, live bytes,
 # metrics) is written by every thread: sharing a cache line with it made
 # each of these reads miss under concurrency. Keep them on lines of their own.
+define_global_i64_array(
+    "pcc_gc_hot_config_isolation_before",
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+)
 define_global_i32("pcc_gc_backend_selected", 0)
 # pcc_gc_refcount_provenance_probe: whether the
 # refcount hot path asks pcc_gc_pointer_is_managed before it touches a header.
@@ -217,6 +229,10 @@ define_global_i32("pcc_gc_backend0_frame_roots_enabled", 0)
 # one of those three words is stored, so a frame entry and the AArch64 short
 # path load one word instead of three.
 define_global_i32("pcc_gc_frame_registry_inactive", 0)
+define_global_i64_array(
+    "pcc_gc_hot_config_isolation_after",
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+)
 # pcc_gc_unmanaged_refcount_ops.  i64 because it
 # counts every refcount operation that missed provenance, which on a long-lived
 # service is not bounded by anything an i32 covers.
@@ -385,9 +401,17 @@ define_global_i32("pcc_gc_stackmap_walk_state", 0)
 # thread. The stack-map words above are read at each mapped frame entry and
 # the scan cursors below belong to collections. Keep the registry heads on
 # lines of their own.
+define_global_i64_array(
+    "pcc_gc_root_registry_isolation_before",
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+)
 define_global_ptr_null("pcc_gc_continuation_root_head")
 define_global_ptr_null("pcc_gc_scheduler_root_head")
 define_global_i64("pcc_gc_root_registry_revision", 0)
+define_global_i64_array(
+    "pcc_gc_root_registry_isolation_after",
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+)
 define_global_i64("pcc_gc_backend3_frame_root_scan_slot", -1)
 define_global_ptr_null("pcc_gc_backend3_frame_root_scan_cursor")
 define_global_ptr_null("pcc_gc_backend3_continuation_root_scan_cursor")

@@ -89,7 +89,13 @@ def unused_state_words(now) -> list:
             if "build_py" in parts or "build_owned" in parts or path.parent == RUNTIME or path == ABI:
                 continue
             named.update(IDENT.findall(path.read_text(encoding="utf-8", errors="replace")))
-    return [word for word in defined if word not in named and word.startswith(("pcc_gc_", "py_gc_"))]
+    # Padding arrays (``*_isolation_before`` / ``*_isolation_after``) are
+    # named by nothing on purpose: they keep a hot word on a cache line of
+    # its own. Removing them once put the tracked count on the line of the
+    # configuration words every count update reads.
+    return [word for word in defined
+            if word not in named and word.startswith(("pcc_gc_", "py_gc_"))
+            and "_isolation_" not in word]
 
 
 def clean_abi(removed: set, apply: bool) -> int:

@@ -773,8 +773,6 @@
   "pcc_gc_concurrent_sweep_remaining",
   "pcc_gc_concurrent_sweep_state",
   "pcc_gc_forwarding_head",
-  "pcc_gc_hot_config_isolation_after",
-  "pcc_gc_hot_config_isolation_before",
   "pcc_gc_in_auto_step",
   "pcc_gc_last_alloc_bytes",
   "pcc_gc_minor_blocks",
@@ -783,8 +781,6 @@
   "pcc_gc_pending_minor_block",
   "pcc_gc_relocate_slot_pairs_ctx",
   "pcc_gc_relocation_set_head",
-  "pcc_gc_root_registry_isolation_after",
-  "pcc_gc_root_registry_isolation_before",
   "pcc_gc_scalar_sweep_bytes",
   "pcc_gc_scalar_sweep_cap_rejections",
   "pcc_gc_scalar_sweep_chunks",
@@ -830,9 +826,7 @@
   "pcc_gc_tracing_finish_stop_epoch",
   "pcc_gc_tracing_marked_bytes",
   "pcc_gc_tracing_no_candidate_commit",
-  "pcc_gc_tracing_seed_stop_epoch",
-  "pcc_gc_tracked_count_isolation_after",
-  "pcc_gc_tracked_count_isolation_before"
+  "pcc_gc_tracing_seed_stop_epoch"
  ],
  "modules": [
   "freestanding_gc_callback_layers",
