@@ -301,6 +301,11 @@ def run_guard(directory, command, environment, original):
         raise ValueError("source identity changed before batch")
     if shutil.disk_usage(directory).free < DISK_FLOOR:
         raise ValueError("original 1-GiB free-disk floor not met")
+    # Each guarded batch is one scheduling domain. Bind the compiler pool
+    # lease to this exact guard's state path, not the repo or all pytest runs.
+    # A nested/synthetic measurement with a different state cannot inherit it.
+    environment = dict(environment, PCC_WORKER_POOL_ADMISSION_STATE=str(
+        (directory / "result.json.worker-rss.tsv").absolute()))
     wrapper = subprocess.run(guarded_command(directory, command), cwd=ROOT, env=environment, check=False)
     result = json.loads((directory / "result.json").read_text())
     if (result["status"] != "COMPLETE" or result["timeout_s"] != TIMEOUT or

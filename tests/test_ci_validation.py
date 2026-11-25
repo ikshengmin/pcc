@@ -682,16 +682,26 @@ def test_guard_wrapper_exit_must_match_terminal_target_receipt(tmp_path, monkeyp
     original = {"sha": "fixture"}
     monkeypatch.setattr(run, "identity", lambda: original)
     monkeypatch.setattr(run.shutil, "disk_usage", lambda path: SimpleNamespace(free=2 * run.DISK_FLOOR))
-    monkeypatch.setattr(run.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=wrapper_code))
+    selected_key = "PCC_WORKER_POOL_ADMISSION_STATE"
+    caller_env = {selected_key: "/different/outer/guard", "SENTINEL": "retained"}
+
+    def invoke_guard(*args, **kwargs):
+        env = kwargs["env"]
+        assert env[selected_key] == str(tmp_path / "result.json.worker-rss.tsv")
+        assert env["SENTINEL"] == "retained"
+        return SimpleNamespace(returncode=wrapper_code)
+
+    monkeypatch.setattr(run.subprocess, "run", invoke_guard)
     (tmp_path / "result.json").write_text(json.dumps({
         "status": "COMPLETE", "timeout_s": run.TIMEOUT, "max_tree_rss_bytes": run.RSS,
         "peak_tree_rss_bytes": 0, "returncode": target_code,
     }))
     if wrapper_code == target_code:
-        assert run.run_guard(tmp_path, ["unused"], {}, original) == target_code
+        assert run.run_guard(tmp_path, ["unused"], caller_env, original) == target_code
     else:
         with pytest.raises(ValueError, match="guard exit differs"):
-            run.run_guard(tmp_path, ["unused"], {}, original)
+            run.run_guard(tmp_path, ["unused"], caller_env, original)
+    assert caller_env == {selected_key: "/different/outer/guard", "SENTINEL": "retained"}
 
 
 def _ci_admission_without_launch(tmp_path, monkeypatch, *, rejection=None):

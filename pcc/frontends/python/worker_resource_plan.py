@@ -13,6 +13,7 @@ import time
 
 TREE_STATE_ENV = "PCC_WORKER_TREE_STATE_PATH"
 TREE_RECOVERY_ENV = "PCC_WORKER_TREE_RECOVERY"
+TREE_ADMISSION_STATE_ENV = "PCC_WORKER_POOL_ADMISSION_STATE"
 # v1 timestamps use the same-machine CPython monotonic clock (Python >=3.13):
 # Darwin mach_absolute_time / CLOCK_UPTIME_RAW, Linux CLOCK_MONOTONIC, and
 # Windows QueryPerformanceCounter. The native platform clock must share both
@@ -28,6 +29,72 @@ STATE_MAX_AGE_SECONDS = 2.0
 
 class WorkerMemoryError(ValueError):
     pass
+
+
+def acquire_shared_pool_slot(tree_path: str, tree_budget: int):
+    """Coordinate independent pools inside one explicitly selected guard.
+
+    The state-path binding is run-local: an unrelated or deliberately nested
+    measurement has its own state and does not inherit this scheduling lease.
+    The outer watchdog still accounts all descendants and enforces the same
+    memory/deadline. No memory forecast or freshness check is bypassed.
+    """
+    if not tree_path or os.environ.get(TREE_ADMISSION_STATE_ENV, "") != tree_path:
+        return None
+    if not os.path.isabs(tree_path):
+        raise WorkerMemoryError("shared pool admission requires the absolute guard state path")
+    raw_budget = os.environ.get("PCC_WORKER_TREE_BUDGET_BYTES", "")
+    raw_recovery = os.environ.get(TREE_RECOVERY_ENV, "")
+    try:
+        fields = raw_recovery.split("\t")
+        if (len(fields) != 4 or fields[0] != "pcc.worker-tree-recovery.v1"
+                or int(raw_budget) != tree_budget):
+            raise ValueError("shared pool guard identity differs")
+        # This is only the already selected absolute deadline. The ordinary
+        # host/native resource loop continues to own recovery semantics.
+        deadline = float(fields[3])
+        if not 0.0 < deadline < float("inf"):
+            raise ValueError("invalid shared pool guard deadline")
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise WorkerMemoryError("invalid shared pool guard budget/deadline") from exc
+    if time.monotonic() >= deadline:
+        raise WorkerMemoryError("shared pool admission exhausted original guard deadline")
+    # Never lock the sampled state inode: the guard atomically replaces it.
+    # Never unlink this sibling rendezvous file while contenders may use it.
+    stream = open(tree_path + ".pool-admission.lock", "a+b")
+    try:
+        if os.name == "nt":
+            stream.seek(0)
+            if stream.read(1) == b"":
+                stream.write(b"0")
+                stream.flush()
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                raise WorkerMemoryError("shared pool admission exhausted original guard deadline")
+            try:
+                if os.name == "nt":
+                    import msvcrt
+
+                    stream.seek(0)
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return stream
+            except (BlockingIOError, InterruptedError):
+                pass
+            except PermissionError:
+                # Windows' nonblocking file-region lock reports a competing
+                # owner as access denied. Opening/other POSIX errors still
+                # fail; contention can only wait until the original deadline.
+                if os.name != "nt":
+                    raise
+            time.sleep(min(0.02, remaining))
+    except BaseException:
+        stream.close()
+        raise
 
 
 def is_indexed_backend_prior_model(model) -> bool:

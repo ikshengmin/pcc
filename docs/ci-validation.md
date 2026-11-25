@@ -67,6 +67,21 @@ an empty list is also accepted. This remains the existing observed-process-tree
 boundary, not a claim to detect every possible escaped process.
 This is a scheduling contract, not a relaxed time budget or a passing result.
 New cross-module session dependencies require withdrawing the declaration.
+
+Independent compiler resource pools in a source batch also share one
+advisory admission slot. The runner binds it to that batch's exact
+`PCC_WORKER_TREE_STATE_PATH`, not the repository or another measurement.
+The state file itself is atomically replaced; the sibling lock file is
+stable for the guard's lifetime. A pool waits only until the original
+guard deadline, then uses a fresh synchronized sample and the unchanged
+per-task admission, fixed RSS headroom, and watchdog. Its actual spawned
+workers retain the guard state, budget and deadline but do not re-acquire
+their admitting owner's lease; nested pools remain accounted in their
+parent subtree. File close/process exit releases the lease. This serializes
+independent resource-pool owners, not the six pytest workers, and can trade
+memory pressure for waiting; complete body/guard receipts must still pass.
+A standalone native compiler subtree that exceeds the full budget is not
+made valid by this policy.
 Worker inventories must match the frozen raw metadata for every file in their
 body batch, including other lanes and unmet prerequisites, ignoring only xdist's
 final node-ID decoration. Partition-dependent gate, group or identity drift is

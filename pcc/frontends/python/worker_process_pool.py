@@ -287,8 +287,9 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
     """
     from pcc.frontends.python.pipeline_frontend_workers import _coordinator_rss_bytes
     from pcc.frontends.python.worker_resource_plan import (
-        RESOURCE_REPORT_ENV, RESOURCE_TOKEN_ENV, STATE_MAX_AGE_SECONDS, TREE_STATE_ENV,
-        WorkerMemoryError, available_worker_bytes, choose_task, completed_task_observation,
+        RESOURCE_REPORT_ENV, RESOURCE_TOKEN_ENV, STATE_MAX_AGE_SECONDS,
+        TREE_ADMISSION_STATE_ENV, TREE_STATE_ENV, WorkerMemoryError,
+        acquire_shared_pool_slot, available_worker_bytes, choose_task, completed_task_observation,
         estimated_task_bytes, minimum_task_bytes, peak_reservation, read_tree_state,
         read_worker_resource, ready_resource_cohort, require_task_fits,
         resource_task_order, validate_handoff_slots,
@@ -349,11 +350,14 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
     trim_decision = 0
     unavailable_since = -1.0
     outage_expiry = -1.0
-    fresh_after = time.monotonic()
     state_diagnostic = {}
     preflight_done = False
     available = 0
+    shared_admission_stream = acquire_shared_pool_slot(tree_path, tree_budget)
     try:
+        # The previous independent owner's children may have just retired.
+        # Admission must consume a guard sample newer than lease acquisition.
+        fresh_after = time.monotonic()
         while pending or active:
             survivors = []
             for index, pid, reservation, exclusive, observed_peak in active:
@@ -664,6 +668,13 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                 token = hashlib.sha256(attempt.encode("utf-8")).hexdigest()
                 argv, vector = specs[index]
                 vector = [entry for entry in vector if not entry.startswith(RESOURCE_TOKEN_ENV + "=")]
+                if shared_admission_stream is not None:
+                    # Actual child workers and any of their own descendants
+                    # already live inside this admitted subtree. They retain
+                    # the original guard state/budget/deadline; do not make a
+                    # nested pool wait on its own parent's held lease.
+                    vector = [entry for entry in vector
+                              if not entry.startswith(TREE_ADMISSION_STATE_ENV + "=")]
                 vector.append(RESOURCE_TOKEN_ENV + "=" + token)
                 if tasks[index].get("handoff_request", ""):
                     from pcc.frontends.python.pipeline_indexed_handoff import ENV_SEAL, reset_handoff_output
@@ -711,7 +722,13 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
             pass  # Best-effort evidence must not replace the primary error.
         raise
     finally:
-        _stop_resource_workers(active)
+        try:
+            _stop_resource_workers(active)
+        finally:
+            # Close releases the process-owned advisory lock even on parser,
+            # worker or cleanup failure. Never signal/reap a peer pool.
+            if shared_admission_stream is not None:
+                shared_admission_stream.close()
 
 
 def _host_pool(specs, width):

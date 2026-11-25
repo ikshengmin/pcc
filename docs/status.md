@@ -443,6 +443,13 @@ in the relevant section or issue and removes the entry.
    Next: remaining cross-module failures, worker-prior/changed-module
    and Source; wait for the active checkpoint's independent wheel
    evidence before dispatching its successor.
+   #20 source worker admission: in run 45619704293, independent compiler
+   pools overlapped and exhausted the existing 128-MiB headroom. The source
+   guard now binds one peer admission lease per exact state path. The two
+   original native ABI witnesses pass with all six workers, 90 s and 1 GiB
+   (42.37 s, 808,480,768 bytes peak); the complete original 216-node batch
+   gave 214 passing calls, two independent failures, and a 90-s TIMEOUT,
+   not whole-batch acceptance. See [shared compiler pool investigation](investigations/shared-compiler-admission-45619704293.md).
    #20 on the local Mac at `25a309945`: the named CI-contract files and the
    shared frame tests pass. `tests/test_ci_native_object_regressions.py`'s
    host-only model controls failed only on macOS, from the gate's
@@ -457,7 +464,7 @@ in the relevant section or issue and removes the entry.
    native callback evidence as recorded in Checkpoint above.
 
    Claims:
-   - #20 guarded compiler sibling pool admission: Codex, Linux x86_64, 2026-11-25 16:12 UTC, area selfhost
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State
