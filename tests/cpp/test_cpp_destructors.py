@@ -130,7 +130,6 @@ def test_destructor_invalid_rules_fail_before_owned_emission(owned_only, source,
 UNSUPPORTED_DESTRUCTORS = (
     # Original virtual-destructor declaration moved verbatim to
     # test_cpp_implicit_polymorphic_constructors (implicit constructor).
-    'struct S{~S()noexcept;};',
     'struct S{~S();};S::~S(){throw 1;}',
     'struct S{~S();};int f(){try{S s;}catch(...){return 1;}return 0;}',
     'struct S{~S();};struct A{S s;};int f(){A a;return 0;}',
@@ -138,7 +137,6 @@ UNSUPPORTED_DESTRUCTORS = (
     'struct S{~S();};int f(){S a[2];return 0;}',
     'struct S{~S();};S global;',
     'struct S{~S();};int f(){S a;S b=a;return 0;}',
-    'struct S{~S();};int f(){S a; a.~S();return 0;}',
 )
 
 
@@ -147,6 +145,20 @@ def test_unimplemented_destructor_boundaries_are_not_silent(owned_only, source):
     with pytest.raises(CppDiagnostic) as error:
         compile_host_cpp((('destructor-boundary.cpp', source),))
     assert error.value.code.startswith('cpp.unsupported.')
+
+
+@pytest.mark.parametrize('source', (
+    'struct S{~S()noexcept;};',
+    # This original tests syntax and lowering only. Executing it would need
+    # transparent replacement after the explicit destruction.
+    'struct S{~S();};int f(){S a; a.~S();return 0;}',
+))
+def test_formerly_deferred_nonthrowing_d1_originals_preserve_declaration(source):
+    parser = CppParser()
+    tree = parser.parse(source)
+    symbol = parser.scope.names['S'].dtype.definition.destructor
+    assert symbol.nonthrowing and not symbol.defined
+    assert any(getattr(node, 'name', None) == symbol.c_name for node in tree.ext)
 
 
 def test_original_destructor_declaration_is_real_D1_prototype():

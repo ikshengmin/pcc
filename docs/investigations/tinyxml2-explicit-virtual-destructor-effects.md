@@ -95,3 +95,62 @@ closed; or (b) a general C++ exception and ABI owner before broadening.
 The agent recommends (a) for the original fixture, not for library or
 ordinary separately compiled ABI acceptance. Neither is implemented by
 this audit; do not change general-mode semantics or drop the current gate.
+
+
+## Exception-specification route (2026-11-25)
+
+The earlier effect-domain recommendation above is superseded by
+[#14](https://github.com/ikshengmin/pcc/issues/14), which rejects a
+project-only exception domain and approves the language rule. The relevant
+source rule is N4659 [except.spec]/8 (implicit member/base destructor
+specifications), /5 (non-throwing virtual overrides), and /4 (matching
+declarations). The new source does not infer the specification from a
+bound body or from TinyXML2's currently linked overrides.
+
+Linux host pcc0, CPython 3.15.0, G++ 14.2.0; starting master
+`46a048a2` plus the destructor exception-specification patch:
+
+- `tests/cpp/test_cpp_destructor_exception_specifications.py` and
+  `tests/cpp/test_cpp_virtual_explicit_destruction_effects.py` jointly:
+  69 passed. The second TU can define the selected virtual overrider,
+  late helper or recursive component's outgoing call. The exact
+  cross-TU virtual D1 witness returns 42 on both owned ELF and G++,
+  stdout `2a000000` (hex), empty stderr. The G++ reference explicitly
+  force-includes its genuine `<new>`; TU bytes are identical, not the
+  header environments. A potentially-throwing D1 still fails on unknown
+  effects, and a looser override is diagnosed in the declaring TU.
+- Entire C++ ordinary suite:
+  `uv run python -m pytest -q -n0 --override-ini=addopts= tests/cpp -m 'not integration'`:
+  6009 passed, 49 subtests passed, 47.97 s, guarded process-tree peak
+  RSS 197169152 bytes (1 GiB cap).
+- Related C++ destruction/placement corpus: 511 passed, one unchanged
+  external G++ rejection
+  `outer-alias-despite-different-class-alias`. Its original source and
+  external oracle assertion remain unmodified; not a green integration
+  suite. The feature ledger structure and its 129 unit tests pass; the
+  pre-existing diagnostic inventory audit has exactly the same unmapped
+  codes as the base tree (no new unsupported code).
+- Original project test:
+  `uv run python -m pytest -q -n0 --override-ini=addopts= tests/cpp/test_cpp_projects.py::test_cpp_tinyxml2_upstream_tests_explicit_host_pcc_project -m integration`.
+  Actual host command used `-m pcc --backend self --separate-tus --no-cache
+  -O0 --cpp-arg=-std=c++17 --cpp-arg=-D_FILE_OFFSET_BITS=64` on the
+  unchanged upstream project. It advances to
+  `tinyxml2.cpp:2310:1: cpp.unsupported.function-storage: function storage
+  specifiers require function linkage semantics` on
+  `static FILE* callfopen(const char*, const char*)`. The TU hash is still
+  `95f64e4cb06c9e147d5b12e8860c88898944858dfbc38fed92ebf918f1436554`.
+  No executable or upstream test result.
+- Runtime termination is not exercised: the frontend explicitly rejects
+  throw/catch, including throw in a non-throwing destructor. The measured
+  owned static ELF witness has no exception/unwind sections, but that is
+  not a tested exception search or termination result. C++ specifies
+  termination when an exception attempts to leave a non-throwing
+  function ([except.terminate]). Keep the actual throw/terminate test
+  unrun until the frontend owns such an exception path; no general
+  external EH interoperability, especially other platform unwind ABIs,
+  follows from this normal-exit evidence.
+
+Next: generic file-scope static function linkage at `2310:1`; constructor
+and deallocation exception specifications and native pcc1 parser execution
+remain independent obligations. Keep the existing potentially-throwing
+effect graph where it is needed.

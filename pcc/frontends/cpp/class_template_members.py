@@ -46,11 +46,13 @@ def parse_destructor_signature(parser, owner, virtual=None):
     parser._expect('~')
     name = parser._identifier()
     definition = owner.method_definition
-    parameter_scope = parse_parameters(parser, definition, name, check_lowering=False)
+    parameter_scope, exception_specification = parse_parameters(
+        parser, definition, name, check_lowering=False)
     specifiers = parse_virt_specifiers(parser)
     if parser._peek().value not in (';', '{'):
         unsupported(name.coord, 'defaulted/deleted/ref-qualified template destructors require special-member rules')
-    symbol = declare_destructor(definition, name, encode_name=False)
+    symbol = declare_destructor(definition, name, encode_name=False,
+                                exception_specification=exception_specification)
     symbol.class_template_pattern = owner
     symbol.definition_linkage = 'external_odr'
     symbol.template_virtual = (virtual, specifiers, False)
@@ -107,6 +109,7 @@ def check_pattern_virtual(owner, symbol, coord):
 
 
 def check_pattern_destructor(owner, symbol, coord):
+    from pcc.frontends.cpp.destructors import check_override_exception_specification
     from pcc.frontends.cpp.virtual_functions import _check_final
     virtual, specifiers, _ = symbol.template_virtual
     bases = pattern_bases(owner)
@@ -119,6 +122,11 @@ def check_pattern_destructor(owner, symbol, coord):
         raise CppDiagnostic('cpp.invalid-virt-specifier', 'final requires a virtual function', coord)
     if overridden is not None:
         _check_final(overridden, coord)
+        # Explicit, nondependent specifications are known at the primary
+        # declaration. An implicit specification is bound on the concrete
+        # specialization, after its potentially dependent members.
+        if symbol.destructor_exception_specification is not None:
+            check_override_exception_specification(overridden, symbol.nonthrowing, coord)
 
 
 def dependent_signature(symbol):
@@ -304,7 +312,9 @@ def declare_instances(parser, owner, definition, arguments):
         if getattr(origin, 'destructor', False):
             # Destructors are not overload-set members and retain a separate
             # declaration identity, just as in the ordinary class owner.
-            symbol = declare_destructor(definition, origin)
+            symbol = declare_destructor(
+                definition, origin,
+                exception_specification=origin.destructor_exception_specification)
         elif getattr(origin, 'constructor', False):
             if any(item.parameters == symbol.parameters for item in definition.constructors.overloads):
                 raise CppDiagnostic('cpp.redeclaration', 'constructor signatures coincide after substitution', origin.coord)

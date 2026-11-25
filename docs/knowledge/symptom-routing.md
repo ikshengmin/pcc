@@ -7,7 +7,7 @@ Search for the error text or symbol after locating its current code path.
 Read the matching experiment and later corrections, expanding as needed.
 Titles, snippets and status are historical locators, not current diagnosis.
 
-594 investigations.
+604 investigations.
 
 - [`2**52` does not round-trip through pcc1's float formatting or parsing](../investigations/pcc1-float-repr-strtod-17-digit-defect.md) — **Root cause identified, minimised to a two-line probe, bisected per stage, and**
   - `stage2 -> stage3` · `verify: cmp pcc2 pcc3` · `0x...004` · `0x...000` · `1000.0` · `123456789012345.0`
@@ -38,6 +38,12 @@ Titles, snippets and status are historical locators, not current diagnosis.
   - `test_callable_type_alias_literal_with_cpython_values` · `(SIGSEGV) in` · `libpy_runtime_pcc_py_libpython.a` · `py_capi_shim.o` · `py_libpython.o` · `Python.framework`
 - [D2-D6 closure package README](../investigations/python-data-model-d2-d6-readme.md)
 - [Default backend verdict](../investigations/default-backend-verdict.md)
+- [Direct boxed int returns: field, subscript and typed-string audit (#7)](../investigations/gc0-direct-boxed-int-accessor-owners.md)
+  - `py_instance_get_field` · `py_list_getitem` · `py_str_utf8` · `py_int_from_cstr_or_raise` · `py_obj_as_int_object_args` · `return int(value)`
+- [Exact-source comparison for checkpoint 45020986775](../investigations/checkpoint-validation-45020986775.md)
+  - `MISSING: indexed completion manifest`
+- [Exact-source comparison for checkpoint 45427972345](../investigations/checkpoint-validation-45427972345.md)
+  - `test_canonical_float_callback_movement_gc4[pcc0]` · `_pcc_gc_select_relocation_set` · `_pcc_gc_step` · `test_pcc_perf_linux.py` · `test_actual_disabled_item_with_a_macro_body_is_skipped` · `compile_python_total`
 - [Fallback baseline RED: 12 `py_cpy_*` in `compile_python` GPU dispatch (legacy `ir_scaffold=off`)](../investigations/fallback-baseline-legacy-gpu-dispatch-regression.md) — **OPEN — diagnosed to the construct; regression *timing* not attributed; not yet fixed.****
   - `py_cpy_*` · `compile_python` · `ir_scaffold=off` · `tests/python/test_fallback_baseline.py` · `tests/fallback_baseline.json` · `totals.fallbacks_total = 0`
 - [Final language closure](../investigations/final-language-closure.md)
@@ -49,10 +55,20 @@ Titles, snippets and status are historical locators, not current diagnosis.
   - `pcc/py_frontend/codegen/module_global_lowering.py` · `pcc_gc_pin(value)` · `PY_FLAG_GC_PINNED (0x40)` · `pcc.unsafe` · `stack_alloc` · `ptr_add`
 - [GC effectiveness: module roots and stale pcc-Python function slots](../investigations/gc-effectiveness-module-roots-function-slot-regression.md) — **resolved (2026-07-18)**
   - `gc-effectiveness-closure-cell-cycle.md` · `, and` · `py_gc_get_count` · `PY_TYPE_FUNC` · `gc_refs` · `24, 32, 40, 64, 80, 88`
+- [GC0 atomic CPU-share preflight](../investigations/gc0-atomic-attribution-preflight.md)
+  - `PERF_COUNT_SW_CPU_CLOCK` · `pcc_perf top` · `pcc_gateway` · `pcc_perf` · `PCC_GATEWAY_PACKAGE` · `uv run python scripts/pcc_perf.py profile-preflight --cpu-ms 60`
+- [GC1 marker startup and mutator-step baseline](../investigations/gc1-mutator-marking-baseline.md)
+  - `pcc_gc_maybe_start_cms_worker` · `pcc_gc_incremental_maybe_auto_step` · `gc.collect()`
+- [GC2 stock pacing arithmetic](../investigations/gc2-pacing-baseline.md)
+  - `pcc_perf arm --gc2-pacer-percent N` · `run_receipts` · `py_obj_call_sync` · `freestanding_gc_public_collection.py` · `pcc_gc_tracing_step_cycle`
 - [GC3 minor-arena provenance after legal promotion](../investigations/gc-backend3-minor-arena-provenance-after-promotion.md) — **resolved (2026-07-18)**
   - `instead of` · `PY_FLAG_GC_MINOR_ARENA` · `gc-backend3-pcc-py-minor-arena.md` · `generational_oldify_copy`
+- [GC3 remembered barrier: ownerless publication coverage](../investigations/gc3-remembered-writer-coverage.md)
+  - `pcc_gc_store_ptr` · `_store_root_nonmoving_tracing` · `py_gen_frame_set` · `pcc_gc_try_init_ptr_locked` · `_append_existing_capacity_gc0` · `_append_grow_gc0`
 - [GC4 retained zpage free fallback and malloc-origin fast path](../investigations/gc-backend4-retained-zpage-free-fallback.md)
   - `_backend4_zpage_list_owns_addr` · `PY_FLAG_GC_MALLOC_ALLOC` · `pcc_gc_note_object_freeing()` · `pcc_gc_free_object_memory()` · `pcc_gc_alloc()` · `pcc_gc_release()`
+- [Go math/bits: original test-entry and pinned testing frontier](../investigations/go-math-bits-original-closure-frontier.md)
+  - `test_owned_original_test_entry_and_actual_project_build_attempt` · `_testmain.go:4:2` · `test_math_bits_external_tests_with_the_pinned_closure_stop_inside_testing` · `testing/benchmark.go:95:2` · `go.unsupported.embedded-fields` · `testing.B`
 - [goal data-model B1/B2 slice 0394-0402](../investigations/goal-data-model-b1-b2-0394-0402.md)
   - `goal.md` · `py_bytes_new` · `py_bytes_len` · `py_bytes_getitem` · `py_bytes_slice` · `b"..."`
 - [goal data-model B3 class-level variables 0405-0412](../investigations/goal-data-model-b3-classvar-0405-0412.md)
@@ -1174,6 +1190,10 @@ Titles, snippets and status are historical locators, not current diagnosis.
   - `, and` · `StopIteration.value` · `__enter__` · `__exit__` · `__format__` · `libpython_mode="off"`
 - [self-backend torture cluster: phi parallel-copy swap + smin/smax-against-zero peephole](../investigations/self-backend-torture-phi-swap-and-minmax-zero-fold.md) — **resolved (2026-06-18)**
   - `tests/c/test_gcc_torture_self.py` · `tests/c/test_self_backend.py` · `## Report` · `--backend self` · `--backend llvm` · `fp-cmp-1..6`
+- [TinyXML2 explicit destruction: effect graph and next slice](../investigations/tinyxml2-explicit-virtual-destructor-effects.md)
+  - `tinyxml2.cpp:1199:9` · `cpp.unsupported.placement-constructor-effects` · `_parent->Unlink(this)` · `: it compiles` · `and invokes` · `tests/cpp/test_cpp_destructor_exception_specifications.py`
+- [Tracing clears callback weakrefs before acyclic resurrection](../investigations/gc-tracing-acyclic-weakref-resurrection.md)
+  - `tests/fixtures/native/constructor/generator_root_groups.py:280` · `pcc_gc_tracing_sweep_unreachable` · `_sweep_weak_callbacks` · `_sweep_finalizers` · `py_weakref_queue_tracing_candidates` · `_tracing_target_dies`
 - [uv locked local source build contamination](../investigations/uv-locked-local-source-build-contamination.md)
   - `projects/numpy-2.4.4` · `pcc sync --locked` · `. The installer then reused` · `*.cpython-314-*.so` · `sync_uv_lock` · `_overlay_meson_build_payloads`
 - [Where pcc1 native code beats CPython and where it loses, measured per operation](../investigations/pcc1-native-vs-cpython-per-operation-cost.md) — **Diagnosis [CONFIRMED] and quantified per operation. One component fix landed**

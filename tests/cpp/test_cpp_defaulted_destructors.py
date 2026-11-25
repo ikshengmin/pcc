@@ -131,7 +131,8 @@ DEFERRED = (
     ('later-defaulting', 'struct S{~S();};S::~S()=default;', 'cpp.unsupported.inline-member-functions'),
     ('deleted-declaration', 'struct S{~S()=delete;};', 'cpp.unsupported.inline-member-functions'),
     ('defaulted-template', 'template<class T>struct S{~S()=default;};', 'cpp.unsupported.member-templates'),
-    ('explicit-exception-specification', 'struct S{~S()noexcept=default;};', 'cpp.unsupported.exceptions'),
+    # The original explicit exception-specification case is now checked
+    # positively by test_cpp_destructor_exception_specifications.
     ('internal-linkage-defaulting', 'namespace{struct S{~S()=default;};}', 'cpp.unsupported.class-linkage'),
     # member-body-unavailable-at-use and member-unknown-effects-at-use moved verbatim to test_cpp_member_destruction's
     # NONTHROWING_DESTRUCTOR_BODIES ([except.spec]/8).

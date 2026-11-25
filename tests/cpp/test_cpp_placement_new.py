@@ -195,7 +195,8 @@ def test_user_provided_default_placement_does_not_invent_zero_initialization():
     ('void* operator new(size_type,int*) noexcept;struct S{int n;S();};S::S(){}'
      'int f(){int raw[4];new(raw)S();return 0;}', 'cpp.unsupported.placement-allocation-overload'),
     ('struct S{int n;S();};S::S(){}struct T{int n;};int f(S*p){p->~T();return 0;}', 'cpp.destructor-type-mismatch'),
-    ('struct S{int n;~S();};int f(S*p){p->~S();return 0;}', 'cpp.unsupported.placement-constructor-effects'),
+    ('struct S{int n;~S()noexcept(false);};int f(S*p){p->~S();return 0;}',
+     'cpp.unsupported.placement-constructor-effects'),
     ('class S{~S();public:int n;};S::~S(){}int f(S*p){p->~S();return 0;}', 'cpp.member-access'),
     ('struct S{int n;};int f(S*p){p->~::S();return 0;}', 'cpp.invalid-destructor-name'),
     ('namespace N{struct S{int n;};}int f(N::S*p){p->~N::S();return 0;}', 'cpp.invalid-destructor-name'),

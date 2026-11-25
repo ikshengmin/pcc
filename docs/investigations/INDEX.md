@@ -441,6 +441,8 @@ Regenerate with `uv run python scripts/regen_investigations_index.py`.
   - The user-mode scheduling goal needs a real task object shape, not just bare
 - [gc-task-waiter-forwarded-shadow-weakref.md](gc-task-waiter-forwarded-shadow-weakref.md) — **task waiter cycles survive colored relocation**
   - `tests/test_gc_coroutine_roots.py::test_task_completion_releases_waiter_cycle_across_backends`
+- [gc-tracing-acyclic-weakref-resurrection.md](gc-tracing-acyclic-weakref-resurrection.md) — **Tracing clears callback weakrefs before acyclic resurrection**
+  - The unchanged generator operand fixture succeeds on CPython and GC0.
 - [gc-transitive-resurrection-clear-order.md](gc-transitive-resurrection-clear-order.md) — **cycle GC clears referents before resurrection finalizers**
   - Two remaining resurrection xfails show that pcc's cycle collector does not
 - [gc-trashcan-finalizer-count.md](gc-trashcan-finalizer-count.md) — **trashcan dealloc skips finalizers in deep chains**
@@ -634,6 +636,10 @@ Regenerate with `uv run python scripts/regen_investigations_index.py`.
   - Commit 93cfbca5 (2026-08-07, "C-API shim closure: migrate all remaining Py*
 - [cc-runtime-trash-should-defer-fallthrough-double-free.md](cc-runtime-trash-should-defer-fallthrough-double-free.md) — **cc-runtime `pcc_trash_should_defer` switch fall-through → trash-node double-free**
   - Two cc-tier (`PCC_RUNTIME_CC=cc`) tests crashed with SIGTRAP (rc 133), while
+- [checkpoint-validation-45020986775.md](checkpoint-validation-45020986775.md) — **Exact-source comparison for checkpoint 45020986775**
+  - [Candidate](https://github.com/ikshengmin/pcc/actions/runs/45020986775)
+- [checkpoint-validation-45427972345.md](checkpoint-validation-45427972345.md) — **Exact-source comparison for checkpoint 45427972345**
+  - [Candidate 45427972345](https://github.com/ikshengmin/pcc/actions/runs/45427972345)
 - [ci-head-truth-editable-build-hook-bootstrap.md](ci-head-truth-editable-build-hook-bootstrap.md) — **HEAD truth dependency sync invokes the release build hook**
   - active — local fix confirmed; successor clean GitHub run pending
 - [ci-head-truth-heavy-cold-run-cascade.md](ci-head-truth-heavy-cold-run-cascade.md) — **heavy HEAD truth cold run cascades after runtime setup and xdist oversubscription**
@@ -796,14 +802,22 @@ Regenerate with `uv run python scripts/regen_investigations_index.py`.
   - resolved (#30 alt-form, #31 int space-sign format(), #32 f-string spec literal completing space-sign; e/E/g already worked — all full-boo...
 - [fstring-nested-replacement-field-in-format-spec.md](fstring-nested-replacement-field-in-format-spec.md) — **nested replacement field inside an f-string format spec (f"{val:>{width}.2f}") unsupported under no-libpython**
   - A nested replacement field inside an f-string's format spec —
+- [gc0-atomic-attribution-preflight.md](gc0-atomic-attribution-preflight.md) — **GC0 atomic CPU-share preflight**
+  - The GC0 work-order threshold is 10% of CPU, not a share of reference-count
 - [gc0-bootstrap-runtime-hotpaths-2026-06-05.md](gc0-bootstrap-runtime-hotpaths-2026-06-05.md) — **GC0 bootstrap runtime hot paths**
   - open. Backend #0 focused bootstrap improved, but the full parallel
+- [gc0-direct-boxed-int-accessor-owners.md](gc0-direct-boxed-int-accessor-owners.md) — **Direct boxed int returns: field, subscript and typed-string audit (#7)**
+  - Source and claim: `b89a27b19c635ec8977795b2151f57690917a6f0`.
 - [gc0-graph-lock-mirror-drift-threads-off.md](gc0-graph-lock-mirror-drift-threads-off.md) — **GC0 graph lock mirror drift — pcc-Python mirror pays the full TLS+CAS lock under threads-off builds**
   - Predecessor: [pcc1-stage2-emit-throughput-and-memory.md](pcc1-stage2-emit-throughput-and-memory.md)
 - [gc1-bootstrap-auto-step-backend-fastpath-2026-06-05.md](gc1-bootstrap-auto-step-backend-fastpath-2026-06-05.md) — **GC1 bootstrap auto-step backend fast path**
   - resolved as a small focused backend #1 bootstrap-performance slice; broader
+- [gc1-mutator-marking-baseline.md](gc1-mutator-marking-baseline.md) — **GC1 marker startup and mutator-step baseline**
+  - The current worker admission in `pcc_gc_maybe_start_cms_worker` allows
 - [gc2-bootstrap-py-obj-backend-fastpath-2026-06-05.md](gc2-bootstrap-py-obj-backend-fastpath-2026-06-05.md) — **GC2 bootstrap pcc-Python object backend fast path**
   - resolved for the focused backend #2 full bootstrap gate; five-GC matrix still
+- [gc2-pacing-baseline.md](gc2-pacing-baseline.md) — **GC2 stock pacing arithmetic**
+  - The current threaded GC2 is on the shared tracing scheduler. Its start
 - [gc3-bootstrap-config-fastpath-2026-06-05.md](gc3-bootstrap-config-fastpath-2026-06-05.md) — **GC3 bootstrap pcc-Python GC dispatch fast path**
   - resolved for the focused backend #3 full bootstrap gate; five-GC matrix still
 - [gc3-cpy-handle-oldify-foreign-ownership.md](gc3-cpy-handle-oldify-foreign-ownership.md) — **GC3 cpy-handle oldification loses foreign ownership**
@@ -812,6 +826,8 @@ Regenerate with `uv run python scripts/regen_investigations_index.py`.
   - active — pre-existing GC3 behavior gap surfaced (and attribution-proven NOT
 - [gc3-in-place-promotion-young-list.md](gc3-in-place-promotion-young-list.md) — **GC3 in-place promotion leaves an old owner on the young list**
   - Resolved locally on 2026-09-16: the C mirror now matches the existing
+- [gc3-remembered-writer-coverage.md](gc3-remembered-writer-coverage.md) — **GC3 remembered barrier: ownerless publication coverage**
+  - Reviewed for [GC3 #8](https://github.com/ikshengmin/pcc/issues/8#issuecomment-7075091903).
 - [gc4-bootstrap-config-fastpath-2026-06-05.md](gc4-bootstrap-config-fastpath-2026-06-05.md) — **GC4 bootstrap pcc-Python GC config fast path**
   - resolved for the focused backend #4 full bootstrap gate; five-GC matrix still
 - [gc4-pcc2-graph-lock-deadlock-stage2-miscompile.md](gc4-pcc2-graph-lock-deadlock-stage2-miscompile.md) — **pcc2 under GC4 deadlocks on the minor graph lock — stage2-only, pcc1 is fine (suspected pcc1 codegen miscompile)**
@@ -830,6 +846,8 @@ Regenerate with `uv run python scripts/regen_investigations_index.py`.
   - The application-performance investigation (pcc #188) needs a regression for
 - [generator-native-ast-reflection-misses-expression.md](generator-native-ast-reflection-misses-expression.md) — **native generator frame planning misses nested expressions**
   - Host pcc compiles the gateway, while pcc1 reports a missing child continuation
+- [go-math-bits-original-closure-frontier.md](go-math-bits-original-closure-frontier.md) — **Go math/bits: original test-entry and pinned testing frontier**
+  - Linux x86-64 host pcc0 source evidence at `36f9ab29`, not an upstream
 - [goal-data-model-b1-b2-0394-0402.md](goal-data-model-b1-b2-0394-0402.md) — **goal data-model B1/B2 slice 0394-0402**
   - This slice continues after the goal-order gate pack and advances the next
 - [goal-data-model-b3-classvar-0405-0412.md](goal-data-model-b3-classvar-0405-0412.md) — **goal data-model B3 class-level variables 0405-0412**
@@ -1126,6 +1144,8 @@ Regenerate with `uv run python scripts/regen_investigations_index.py`.
   - resolved (invalid reproduction shape; no production code change)
 - [three-arg-pow-modexp-no-libpython.md](three-arg-pow-modexp-no-libpython.md) — **pow(b, e, mod) (3-arg modular exponentiation) -> NameError under no-libpython**
   - resolved (#45 — bootstrap biyrywrup PASSED 18/4skip, 155s)
+- [tinyxml2-explicit-virtual-destructor-effects.md](tinyxml2-explicit-virtual-destructor-effects.md) — **TinyXML2 explicit destruction: effect graph and next slice**
+  - The unchanged Linux host pcc0 attempt at `a04b1db` still stops at
 - [tuple-publication-noop-quadratic-scan.md](tuple-publication-noop-quadratic-scan.md) — **tuple completion scans run for no-op publication backends**
   - The human asks why Stage2 still takes about three times Stage1 and requests
 - [tuple-set-frozenset-over-custom-iterator-libpython-fallback.md](tuple-set-frozenset-over-custom-iterator-libpython-fallback.md) — **tuple()/set()/frozenset() over a custom __iter__/__next__ iterator falls back to libpython**

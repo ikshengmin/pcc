@@ -526,4 +526,29 @@ have a pending effect obligation checked at the end of its translation
 unit. Every reachable canonical member must have a bound body and a complete
 set of exact recognized direct member calls. Revisited identities permit
 self and mutual recursion, not unbound bodies or unknown outgoing calls.
-This preserves automatic D1 cleanup and does not admit open virtual effects.
+This preserves automatic D1 cleanup. It is now needed only for the
+potentially-throwing destruction paths that need an effect proof.
+
+### Destructor exception specifications
+
+N4659 [except.spec]/1,2,5,8: a destructor without an explicit exception
+specifier takes the implicit exception specification of its potentially
+constructed member and direct base subobjects. This is decided at class
+completion, not the destructor's declaration position or its body.
+The existing integral constant-expression evaluator binds `noexcept(expr)`;
+`noexcept` and `throw()` are non-throwing. Out-of-class declarations must
+agree on their effective specification. Concrete class-template
+specializations bind the same rule. A virtual overrider cannot loosen
+a non-throwing base destructor's specification.
+
+Non-throwing explicit D1 calls need no bound-body effect proof. Unqualified
+virtual destruction still selects the actual D1 vtable slot. Access,
+deletion, template definition requests and normal member/base cleanup
+are unchanged. Direct potentially-throwing calls retain the closed-body
+proof gate; open potentially-throwing virtual calls fail explicitly.
+Normal automatic cleanup and non-polymorphic delete also reject an
+unproved potentially-throwing D1. Tests distinguish a genuine
+`noexcept(false)` contract from absence of body proof. General exception
+expression evaluation, constructor/deallocation exception specifications,
+implicit virtual D1 synthesis, throw/catch, unwinding and the runtime
+termination path are not qualified by this change.

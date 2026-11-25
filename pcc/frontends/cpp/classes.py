@@ -245,6 +245,8 @@ class ClassDefinition:
                                         "a class with a constructor cannot have a same-named data member", member.coord)
         from pcc.frontends.cpp.inheritance import check_derived_definition
         check_derived_definition(self)
+        from pcc.frontends.cpp.destructors import bind_exception_specification
+        bind_exception_specification(self)
         self.complete = True
         return self
 

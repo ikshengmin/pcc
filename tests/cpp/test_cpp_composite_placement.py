@@ -112,16 +112,17 @@ DEFERRED = (
      'void f(void*p){new(p)O;}', 'cpp.unsupported.placement-constructor-effects'),
     ('nontrivial-complete-c1-argument-effect', 'int effect();' + SUM_OWNER +
      'void f(void*p){new(p)O(effect());}', 'cpp.unsupported.destructor-subobjects'),
-    ('unbound-composite-d1',
-     'struct M{~M(){}};struct O{M member;~O();};void f(O*p){p->~O();}',
+    ('unbound-composite-d1-potentially-throwing',
+     'struct M{~M(){}};struct O{M member;~O()noexcept(false);};void f(O*p){p->~O();}',
      'cpp.unsupported.placement-constructor-effects'),
-    ('unknown-outer-d1-with-trivial-member',
-     'void effect();struct M{};struct O{M member;~O(){effect();}};void f(O*p){p->~O();}',
+    ('unknown-outer-d1-with-trivial-member-potentially-throwing',
+     'void effect();struct M{};struct O{M member;~O()noexcept(false){effect();}};void f(O*p){p->~O();}',
      'cpp.unsupported.placement-constructor-effects'),
-    # The member D1 body is accepted ([except.spec]/8); the explicit call
-    # still needs a closed-destruction proof for its own effects.
-    ('unknown-member-d1',
-     'void effect();struct M{~M(){effect();}};struct O{M member;~O(){}};void f(O*p){p->~O();}',
+    # A potentially-throwing member propagates its specification to O, so
+    # its unproven destruction still needs an owned exception cleanup path.
+    ('unknown-member-d1-potentially-throwing',
+     'void effect();struct M{~M()noexcept(false){effect();}};'
+     'struct O{M member;~O(){}};void f(O*p){p->~O();}',
      'cpp.unsupported.placement-constructor-effects'),
     ('implicit-outer-d1-not-a-noop',
      'struct M{~M(){}};struct O{M member;};void f(O*p){p->~O();}',
@@ -171,6 +172,20 @@ def test_unowned_or_invalid_composite_lifetimes_fail_closed(name, source, code):
     assert error.value.code == code
 
 
+@pytest.mark.parametrize('source', (
+    'struct M{~M(){}};struct O{M member;~O();};void f(O*p){p->~O();}',
+    'void effect();struct M{};struct O{M member;~O(){effect();}};void f(O*p){p->~O();}',
+    'void effect();struct M{~M(){effect();}};struct O{M member;~O(){}};void f(O*p){p->~O();}',
+))
+def test_nonthrowing_composite_d1_originals_need_no_body_closure(source):
+    parser = CppParser()
+    parser.parse(DECLARATION + source)
+    definition = parser.scope.names['O'].dtype.definition
+    assert definition.destructor.nonthrowing
+    assert not getattr(definition.destructor, 'closed_destruction_body', False)
+    assert parser.pending_explicit_destruction_members == []
+
+
 @pytest.mark.parametrize('kind', ('constructor', 'destructor'))
 def test_placement_never_substitutes_call_free_metadata_for_missing_chain_proof(kind, monkeypatch):
     if kind == 'constructor':
@@ -180,7 +195,7 @@ def test_placement_never_substitutes_call_free_metadata_for_missing_chain_proof(
     else:
         from pcc.frontends.cpp import destructors as owner
         attribute, binding = 'closed_destruction_body', 'bind_destructor_body'
-        source = 'struct M{~M(){}};struct O{M member;~O(){}};void f(O*p){p->~O();}'
+        source = 'struct M{~M(){}};struct O{M member;~O()noexcept(false){}};void f(O*p){p->~O();}'
     original = getattr(owner, binding)
 
     def without_proof(parser, definition, symbol, *args, **kwargs):

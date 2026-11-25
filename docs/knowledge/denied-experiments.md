@@ -9,7 +9,7 @@ Search by symbol/symptom; inspect the matching experiment and its updates.
 Verify current code, source revision and artifacts before reusing a verdict.
 Do not repeat a matching failed experiment without identifying new evidence.
 
-670 verdicts across 143 investigations.
+671 verdicts across 144 investigations.
 
 ## [Investigation: retired raw span cache hides an object at a reused address](../investigations/allocator-span-cache-raw-address-reuse.md)
 
@@ -266,6 +266,10 @@ Do not repeat a matching failed experiment without identifying new evidence.
 - Update (2026-06-12 #8): initial-capacity split DENIED by measurement; replaced with tombstone deletion — The initial-capacity split was implemented and passed correctness gates, but
 - measurement denied it as a performance slice:
 - added memory overhead. The experiment is DENIED and the code was replaced with
+
+## [Linux GC prototype, scheduler and pause measurements](../investigations/gc-nursery-and-scheduler-linux.md)
+
+- zero nursery allocations and minor cycles with admission denied, and actual
 
 ## [Investigation: Task completion must release waiter roots](../investigations/gc-task-completion-waiter-release.md)
 

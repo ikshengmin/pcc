@@ -376,20 +376,24 @@ def explicit_destructor(parser, expression, operator):
     if destructor is not None:
         from pcc.frontends.cpp.destructors import check_usable, request_body
         check_usable(parser.scope, destructor, coord)
-        if getattr(destructor, 'destructor_defaulted', False):
+        if destructor.nonthrowing or getattr(destructor, 'destructor_defaulted', False):
             request_body(parser, destructor, coord)
-        if (getattr(destructor, 'class_template_instance', None) is not None
-                and not getattr(destructor, 'closed_destruction_body', False)):
-            raise CppDiagnostic('cpp.unsupported.dependent-destruction',
-                                'explicit template D1 requires a bound closed-destruction proof, not a queued body', coord)
-        # Only the destructor binder's exact generated cleanup-call chain is
-        # trusted. Unknown user calls and declarations alone are not proofs.
-        if (not getattr(destructor, 'closed_destruction_body', False)
-                and not (parser.unevaluated_depth and getattr(destructor, 'destructor_defaulted', False))):
-            from pcc.frontends.cpp.destructors import queue_explicit_destruction_members
-            if parser.unevaluated_depth or not queue_explicit_destruction_members(parser, destructor, coord):
+        if not destructor.nonthrowing:
+            # A potentially-throwing virtual D1 may dispatch to an overrider
+            # in another TU. A proof of just this body is insufficient.
+            if getattr(destructor, 'method_virtual', False) and not getattr(destructor, 'method_final', False):
                 raise CppDiagnostic('cpp.unsupported.placement-constructor-effects',
-                                    'unknown destruction effects need exception/cleanup integration', coord)
+                                    'potentially-throwing virtual destruction needs exception/cleanup integration', coord)
+            if (getattr(destructor, 'class_template_instance', None) is not None
+                    and not getattr(destructor, 'closed_destruction_body', False)):
+                raise CppDiagnostic('cpp.unsupported.dependent-destruction',
+                                    'explicit template D1 requires a bound closed-destruction proof, not a queued body', coord)
+            if (not getattr(destructor, 'closed_destruction_body', False)
+                    and not (parser.unevaluated_depth and getattr(destructor, 'destructor_defaulted', False))):
+                from pcc.frontends.cpp.destructors import queue_explicit_destruction_members
+                if parser.unevaluated_depth or not queue_explicit_destruction_members(parser, destructor, coord):
+                    raise CppDiagnostic('cpp.unsupported.placement-constructor-effects',
+                                        'unknown destruction effects need exception/cleanup integration', coord)
     saved = parser._fresh_projection_name('__pcc_cpp_destroy_')
     temporary = parser._decl(saved, PointerType(dtype), coord, address)
     pointer = _cast(parser, c_ast.ID(saved, coord), PointerType(owner), coord)

@@ -1010,6 +1010,9 @@ class CppParser:
         if (fact is None or fact.status != KNOWN
                 or not self.types.integral_operand(expression.dtype)):
             raise CppDiagnostic("cpp.unsupported.exceptions", "noexcept declaration requires an implemented integral constant expression", token.coord)
+        if fact.value not in (0, 1):
+            raise CppDiagnostic("cpp.narrowing-conversion",
+                                "noexcept requires a non-narrowing constant conversion to bool", token.coord)
         return bool(fact.value)
 
     def _function(self, template_parameters=(), declaration_scope=None, implicit_extern=False,

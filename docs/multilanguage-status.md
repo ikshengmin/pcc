@@ -14,35 +14,27 @@ upstream tests. Mainlines compile source directly to PCC IR.
 | Go | Go 1.27.3 `math/bits`, whole package and tests | Local Mac and Linux x86-64 container: dynamic integer division checks its divisor (terminal `runtime.divideError` panic, signed MIN/-1) and a runtime-owned error is admitted as a terminal panic operand, so every normal production file of the package now lowers to owned IR (previously `bits.go:507:9`). The internal test package (`export_test.go`) also lowers. Slice types now parse everywhere (the checker keeps the slice-storage gap) and array literals take elided element types (owned arm64 Darwin execution matches a local go1.23.6 reference), so the external test package parses past the `TestReverse` table (`bits_test.go:458:23`, `:461:3`). Function types and literals now parse (function values are an explicit checker gap), then the `defer` statement at `bits_test.go:851:4`; `defer` now parses and its checked call is the explicit `go.unsupported.defer` gap (positions of its syntax errors match a local go1.23.6), then the type assertion `err.(runtime.Error)` at `bits_test.go:1038:26`; type assertions now parse (assertions on interface values stay the interface-types gap), so the whole `bits_test.go` parses, then stopped at its import of `runtime` (`bits_test.go:9:2`). An owned, partial `runtime` package now provides `runtime.Error` (other names are the explicit `go.unsupported.owned-runtime-surface` gap), then stopped at the `testing` import, `bits_test.go:10:2`. The original Go 1.27.3 standard-library closure of `testing`, `fmt`, `os` and `testing/internal/testdeps` is now pinned (107 packages, 667 unchanged `.go` files for linux/darwin on amd64/arm64 from the official `go1.27.3.src.tar.gz`; `tests/go/upstream/go1.27.3/pcc-std-closure-lock.json`, `scripts/pin_go_std_closure.py`; compiler-owned `runtime*`/`unsafe` excluded), so the external test package compiles into the original `testing` package and stopped at its first file, `testing/allocs.go:20:44`, a `float64` result. `float32`/`float64` now work (exact float constants with half-to-even typed rounding, arithmetic, IEEE comparisons, conversions, switch, arrays and struct fields; printing floats and float `min`/`max` stay explicit; an original program runs natively on the Mac and matches go1.23.6), so the closure stops at `testing/benchmark.go:53:32`, the slice expression `s[:len(s)-1]`, which the parser still reports as an unsupported expression token rather than a slicing boundary. The upstream tests remain unrun: they need closures, slices, `defer`, the `testing`/`fmt`/`os` closure, a test entry, and `defer`/`recover` for the panic tests. | Slice expressions in the pinned `testing` closure (`testing/benchmark.go:53:32`; parse them, then gap slice values explicitly), printing floats, then the rest of that closure, `unsafe.Sizeof`, closures/function values, interface values with type assertions and deferred calls with `recover`, then slice storage on the shared managed allocator; owned package-test entry and dependency closure; interface values and runtime error objects beyond panic operands; recoverable panics. Keep the official reference strict. |
 | Rust | `fallible-streaming-iterator` 0.1.9 | CI integration [45619704293](https://github.com/ikshengmin/pcc/actions/runs/45619704293/job/139281128980), exact artifact 15033286334: certification passes, but owned resolution rejects the original `lib.rs:22:1` `use core::cmp;`; the next import is `core::marker::PhantomData`. The earlier parser frontiers (associated constraints, tuple structs/patterns, match guards) do not establish project acceptance. Closed pinned non-system source dependencies now compile and link nested public modules and explicit edition-2015 extern crates; Linux native regression passes, official reference for the new fixture is pending. No PCC project object. | Build a real pinned core closure and owner for its `#![no_core]` and compiler/lang-item attributes (retained Rust 1.90.0 core root currently fails at line 75). Resolve the edition-selected prelude from real definitions, then support foreign nominal and trait identities, Option/Result, generic/blanket impl and associated projections, and closure types. Keep the original project gate strict. |
 
-**TinyXML2 Linux pcc0 after the static pointer copy-list fix.** The
-unchanged project now passes its prior declaration/static initialization
-boundaries, including `static const char* xmlHeader = { "<?" };`. It stops
-before link at `tinyxml2.cpp:1199:9`,
-`cpp.unsupported.placement-constructor-effects`: unknown destruction
-effects need exception/cleanup integration, at `node->~XMLNode()` before
-the memory pool's free. Do not suppress the effect guard or replace the
-virtual destructor call with a qualified base call. The focused
-copy-list persistence fixture ran and matched g++ 14.2; no PCC
-execution of the unchanged project.
+**TinyXML2 Linux pcc0, destructor exception specifications.** Following
+the approval in [#14](https://github.com/ikshengmin/pcc/issues/14), the
+unchanged TinyXML2 11.0.0 project progresses past `tinyxml2.cpp:1199:9`
+(`node->~XMLNode()`) to file-scope static function declaration
+`tinyxml2.cpp:2310:1` (`cpp.unsupported.function-storage`, `callfopen`).
+The TU SHA-256 remains
+`95f64e4cb06c9e147d5b12e8860c88898944858dfbc38fed92ebf918f1436554`.
+This is a failed compile at the next independent language boundary, not
+a passed TinyXML2 project. Native pcc1 is separately blocked at
+`pcc.frontends.cpp.parser.parse`'s no-libpython function stub.
 
-**Explicit destructor effect baseline at `35aa1d26`.** The
-[paired originals](../tests/cpp/test_cpp_virtual_explicit_destruction_effects.py)
-differ only in the base destructor: arithmetic in the body versus a
-defined same-TU helper performing that arithmetic. The unqualified
-`p->~Base()` closed control executes derived-then-base (42) under both
-Linux pcc0 and g++ 14.2 with exact streams and return status. The helper
-variant returns 42 with g++, but pcc0 stops at the same destruction-effect
-gate as TinyXML2. This is not missing virtual dispatch. TinyXML2's
-`DeleteChildren` and `Unlink` paths need their actual effect proof, including
-recursive/virtual edges; do not accept them by removing the gate.
-
-**Bound leaf effect slice.** Native nonvirtual and final virtual explicit
-destruction can call a previously bound TU-local C++ leaf whose body has no
-calls. The effect check keeps the identity of that exact emitted call and
-still traverses its arguments. Open virtual, external and unknown leaf
-effects stay rejected. Both new witnesses match g++ 14.2. Unchanged
-TinyXML2 remains at `1199:9`; this milestone does not qualify its recursive
-destruction chain.
+Ordinary C++: 6009 passed, 49 subtests passed on Linux CPython 3.15
+(host pcc0); the new and revised D1 controls execute actual owned ELF
+binaries and match g++ 14.2. Non-throwing D1 calls use their exception
+specification; potentially-throwing calls still require a closed direct
+effect path, and open potentially-throwing virtual dispatch is rejected.
+The former local-leaf/recursive proof experiments and the next
+boundary are recorded in the
+[explicit destruction investigation](investigations/tinyxml2-explicit-virtual-destructor-effects.md).
+No general unwind/throw/catch, terminate execution, native pcc1 or
+whole-project execution is qualified.
 
 Package targets pinned for test-driven work (docs/python-native-extension-languages.md): `projects/zxing-3.5.4` (Java Reed-Solomon; with `@Override` parsed and checked, native stops at `GenericGF.java:33:23`, a static field of class type, and the class model at `GenericGF.java:42:17`, final instance fields) and `projects/go-enry-2.9.6` (Go tokenizer slice; first blocker `tokenize.go:16:23`, slice storage), `projects/uv-0.13.7` (Rust executable, the uv package manager: with owned cfg from uv's default features and release profile, three of its four pinned roots stop at an external `extern crate`, the external `#[instrument]` attribute (`format!` now expands) and an `impl Trait` return type, while `crates/uv-version` compiles in full and its owned native build prints `0.13.7` (local Mac; needs the value-only attestation, as PCC has no owned borrow checker); `@` binding patterns, grouped use trees, `pub use` re-exports, restricted visibility, tool-scoped crate lints, owned cfg selection, integer/bool/`&str` const items, `env!` over an explicit Cargo crate environment, `&'static str` literal values, lifetime generic arguments (behind the rustc check), built-in derives, `const fn`, `matches!`, struct-like enum variants and static items are now owned; see its README), alongside the existing orjson (Rust: `$` now lexes and macros are an explicit parser gap, so `src/lib.rs` stops at its first crate attribute, `lib.rs:4:4` `cfg_attr`, which needs a rustc-checked configuration that the unpinned dependency closure cannot yet provide; `build.rs:7:58` runtime strings) and NumPy targets.
 

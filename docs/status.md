@@ -864,13 +864,19 @@ in the relevant section or issue and removes the entry.
    envelope is not promoted (Claude's recommendation; the maintainer has not
    decided promotion): it is a tuple-shaped owner, so a later tuple-specific
    step of the collector, such as no longer tracking a tuple of immutable
-   items, would apply to mutable Go and Java objects. C++ (TinyXML2
-   `1199:9`): destructor exception specifications and the non-throwing
-   override rule instead of effect proofs, as approved in
-   [#14](https://github.com/ikshengmin/pcc/issues/14); the project-only
-   effect domain is rejected. Existing probes
-   are not native upstream acceptance. The opt-in source probe reached
-   `internal/bytealg/bytealg.go:9:2`; no dependency-closure executable exists.
+   items, would apply to mutable Go and Java objects. C++
+   [#14](https://github.com/ikshengmin/pcc/issues/14):
+   implicit/explicit destructor exception specifications and the non-throwing
+   override rule now select ordinary versus effect-gated D1 destruction.
+   Linux pcc0: 6009 ordinary tests and 49 subtests passed; cross-TU D1
+   controls match g++ 14.2. Unchanged TinyXML2 moves past `1199:9` to
+   `tinyxml2.cpp:2310:1`, `static FILE* callfopen(...)`:
+   `cpp.unsupported.function-storage`. Next C++ unit: generic file-scope
+   static function linkage, not a project exception. Constructor/deallocation
+   exception specifications and actual throw/terminate execution remain
+   separate obligations. Native pcc1 still stops at the parser's
+   no-libpython stub; no upstream executable or full C++ integration pass.
+   The opt-in Go source probe reached `internal/bytealg/bytealg.go:9:2`; no dependency-closure executable exists.
    See the
    [closure audit](investigations/go-math-bits-original-closure-frontier.md).
    No full test execution or owned map/goroutine storage.
@@ -899,7 +905,7 @@ in the relevant section or issue and removes the entry.
    neither an external token nor a caller-provided crate named core waives it.
 
    Claims:
-   - TinyXML2 generic virtual destructor exception specifications (explicit destruction): Codex, Linux, 2026-11-25 15:15 UTC, area frontend-cpp
+   - none
 5. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:

@@ -216,9 +216,12 @@ def lower_delete(parser, expression, global_only, array, coord):
                 raise CppDiagnostic('cpp.unsupported.destructor-subobjects',
                                     'implicit member destruction requires special-member synthesis', coord)
             if destructor is not None:
-                from pcc.frontends.cpp.destructors import check_usable, request_body
+                from pcc.frontends.cpp.destructors import (
+                    check_usable, request_body, require_direct_cleanup_effects,
+                )
                 check_usable(parser.scope, destructor, coord)
                 request_body(parser, destructor, coord)
+                require_direct_cleanup_effects(destructor, coord)
                 this = _cast(parser, c_ast.ID(name, coord), PointerType(element), coord)
                 body.append(c_ast.FuncCall(c_ast.ID(destructor.c_name, coord), c_ast.ExprList([this], coord), coord))
     void_pointer = _cast(parser, c_ast.ID(name, coord), PointerType('void'), coord)

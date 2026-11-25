@@ -1071,7 +1071,7 @@
         "class",
         "expr.pseudo"
       ],
-      "scope": "Authored, execution-unrun obligations for non-template first-declaration defaulted D1s, independent deletion/triviality/user-provided identity, recursive implicit-member deletion and access checks, and lazy emitted bodies through the existing exact member-cleanup proof and external-ODR worklist. Class completion classifies deletion before deferred default arguments and DMIs, including the unchanged deleted-D1 unevaluated default-argument counterexample. Unused declarations and valid unevaluated calls request no member body. Ordinary, placement, reverse-order, return, loop, nested-member, body-local and cross-TU original programs have authored owned-native/reference rows; no observed pass is claimed. The exact formerly rejected defaulted declaration is preserved unchanged as a positive original. Implicit nontrivial D1 synthesis, template/later defaulting, explicit exception specifications, class-array lifetimes, unknown destructor effects, unavailable evaluated-use bodies, bases/virtual dispatch, internal-linkage ownership and unwinding remain explicit boundaries. Native pcc1 frontend and unchanged TinyXML2 project acceptance remain unqualified. No local tests, imports, compilers or collection were run; CI must establish these outcomes.",
+      "scope": "Authored, execution-unrun obligations for non-template first-declaration defaulted D1s, independent deletion/triviality/user-provided identity, recursive implicit-member deletion and access checks, and lazy emitted bodies through the existing exact member-cleanup proof and external-ODR worklist. Class completion classifies deletion before deferred default arguments and DMIs, including the unchanged deleted-D1 unevaluated default-argument counterexample. Unused declarations and valid unevaluated calls request no member body. Ordinary, placement, reverse-order, return, loop, nested-member, body-local and cross-TU original programs have authored owned-native/reference rows; no observed pass is claimed. The exact formerly rejected defaulted declaration is preserved unchanged as a positive original. Implicit nontrivial D1 synthesis, template/later defaulting, class-array lifetimes, unknown potentially-throwing destructor effects, unavailable evaluated-use bodies, bases/virtual dispatch, internal-linkage ownership and unwinding remain explicit boundaries. Native pcc1 frontend and unchanged TinyXML2 project acceptance remain unqualified. No local tests, imports, compilers or collection were run; CI must establish these outcomes.",
       "implementation": {
         "status": "supported",
         "source_revision": "sha256:769fab815555cf9f146851b6450d2d9654e22702569ab8fdd9d85cf23c9a5442",
@@ -3405,13 +3405,13 @@
         "tests/cpp/test_cpp_destructors.py::test_unimplemented_destructor_boundaries_are_not_silent[struct S{virtual ~S();};]",
         "tests/cpp/test_cpp_destructors.py::test_unimplemented_destructor_boundaries_are_not_silent[struct S{~S();};S global;]",
         "tests/cpp/test_cpp_destructors.py::test_unimplemented_destructor_boundaries_are_not_silent[struct S{~S();};S::~S(){throw 1;}]",
-        "tests/cpp/test_cpp_destructors.py::test_unimplemented_destructor_boundaries_are_not_silent[struct S{~S();};int f(){S a; a.~S();return 0;}]",
+        "tests/cpp/test_cpp_destructors.py::test_formerly_deferred_nonthrowing_d1_originals_preserve_declaration[struct S{~S();};int f(){S a; a.~S();return 0;}]",
         "tests/cpp/test_cpp_destructors.py::test_unimplemented_destructor_boundaries_are_not_silent[struct S{~S();};int f(){S a;S b=a;return 0;}]",
         "tests/cpp/test_cpp_destructors.py::test_unimplemented_destructor_boundaries_are_not_silent[struct S{~S();};int f(){S a[2];return 0;}]",
         "tests/cpp/test_cpp_destructors.py::test_unimplemented_destructor_boundaries_are_not_silent[struct S{~S();};int f(){try{S s;}catch(...){return 1;}return 0;}]",
         "tests/cpp/test_cpp_destructors.py::test_unimplemented_destructor_boundaries_are_not_silent[struct S{~S();};struct A{S s;};int f(){A a;return 0;}]",
         "tests/cpp/test_cpp_destructors.py::test_unimplemented_destructor_boundaries_are_not_silent[struct S{~S();};struct A{S s;};int f(){A a{};return 0;}]",
-        "tests/cpp/test_cpp_destructors.py::test_unimplemented_destructor_boundaries_are_not_silent[struct S{~S()noexcept;};]",
+        "tests/cpp/test_cpp_destructors.py::test_formerly_deferred_nonthrowing_d1_originals_preserve_declaration[struct S{~S()noexcept;};]",
         "tests/cpp/test_cpp_destructors.py::test_unimplemented_destructor_boundaries_are_not_silent[struct S{~S(){}};]"
       ],
       "diagnostics": [
@@ -4459,11 +4459,12 @@
         "expr.call",
         "basic.link"
       ],
-      "scope": "Destructor closure admits a bound call-free TU-local C++ leaf selected as the exact direct call, for nonvirtual or final virtual destruction. Arguments and generated subobject cleanup still traverse the ordinary effect proof. Open virtual overrides, unresolved, external and recursive calls remain outside this slice. Linux pcc0 native controls match g++; no TinyXML2 or pcc1 qualification.",
+      "scope": "Destructor closure admits a bound call-free TU-local C++ leaf selected as the exact direct call, for nonvirtual or final virtual destruction. Arguments and generated subobject cleanup still traverse the ordinary effect proof. Open virtual overrides, unresolved, external and recursive calls remain outside this slice. Linux pcc0 native controls match g++; no TinyXML2 or pcc1 qualification. The effect proof is retained for potentially-throwing direct or final D1s; non-throwing D1s are admitted by the separate exception-specification rule, not by assuming a closed effect graph.",
       "tests": [
         "tests/cpp/test_cpp_virtual_explicit_destruction_effects.py::test_explicit_destructor_executes_proved_internal_leaf_call",
-        "tests/cpp/test_cpp_virtual_explicit_destruction_effects.py::test_explicit_destructor_keeps_unproved_internal_callees_and_overrides_gated",
-        "tests/cpp/test_cpp_virtual_explicit_destruction_effects.py::test_virtual_explicit_closed_destructor_executes_final_overrider"
+        "tests/cpp/test_cpp_virtual_explicit_destruction_effects.py::test_potentially_throwing_explicit_destructor_keeps_unproved_callees_gated",
+        "tests/cpp/test_cpp_virtual_explicit_destruction_effects.py::test_virtual_explicit_closed_destructor_executes_final_overrider",
+        "tests/cpp/test_cpp_virtual_explicit_destruction_effects.py::test_nonthrowing_explicit_destructor_allows_external_callees_and_open_overrides"
       ],
       "diagnostics": [],
       "evidence": [],
@@ -4494,10 +4495,11 @@
         "expr.call",
         "basic.link"
       ],
-      "scope": "An explicit destruction with a nonvirtual or final destructor can carry a same-class, direct, nonvirtual member edge to a TU-final validation. Only a selected canonical member with a call-free bound definition is accepted. Missing/effectful definitions, recursive helpers and open virtual dispatch remain gated. Not an automatic-cleanup certificate, TinyXML2 pass, or pcc1 claim.",
+      "scope": "An explicit destruction with a nonvirtual or final destructor can carry a same-class, direct, nonvirtual member edge to a TU-final validation. Only a selected canonical member with a call-free bound definition is accepted. Missing/effectful definitions, recursive helpers and open virtual dispatch remain gated. Not an automatic-cleanup certificate, TinyXML2 pass, or pcc1 claim. The effect proof is retained for potentially-throwing direct or final D1s; non-throwing D1s are admitted by the separate exception-specification rule, not by assuming a closed effect graph.",
       "tests": [
         "tests/cpp/test_cpp_virtual_explicit_destruction_effects.py::test_late_nonvirtual_member_leaf_effect_has_a_real_definition",
-        "tests/cpp/test_cpp_virtual_explicit_destruction_effects.py::test_pending_member_effects_never_leave_the_tu_unproved"
+        "tests/cpp/test_cpp_virtual_explicit_destruction_effects.py::test_potentially_throwing_pending_member_effects_never_leave_tu_unproved",
+        "tests/cpp/test_cpp_virtual_explicit_destruction_effects.py::test_nonthrowing_d1_member_effects_can_resolve_across_translation_units"
       ],
       "diagnostics": [],
       "evidence": [],
@@ -4532,10 +4534,11 @@
         "expr.call",
         "basic.link"
       ],
-      "scope": "A same-class direct nonvirtual recursive component is accepted for explicit destruction only when every reachable exact selected member has a bound TU body with no unknown call. Self and mutual cycles retain their runtime semantics, not a termination proof. Missing, escaping and open virtual effects stay outside this slice.",
+      "scope": "A same-class direct nonvirtual recursive component is accepted for explicit destruction only when every reachable exact selected member has a bound TU body with no unknown call. Self and mutual cycles retain their runtime semantics, not a termination proof. Missing, escaping and open virtual effects stay outside this slice. The effect proof is retained for potentially-throwing direct or final D1s; non-throwing D1s are admitted by the separate exception-specification rule, not by assuming a closed effect graph.",
       "tests": [
         "tests/cpp/test_cpp_virtual_explicit_destruction_effects.py::test_recursive_direct_member_component_matches_cpp17",
-        "tests/cpp/test_cpp_virtual_explicit_destruction_effects.py::test_recursive_member_component_keeps_outgoing_unknown_edges_gated"
+        "tests/cpp/test_cpp_virtual_explicit_destruction_effects.py::test_potentially_throwing_recursive_member_component_keeps_unknown_edges_gated",
+        "tests/cpp/test_cpp_virtual_explicit_destruction_effects.py::test_nonthrowing_recursive_member_component_can_resolve_outgoing_edges"
       ],
       "diagnostics": [],
       "evidence": [],
@@ -4557,6 +4560,75 @@
           }
         ]
       }
+    },
+    {
+      "id": "cpp.destructors.exception-specifications",
+      "title": "C++17 destructor exception specifications and non-throwing virtual D1 calls",
+      "chapter_ids": [
+        "except.spec",
+        "class.dtor",
+        "class.virtual"
+      ],
+      "scope": "Explicit noexcept, supported integral constant-expression noexcept(expr), and throw(), with implicit member/base inference at class completion and concrete template specialization; matching declarations and non-throwing override constraint. Explicit non-throwing D1 uses the declared contract rather than a closed-body proof; virtual dispatch retains the ordinary D1 slot. Potentially-throwing direct destruction retains the proof gate; open potentially-throwing virtual D1s remain gated. Access/deletion and normal member cleanup still apply. Linux host pcc0/self evidence with G++ 14.2; no native pcc1, arbitrary constant-expression/dependent exception specifications, constructor/deallocation noexcept, exception unwinding, runtime terminate execution or upstream TinyXML2 qualification.",
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:17e756479fc651a219f2a7a133616155310a28ff35e23948182eaf5771513846",
+        "sources": [
+          {
+            "path": "pcc/frontends/cpp/allocation.py",
+            "sha256": "fbf6479514868ca1ef99bf49283dd1c0bff847412dec09fe9752271aecc7b69f"
+          },
+          {
+            "path": "pcc/frontends/cpp/class_template_members.py",
+            "sha256": "3b57cad3dd3a26bb34d33c3f5db39f4c2c3a3660f6688122e58e5894c255eb7f"
+          },
+          {
+            "path": "pcc/frontends/cpp/classes.py",
+            "sha256": "7f1579ea34b90d9b9b339468c02f897dcc365298ad3a6018ea39a4abc8c4ebc0"
+          },
+          {
+            "path": "pcc/frontends/cpp/default_destructors.py",
+            "sha256": "1de386e0c17e0626c27eaad20e06ef99b3da863711c48c2ab646fa365caea1a3"
+          },
+          {
+            "path": "pcc/frontends/cpp/destructors.py",
+            "sha256": "7250a4774df9fb98034da1ad1dae46892dd447c7e73d4b1936f52d332e3aa801"
+          },
+          {
+            "path": "pcc/frontends/cpp/heap_allocation.py",
+            "sha256": "948c325b1479aff3f35cbc0d8bd5da1712ab152a8edc00f52d82fd1167f1ba65"
+          },
+          {
+            "path": "pcc/frontends/cpp/lifetimes.py",
+            "sha256": "aea4aa98f33489211365025f8862717f92e4b27cca089c950a080a712b756d3f"
+          },
+          {
+            "path": "pcc/frontends/cpp/parser.py",
+            "sha256": "b610742beda535ecb8000da77655968c627d5e16268c1f51f1d0fc37796ffe30"
+          },
+          {
+            "path": "pcc/frontends/cpp/virtual_functions.py",
+            "sha256": "4a60c491966f9b70a0f62caa9e9b2d30e5e7f9161e84545e29881d2f2789b255"
+          }
+        ]
+      },
+      "tests": [
+        "tests/cpp/test_cpp_destructor_exception_specifications.py::test_implicit_specification_uses_completed_subobjects_not_body_order",
+        "tests/cpp/test_cpp_destructor_exception_specifications.py::test_nonthrowing_virtual_d1_crosses_translation_units_with_real_overrides",
+        "tests/cpp/test_cpp_destructor_exception_specifications.py::test_destructor_declaration_retains_its_exception_specification",
+        "tests/cpp/test_cpp_destructor_exception_specifications.py::test_out_of_class_definition_cannot_change_exception_specification",
+        "tests/cpp/test_cpp_destructor_exception_specifications.py::test_virtual_overrider_cannot_have_looser_exception_specification",
+        "tests/cpp/test_cpp_destructor_exception_specifications.py::test_potentially_throwing_explicit_destructor_keeps_cleanup_boundary",
+        "tests/cpp/test_cpp_destructor_exception_specifications.py::test_potentially_throwing_d1_does_not_admit_unknown_automatic_or_heap_cleanup",
+        "tests/cpp/test_cpp_destructor_exception_specifications.py::test_template_explicit_destructor_requests_the_real_instantiated_body",
+        "tests/cpp/test_cpp_destructor_exception_specifications.py::test_explicit_potentially_throwing_d1_still_accepts_a_proven_direct_body"
+      ],
+      "diagnostics": [],
+      "evidence": [
+        "cpp.destructors.exception-specifications.linux.unit",
+        "cpp.destructors.exception-specifications.linux.program",
+        "cpp.destructors.exception-specifications.linux.differential"
+      ]
     }
   ],
   "diagnostics": {
@@ -10246,6 +10318,131 @@
       "comparison": {
         "kind": "raw_process_streams"
       }
+    },
+    {
+      "source_revision": "sha256:17e756479fc651a219f2a7a133616155310a28ff35e23948182eaf5771513846",
+      "source": {
+        "path": "tests/cpp/test_cpp_destructor_exception_specifications.py",
+        "sha256": "6b69b803c5282f35c556c911bbe2a1fe290fc975997ed5b915de87d033f8d0e9"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "outcome": "passed",
+      "id": "cpp.destructors.exception-specifications.linux.unit",
+      "test_id": "tests/cpp/test_cpp_destructor_exception_specifications.py::test_implicit_specification_uses_completed_subobjects_not_body_order",
+      "kind": "unit",
+      "purpose": "unit",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-n0",
+        "--override-ini=addopts=",
+        "tests/cpp/test_cpp_destructor_exception_specifications.py::test_implicit_specification_uses_completed_subobjects_not_body_order",
+        "-m",
+        "not integration"
+      ],
+      "actual": {
+        "exit_code": 0,
+        "stdout_sha256": "5652fe55d3d4f1ede515c0d7a78a86759debb51c262160f45e99db226f910333",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "verification_note": "This unit passed in a completed 69-node aggregate run; stream hashes refer to that run, and command is a one-test reproduction."
+    },
+    {
+      "source_revision": "sha256:17e756479fc651a219f2a7a133616155310a28ff35e23948182eaf5771513846",
+      "source": {
+        "path": "tests/cpp/test_cpp_destructor_exception_specifications.py",
+        "sha256": "6b69b803c5282f35c556c911bbe2a1fe290fc975997ed5b915de87d033f8d0e9"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "outcome": "passed",
+      "test_id": "tests/cpp/test_cpp_destructor_exception_specifications.py::test_nonthrowing_virtual_d1_crosses_translation_units_with_real_overrides",
+      "purpose": "runtime",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-n0",
+        "--override-ini=addopts=",
+        "tests/cpp/test_cpp_destructor_exception_specifications.py::test_nonthrowing_virtual_d1_crosses_translation_units_with_real_overrides",
+        "-m",
+        "integration"
+      ],
+      "input_sha256": "10ef8967bd05d97ce42eccf3f40e39f3c35859b17a8392983057b9f99505adfc",
+      "actual": {
+        "exit_code": 42,
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "id": "cpp.destructors.exception-specifications.linux.program",
+      "kind": "program"
+    },
+    {
+      "source_revision": "sha256:17e756479fc651a219f2a7a133616155310a28ff35e23948182eaf5771513846",
+      "source": {
+        "path": "tests/cpp/test_cpp_destructor_exception_specifications.py",
+        "sha256": "6b69b803c5282f35c556c911bbe2a1fe290fc975997ed5b915de87d033f8d0e9"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "outcome": "passed",
+      "test_id": "tests/cpp/test_cpp_destructor_exception_specifications.py::test_nonthrowing_virtual_d1_crosses_translation_units_with_real_overrides",
+      "purpose": "runtime",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-n0",
+        "--override-ini=addopts=",
+        "tests/cpp/test_cpp_destructor_exception_specifications.py::test_nonthrowing_virtual_d1_crosses_translation_units_with_real_overrides",
+        "-m",
+        "integration"
+      ],
+      "input_sha256": "10ef8967bd05d97ce42eccf3f40e39f3c35859b17a8392983057b9f99505adfc",
+      "actual": {
+        "exit_code": 42,
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "id": "cpp.destructors.exception-specifications.linux.differential",
+      "kind": "differential",
+      "reference": {
+        "name": "G++",
+        "version": "14.2.0",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "10ef8967bd05d97ce42eccf3f40e39f3c35859b17a8392983057b9f99505adfc"
+      },
+      "expected": {
+        "exit_code": 42,
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      },
+      "verification_note": "input_sha256 is the SHA256 of the canonical sorted JSON TU-name to original source SHA256 map (no whitespace). Identical original program TU bytes; G++ force-includes genuine <new> for the reserved placement definition."
     }
   ]
 }

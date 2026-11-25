@@ -229,7 +229,10 @@ BOUNDARIES = (
     ('used-dependent-invalid', 'template<class T>struct Box{T n;~Box(){n=n%2;}};'
      'int f(){Box<double>b{0.0};return 0;}', 'cpp.invalid-operands'),
     # used-dependent-delete moved verbatim to test_cpp_heap_allocation's MOVED_ORIGINALS.
-    ('explicit-d1-without-proof', 'template<class T>struct Box{~Box(){}};'
+    # The nonthrowing explicit D1 original now has an emitted instantiated
+    # body assertion in test_cpp_destructor_exception_specifications.
+    ('explicit-potentially-throwing-d1-without-proof',
+     'template<class T>struct Box{~Box()noexcept(false){}};'
      'void f(Box<int>*p){p->~Box();}', 'cpp.unsupported.dependent-destruction'),
     # nested-template-d1-without-proof moved verbatim to test_cpp_member_destruction's
     # NONTHROWING_DESTRUCTOR_BODIES ([except.spec]/8).
@@ -242,7 +245,6 @@ BOUNDARIES = (
     ('dependent-reference-local', 'using R=int&;template<class T>struct Box{~Box(){T local;}};'
      'int f(){Box<R>b;return 0;}', 'cpp.unsupported.member-templates'),
     ('defaulted-d1', 'template<class T>struct Box{~Box()=default;};', 'cpp.unsupported.member-templates'),
-    ('exception-contract', 'template<class T>struct Box{~Box()noexcept{}};', 'cpp.unsupported.exceptions'),
 )
 
 
@@ -258,6 +260,14 @@ def test_template_d1_invalid_or_unowned_stops_before_ir(name, source, code, monk
     with pytest.raises(CppDiagnostic) as error:
         compile_host_cpp(((name+'.cpp', source),))
     assert error.value.code == code
+
+
+def test_original_primary_destructor_exception_specification_is_retained():
+    parser = CppParser()
+    parser.parse('template<class T>struct Box{~Box()noexcept{}};')
+    owner = parser.scope.names['Box'].dtype
+    record, = owner.methods
+    assert record.symbol.nonthrowing and record.symbol.destructor_exception_specification is True
 
 
 def test_private_d1_access_fails_before_requesting_its_definition():

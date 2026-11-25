@@ -49,18 +49,79 @@ def parse_parameters(parser, definition, name, *, check_lowering=True):
         parser._expect("(")
         params = parser._parameter_clause(check_lowering=check_lowering)
         parser._expect(")")
+        if params:
+            raise CppDiagnostic("cpp.destructor-parameters", "destructors take no arguments", name.coord)
+        if parser._peek().value in ("const", "volatile"):
+            raise CppDiagnostic("cpp.destructor-cv", "destructors cannot have cv-qualifiers", parser._peek().coord)
+        exception_specification = parse_exception_specification(parser)
     finally:
         parser.scope = parent
-    if params:
-        raise CppDiagnostic("cpp.destructor-parameters", "destructors take no arguments", name.coord)
-    if parser._peek().value in ("const", "volatile"):
-        raise CppDiagnostic("cpp.destructor-cv", "destructors cannot have cv-qualifiers", parser._peek().coord)
-    if parser._peek().value in ("noexcept", "throw"):
-        raise CppDiagnostic("cpp.unsupported.exceptions", "destructor exception specifications and unwinding are not implemented", parser._peek().coord)
-    return parameter_scope
+    return parameter_scope, exception_specification
 
 
-def declare_destructor(definition, name, *, encode_name=True):
+def parse_exception_specification(parser):
+    """[except.spec]/1-2: None retains the implicit special-member rule."""
+    if parser._peek().value == "noexcept":
+        return parser._declaration_noexcept()
+    if parser._peek().value == "throw":
+        token = parser.cursor.take()
+        parser._expect("(")
+        if not parser._accept(")"):
+            raise CppDiagnostic("cpp.invalid-exception-specification",
+                                "C++17 permits only the empty throw() specification", token.coord)
+        return True
+    return None
+
+
+def subobject_destructor_nonthrowing(dtype):
+    from pcc.frontends.cpp.types import array_type
+
+    dtype = unqualified(dtype)
+    while array_type(dtype):
+        dtype = unqualified(dtype.element)
+    if not is_class_type(dtype):
+        return True
+    return dtype.definition.destructor_nonthrowing
+
+
+def implicit_exception_specification(definition):
+    """[except.spec]/8: the destructor's potentially constructed subobjects.
+
+    The supported class layout has ordinary members and at most one direct
+    non-virtual base. Destruction of an array uses its element type; pointer
+    and reference members do not destroy the referred-to object. The child
+    classes have already completed, including their own explicit or implicit
+    destructor specification.
+    """
+    base = definition.base
+    return ((base is None or subobject_destructor_nonthrowing(base.dtype))
+            and all(subobject_destructor_nonthrowing(member.dtype) for member in definition.members))
+
+
+def check_override_exception_specification(overridden, nonthrowing, coord):
+    if overridden is not None and overridden.nonthrowing and not nonthrowing:
+        raise CppDiagnostic("cpp.looser-exception-specification",
+                            "overriding destructor has a looser exception specification", coord)
+
+
+def bind_exception_specification(definition):
+    """Bind once, after all members, not at the destructor's source position."""
+    implicit = implicit_exception_specification(definition)
+    symbol = definition.destructor
+    explicit = None if symbol is None else symbol.destructor_exception_specification
+    nonthrowing = implicit if explicit is None else explicit
+    definition.destructor_nonthrowing = nonthrowing
+    if symbol is not None:
+        symbol.nonthrowing = nonthrowing
+    # Even an implicitly-declared destructor overrides a virtual base D1.
+    # Missing support for implicitly synthesized virtual D1 bodies remains a
+    # separate lowering boundary in complete_class.
+    from pcc.frontends.cpp.virtual_functions import overridden_destructor
+    check_override_exception_specification(overridden_destructor(definition), nonthrowing,
+                                           definition.dtype.coord if symbol is None else symbol.coord)
+
+
+def declare_destructor(definition, name, *, encode_name=True, exception_specification=None):
     """Retain one declaration identity; primary Patterns have no concrete ABI yet."""
     if definition.destructor is not None:
         raise CppDiagnostic("cpp.redeclaration", "destructor cannot be redeclared in its class", name.coord)
@@ -71,6 +132,8 @@ def declare_destructor(definition, name, *, encode_name=True):
     symbol.destructor = True
     symbol.destructor_user_provided = True
     symbol.destructor_trivial = False
+    symbol.destructor_exception_specification = exception_specification
+    symbol.nonthrowing = exception_specification is True
     symbol.method_static = symbol.method_const = False
     symbol.internal_linkage = owner.internal_linkage
     if encode_name:
@@ -125,7 +188,7 @@ def parse_destructor(parser, definition=None, *, virtual_token=None):
         parser._expect("~")
         name = parser._identifier()
         owner = definition.dtype
-    parameter_scope = parse_parameters(parser, definition, name)
+    parameter_scope, exception_specification = parse_parameters(parser, definition, name)
     specifiers = () if outside else parse_virt_specifiers(parser)
     defaulted = parser._peek().value == "="
     if defaulted:
@@ -149,10 +212,17 @@ def parse_destructor(parser, definition=None, *, virtual_token=None):
             raise CppDiagnostic("cpp.no-matching-member", "destructor definition has no matching declaration", name.coord)
         if previous.defined:
             raise CppDiagnostic("cpp.redefinition", "destructor is already defined", name.coord)
+        # A definition that omits the specifier uses the same implicit
+        # rule as a declaration; it does not erase a previous explicit one.
+        nonthrowing = (implicit_exception_specification(definition)
+                       if exception_specification is None else exception_specification)
+        if nonthrowing != previous.nonthrowing:
+            raise CppDiagnostic("cpp.conflicting-exception-specification",
+                                "destructor definition has a different exception specification", name.coord)
         symbol = previous
         symbol.defined = True
     else:
-        symbol = declare_destructor(definition, name)
+        symbol = declare_destructor(definition, name, exception_specification=exception_specification)
     parser.function_projection_names.add(symbol.c_name)
     function_declaration, this = declaration(parser, symbol)
     if not outside:
@@ -231,6 +301,12 @@ def check_usable(scope, symbol, coord):
     scope.check_member_access(symbol, coord)
     from pcc.frontends.cpp.default_destructors import require_usable
     require_usable(symbol, coord)
+
+
+def require_direct_cleanup_effects(symbol, coord):
+    if not symbol.nonthrowing and not getattr(symbol, "closed_destruction_body", False):
+        raise CppDiagnostic("cpp.unsupported.placement-constructor-effects",
+                            "potentially-throwing destruction needs exception/cleanup integration", coord)
 
 
 def request_body(parser, symbol, coord):
@@ -347,12 +423,9 @@ def complete_body(parser, definition, symbol, scope, this, coord, bind_body):
         parser.lifetimes.leave()
         parser.lifetimes.cleanup_destructors = previous_calls
         parser.lifetimes.direct_destructor_helpers = previous_helpers
-    # Every destructor admitted here has the implicit non-throwing exception
-    # specification ([except.spec]/8: explicit specifications are rejected
-    # above and no member or base destructor may throw), so an exception
-    # leaving the body calls std::terminate ([except.terminate]) and needs no
-    # member cleanup path. The unproven body stays recorded as not closed for
-    # owners that use the proof.
+    # The declaration's nonthrowing contract and the bound body proof
+    # are different facts. Keep the proof for potentially-throwing calls
+    # and other owners that still require exact effect closure.
     symbol.closed_destruction_body = closed
     from pcc.frontends.cpp.constructors import call_free_body
     symbol.closed_normal_body = call_free_body(body)

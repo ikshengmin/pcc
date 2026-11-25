@@ -99,7 +99,6 @@ DEFERRED = (
     # Original inline virtual destructor moved verbatim to
     # test_cpp_implicit_polymorphic_constructors (implicit constructor).
     "struct S{~S()=delete;};",
-    "struct S{~S()noexcept{}};",
     "struct S{~S(){throw 1;}};",
     "struct T{~T(){}};struct S{T value;};int f(){S s;return 0;}",
     "struct S{~S(){}};int f(){S array[2];return 0;}",
@@ -138,6 +137,15 @@ def test_d1_prototype_precedes_all_odr_bodies_without_static_internalization():
     assert all(node.decl.definition_linkage == "external_odr" and not node.decl.storage for node in bodies)
     assert prototypes[0].name == bodies[0].decl.name == "_ZN1SD1Ev"
     assert not definition.destructor.closed_normal_body  # A call is not a noexcept proof.
+
+
+def test_original_inline_destructor_with_exception_specification():
+    parser = CppParser()
+    tree = parser.parse("struct S{~S()noexcept{}};")
+    symbol = parser.scope.names['S'].dtype.definition.destructor
+    assert symbol.nonthrowing and symbol.defined
+    assert any(isinstance(node, c_ast.FuncDef) and node.decl.name == symbol.c_name
+               for node in tree.ext)
 
 
 def test_upstream_depth_destructor_bytes_are_preserved():
