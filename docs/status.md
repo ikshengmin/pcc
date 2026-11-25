@@ -841,6 +841,38 @@ in the relevant section or issue and removes the entry.
    `test_py_multi_file_bootstrap_shim.py` (over the 2.5 GiB tree cap),
    integration (including the native metadata fixture), pcc1 and Linux.
    Remaining 4b: 10 modules, from `py_exc_traceback` to `py_class` (93).
+   (d) U2, U3 and U4's `py_func` (Claude, local Mac, `589ea2efb`, `739c6d2e4`, `36b28ff03`, tests
+   `3f8e9f9d0`, `42fb95b5b`): py_exc_traceback, py_format_runtime, py_threading,
+   py_protocol_runtime, py_exc_objects, py_gen, py_os_path and py_func drop
+   their pins and take through `pcc_gc_take_slot`. Gone with them: the pin
+   helpers (`_unicode_format_pin`, `_condition_pin`/`_unpin`, the protocol
+   `_pin_result` helpers, `_unicode_pin_slot`, `_builtin_value_pin_slot`/
+   `_unpin_slot`), the prior-pin arrays of the generator sync driver,
+   os.path, thread invoke, divmod and the py_func call protocol (whose
+   array keeps only its lease tokens, now `tokens`), the result-alias
+   prior searches, the generator close reload under the graph lock, and
+   the uncalled `_func_call_copy_captures`. The Thread word at 96 (the
+   former handoff pin) stays unused. Each module compiles alone. Models:
+   the traceback, percent-format, protocol unary/binary, tuple consumer
+   and generator frame-factory models reach their collection points
+   without moving anything; models take through `pcc_gc_take_slot`; the
+   metadata-flag inventory keeps the three IMMORTAL sites; the dataclass
+   snapshot release takes no pin. Removed as relocation-only (the user's
+   rule "改写或删并列出"): the moving negative control
+   `test_receiver_finalizer_relocation_exposes_previous_raw_result[True]`
+   (rewritten as `test_receiver_finalizer_collection_keeps_current_result`)
+   and `test_alias_pin_restoration_keeps_reverse_release_order`;
+   `test_generator_close_result_reload_is_locked_before_pinning` is
+   rewritten as `test_generator_close_result_handoff_takes_slot_without_lock_or_pin`.
+   Host pcc0, by node id against HEAD `89ecf978a`, the 111 files naming
+   those modules or models and the importers of the edited models have no
+   new failing node; after integrating the generator re-entrance change
+   (`5c4d10927`, py_gen merged by hand), the 24 generator test files have
+   none against `94f786b16`. Not run: the heavy
+   files over the 2.5 GiB cap, integration, pcc1 and Linux. Waiting on
+   (c) J1: U4's `py_obj_ops_dispatch` and U5's `py_class`.
+   Remaining 4b: `py_obj_ops_dispatch` and `py_class`, both claimed by
+   (c) J1.
    Correction: `pcc_gc_backend4_auto_step_pending` is the one collector's
    live automatic-collection request (young and full collections are
    scheduled through it), not a leftover; it may only be renamed, before
@@ -848,7 +880,7 @@ in the relevant section or issue and removes the entry.
    Next for (d): the plan Claude runs without asking between units
    (the user, 2026-11-26: "你这么继续继续的有点需要我参与。能plan一下吗").
    Done: steps 1, 2 (pins outside the take protocol), 4a, 4b batches 1-2,
-   U1. U4's `py_obj_ops_dispatch`, U5 and U11's edits of
+   U1, U2, U3 and U4's `py_func`. U4's `py_obj_ops_dispatch`, U5 and U11's edits of
    `freestanding_gc_root_operations` wait while (c) J1 claims those files
    (see "Waiting on maintainer").
    Units, in order, each one claim, commit and push (runtime first, then
@@ -1018,7 +1050,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (d) plan U1-U14 (the units under "Next for (d)", in order; not py_class, py_obj_ops_dispatch or freestanding_gc_root_operations while (c) J1 claims them): Claude, macOS, 2026-11-25T18:09Z, area runtime-codegen
+   - (d) plan U1-U14 (the units under "Next for (d)", in order; not py_class, py_obj_ops_dispatch or freestanding_gc_root_operations while (c) J1 claims them): Claude, macOS, 2026-11-25T21:09Z, area runtime-codegen
 
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
