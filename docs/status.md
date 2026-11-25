@@ -524,6 +524,8 @@ in the relevant section or issue and removes the entry.
    Claims:
    - Complete pytest overlapping worker growth fixture: Codex, Linux x86_64, 2026-11-25T17:38Z, area selfhost (tests/python/test_worker_resource_plan.py only)
    - #20 indexed lifecycle negative witness authoritative fixture values: Codex, Linux x86-64, 2026-11-25T17:40Z, area backend
+   - #20 runtime oracle exact checkout CLI entry: Codex, Linux, 2026-11-25T17:42Z, area runtime-codegen (test_runtime_oracle_diff only)
+
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State
