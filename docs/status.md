@@ -1137,8 +1137,36 @@ in the relevant section or issue and removes the entry.
    COMPLETE1.289s/45268992 B unchanged90s/1GiB. No ownership transfer,
    test-body, resource limit or coverage acceptance change.
 
+   Indexed handoff exact source owner transfer (2026-11-26):
+   one manifest override only: shared/ordinary canonical
+   test_handoff_provider_closed_world_aarch64 -> macos-arm64, no
+   external tools. Prior real dedicated c20 Mac node exact receipt
+   15146648514 had17.93s call/57samples peak tree315916288 B,
+   largest process268271616 B; no claim this proves six-worker source
+   budget. Separate dedicated gate remains unchanged. Existing
+   same-run source-platform job already schedules shared ordinary
+   macos-15, exact github.sha, no Linux Stage1 input on Mac; owner
+   modules now includes the one test file. Actual Linux raw inventory
+   from prior unit passed production partition: ordinary census
+   remains local, exact blocked Darwin node stays raw and becomes
+   TRANSFER_PENDING, Linux status PLATFORM_COVERAGE_PENDING (not
+   PASS). Aggregate independently requires actual same-run Mac
+   source coverage artifact and full phases; dedicated receipt cannot
+   substitute. Candidate manifest SHA256
+   4d2c4cecf8ff19c1ffeed1e4a165fe3a151a87d9459ba99ab1a1ea403718564f.
+   Test-first10 exact transfer/aggregate models failed without rule;
+   final adds stale provider identity control; all95 existing owner,
+   coverage and focused dedicated gate models PASS. Negative exact
+   node controls reject missing owner even with green dedicated
+   artifact, stale test/provider source/SHA/run/attempt, wrong host,
+   absent call and owner deselection. Linux native input lease
+   shape modeled, not real native admission. Initial physical reserve
+   refusal retained; eventual unchanged90s/1GiB guard COMPLETE
+   1.813s/50298880 B. No coverage/workflow/resource code change.
+   Current same-run Mac source execution remains UNRUN; no CI green.
+
    Claims:
-   - Exact Darwin indexed handoff source owner transfer with same-run coverage proof: Codex, Linux CI models, 2026-11-26T20:14Z, area ci-indexed-handoff-source-owner
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and

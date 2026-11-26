@@ -666,6 +666,13 @@
       "nodeid": "tests/c/test_self_backend_aarch64_callee_saved.py::test_callee_saved_allocation_executes_correctly[1]",
       "platforms": ["macos-arm64"],
       "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/python/test_indexed_handoff_closed_world.py::test_handoff_provider_closed_world_aarch64",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": []}
     }
   ]
 }

@@ -32,10 +32,11 @@ def mutate(path, change):
     put(path, value)
 
 
-def model(tmp_path, monkeypatch, *, owner_deselected=False, owned_lane='reference', go_source=False):
+def model(tmp_path, monkeypatch, *, owner_deselected=False, owned_lane='reference', go_source=False, shared_handoff=False):
     root = tmp_path / 'checkout'
     root.mkdir()
     (root / 'pyproject.toml').write_text('[tool.pcc-ci.group_policy]\n')
+    domain = 'shared' if shared_handoff else 'go'
     module = 'tests/go/test_model.py'
     node = module + '::test_reference'
     manifest = {'schema': 1, 'default_platform': 'linux-x86_64', 'overrides': [
@@ -49,20 +50,35 @@ def model(tmp_path, monkeypatch, *, owner_deselected=False, owned_lane='referenc
         manifest, _ = owners.read_manifest(ROOT)
         manifest = dict(manifest, overrides=[rule for rule in manifest['overrides'] if rule['domain'] == 'go'])
         source_rows = go_darwin_rows()
-    files = sorted({row['file'] for row in source_rows}) if go_source else [module]
+    if shared_handoff:
+        from tests.test_ci_validation_owners import ROOT, HANDOFF_NODE, handoff_darwin_rows
+        manifest, _ = owners.read_manifest(ROOT)
+        rules = [rule for rule in manifest['overrides'] if rule['nodeid'] == HANDOFF_NODE]
+        assert rules == [dict(domain='shared', lane='ordinary', nodeid=HANDOFF_NODE,
+                              platforms=['macos-arm64'], tools={'macos-arm64': []})]
+        manifest = dict(manifest, overrides=rules)
+        source_rows = handoff_darwin_rows()
+    real_source = go_source or shared_handoff
+    files = sorted({row['file'] for row in source_rows}) if real_source else [module]
     put(root / owners.MANIFEST, manifest)
     _, sha = owners.read_manifest(root)
     current = dict(repository='example/pcc', sha='a' * 40, run_id='17', run_attempt='2')
     environ = {'GITHUB_' + key.upper(): value for key, value in current.items()}
     source = dict(sha=current['sha'], files={'test.py': 'b' * 64}, sparse_omissions=[],
                   ownership_manifest=manifest, ownership_manifest_sha256=sha)
+    if shared_handoff:
+        provider = 'pcc/frontends/python/pipeline_indexed_handoff.py'
+        source['files'] = {path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+                           for path in (*files, provider)}
     monkeypatch.setattr(runner, 'identity', lambda: copy.deepcopy(source))
     monkeypatch.setattr(runner, 'modules', lambda domain, root=root: files)
-    matrix = [dict(domain='go', lane=lane) for lane in runner.LANES]
-    extra = owners.additional_campaigns(['go'], manifest)
-    plan = dict(schema=1, context=current, after=current['sha'], domains=['go'], source=True,
-                ownership_manifest_sha256=sha, matrix={'include': matrix}, source_independent=True,
-                matrix_independent={'include': matrix}, source_native=False, matrix_native={'include': []},
+    matrix = [dict(domain=domain, lane=lane) for lane in runner.LANES]
+    extra = owners.additional_campaigns([domain], manifest)
+    independent = [entry for entry in matrix if not coverage.requires_native_inputs(**entry)]
+    native = [entry for entry in matrix if coverage.requires_native_inputs(**entry)]
+    plan = dict(schema=1, context=current, after=current['sha'], domains=[domain], source=True,
+                ownership_manifest_sha256=sha, matrix={'include': matrix}, source_independent=bool(independent),
+                matrix_independent={'include': independent}, source_native=bool(native), matrix_native={'include': native},
                 source_platform=True, matrix_platform={'include': extra})
     plan_path = tmp_path / 'validation-plan.json'
     put(plan_path, plan)
@@ -73,29 +89,30 @@ def model(tmp_path, monkeypatch, *, owner_deselected=False, owned_lane='referenc
                 reference_activity='model', selected_by_repository=True) for lane in runner.LANES]
     raw.append(dict(raw[-1], lane=owned_lane, function='test_darwin', nodeid=module + '::test_darwin',
                     canonical_nodeid=module + '::test_darwin'))
-    base_rows = source_rows if go_source else raw
-    native_ids = ({rule['nodeid'] for rule in manifest['overrides']} if go_source else
+    base_rows = source_rows if real_source else raw
+    native_ids = ({rule['nodeid'] for rule in manifest['overrides']} if real_source else
                   {module + '::test_darwin'})
     directories = {}
     for item in [dict(row, platform='linux-x86_64') for row in matrix] + extra:
         lane, platform = item['lane'], item['platform']
         local_files = (files if platform == 'linux-x86_64' else
-                       owners.owner_modules(manifest, 'go', lane, platform))
+                       owners.owner_modules(manifest, domain, lane, platform))
         raw = copy.deepcopy([row for row in base_rows if row['file'] in local_files])
         for row in raw:
             if row['canonical_nodeid'] not in native_ids:
                 continue
-            row['gates'] = [{'unavailable': ('Darwin required' if go_source else 'Darwin SDK only')
-                              if platform == 'linux-x86_64' else None}]
+            if not shared_handoff:
+                row['gates'] = [{'unavailable': ('Darwin required' if go_source else 'Darwin SDK only')
+                                  if platform == 'linux-x86_64' else None}]
             row['selected_by_repository'] = platform == 'macos-arm64'
             if owner_deselected and platform == 'macos-arm64':
                 row['selected_by_repository'] = False
                 row['gates'] = [{'unavailable': 'required owner prerequisite absent'}]
-        directory = artifacts / f"coverage-go-{lane}-{platform}-{current['sha']}-{current['run_attempt']}"
+        directory = artifacts / f"coverage-{domain}-{lane}-{platform}-{current['sha']}-{current['run_attempt']}"
         directory.mkdir()
         directories[(lane, platform)] = directory
-        partition = owners.partition(raw, manifest, 'go', lane, platform, complete=platform == 'linux-x86_64')
-        receipt = dict(domain='go', lane=lane, workers=6, dist='loadgroup', timeout_s=90, rss_bytes=runner.RSS,
+        partition = owners.partition(raw, manifest, domain, lane, platform, complete=platform == 'linux-x86_64')
+        receipt = dict(domain=domain, lane=lane, workers=6, dist='loadgroup', timeout_s=90, rss_bytes=runner.RSS,
                        group_policy={}, unattempted=[], unrun=[], collection_pending_modules=[],
                        raw_union_count=len(raw), lane_count=len(partition['local_nodeids']), batches=[])
         receipt['coverage'] = dict(schema=1, context=current, host=coverage.HOSTS[platform],
@@ -113,7 +130,20 @@ def model(tmp_path, monkeypatch, *, owner_deselected=False, owned_lane='referenc
                 ('required-tools-before', {'platform': platform, 'bindings': []}),
                 ('required-tools-after', {'platform': platform, 'bindings': []})]:
             put(directory / (filename + '.json'), value)
-        if platform == 'macos-arm64' and not go_source:
+        if shared_handoff and platform == 'linux-x86_64':
+            # Authored same-run native-input lease shape only; never a real
+            # Stage1 artifact claim. The aggregate's actual verifier runs.
+            state = dict(
+                lease=dict(current, run_id=int(current['run_id']), run_attempt=int(current['run_attempt']),
+                           workflow='.github/workflows/pcc1-package-parity.yml'),
+                owner='same_workflow_stage1_producer',
+                source=dict(commit=current['sha'], clean_commit=True, source_sha256='f' * 64),
+                manifest_sha256='e' * 64, bundle='/model/bundle', compiler='/model/pcc1', runtime='/model/runtime',
+            )
+            receipt['native_inputs'] = state
+            for phase in ('before', 'after'):
+                put(directory / ('native-inputs-' + phase + '.json'), state)
+        if platform == 'macos-arm64' and not real_source:
             invocation = '/model/bin/clang'
             tool = dict(status='AVAILABLE', invocation=invocation, resolved=invocation, sha256='d' * 64,
                         version_observation=dict(status='COMPLETE', exit_code=0, command=[invocation, '--version'],
@@ -361,3 +391,51 @@ def test_incomplete_or_forged_models_never_green(tmp_path, monkeypatch, fault):
 def test_missing_plan_and_artifacts_returns_diagnostic(tmp_path):
     result = coverage.reconcile(tmp_path / 'missing.json', tmp_path / 'absent', environ={})
     assert result['status'] == 'FAIL' and result['errors']
+
+
+@pytest.mark.parametrize("fault", [
+    "none", "missing-owner-with-dedicated-green", "stale-source", "stale-provider", "stale-sha",
+    "stale-run", "stale-attempt", "wrong-host", "missing-call", "owner-deselected",
+])
+def test_exact_handoff_source_transfer_requires_same_run_mac_execution(tmp_path, monkeypatch, fault):
+    from tests.test_ci_validation_owners import HANDOFF_NODE, HANDOFF_MODULE
+
+    data = model(tmp_path, monkeypatch, shared_handoff=True,
+                 owner_deselected=fault == "owner-deselected")
+    linux = data["directories"][("ordinary", "linux-x86_64")]
+    mac = data["directories"][("ordinary", "macos-arm64")]
+    receipt = json.loads((linux / "receipt.json").read_text())
+    assert receipt["status"] == "PLATFORM_COVERAGE_PENDING"
+    assert receipt["transfers"] == [dict(domain="shared", lane="ordinary",
+        nodeid=HANDOFF_NODE, platform="macos-arm64", tools=[], status="TRANSFER_PENDING")]
+    linux_raw = json.loads((linux / "raw-inventory.json").read_text())["rows"]
+    assert not next(row for row in linux_raw if row["nodeid"] == HANDOFF_NODE)["selected_by_repository"]
+    if fault == "missing-owner-with-dedicated-green":
+        # A different dedicated gate's receipt is not a source campaign
+        # producer, even if it describes the exact node and says PASS.
+        mac.rename(data["artifacts"] / "macos-pcc0-indexed-split-receipts")
+        put(data["artifacts"] / "macos-pcc0-indexed-split-receipts/qualification.json",
+            dict(status="PASS", source_commit="a" * 40,
+                 gates={"indexed-handoff-closure": dict(status="PASS", executed_nodes=[HANDOFF_NODE])}))
+    elif fault in ("stale-source", "stale-provider"):
+        changed = HANDOFF_MODULE if fault == "stale-source" else "pcc/frontends/python/pipeline_indexed_handoff.py"
+        mutate(mac / "source-after.json", lambda row: row["files"].update({changed: "0" * 64}))
+    elif fault in ("stale-sha", "stale-run", "stale-attempt"):
+        key, value = {"stale-sha": ("sha", "9" * 40), "stale-run": ("run_id", "99"),
+                      "stale-attempt": ("run_attempt", "99")}[fault]
+        mutate(mac / "receipt.json", lambda row: row["coverage"]["context"].update({key: value}))
+    elif fault == "wrong-host":
+        mutate(mac / "receipt.json", lambda row: row["coverage"].update(host=coverage.HOSTS["linux-x86_64"]))
+    elif fault == "missing-call":
+        live = mac / "batch-000/live.jsonl"
+        rows = [json.loads(line) for line in live.read_text().splitlines()]
+        events(live, [row for row in rows if not (row.get("nodeid") == HANDOFF_NODE and row.get("when") == "call")])
+    result = join(data)
+    if fault == "none":
+        assert result["status"] == "PASS", result
+        owned = [row for row in result["obligations"] if row["nodeid"] == HANDOFF_NODE]
+        assert len(owned) == 1 and owned[0]["platform"] == "macos-arm64"
+        assert owned[0]["evidence"]["full_phase"] and owned[0]["artifact"].startswith("coverage-shared-ordinary-macos-arm64-")
+    else:
+        assert result["status"] == "FAIL", (fault, result)
+        assert any(row.get("platform") == "macos-arm64" for row in result["unresolved"])

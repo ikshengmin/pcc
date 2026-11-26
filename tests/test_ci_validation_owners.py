@@ -619,3 +619,63 @@ def test_native_host_backend_builds_share_one_worker_without_changing_darwin_own
                 {kw.arg: ast.literal_eval(kw.value) for kw in marks["pytest.mark.xdist_group"].keywords}
                 != {"name": "self-backend-host-native"})
     assert grouped == 29
+
+
+HANDOFF_MODULE = "tests/python/test_indexed_handoff_closed_world.py"
+HANDOFF_NODE = HANDOFF_MODULE + "::test_handoff_provider_closed_world_aarch64"
+
+
+def handoff_darwin_rows():
+    """Real source node declarations; model Linux collection, not execution."""
+    registry = json.loads(run.REFERENCES.read_text())["functions"]
+    tree = ast.parse((ROOT / HANDOFF_MODULE).read_text())
+    functions = [node for node in tree.body
+                 if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")]
+    assert {function.name for function in functions} == {
+        "test_handoff_owned_import_census_source_policy", "test_handoff_provider_closed_world_aarch64",
+    }
+    rows = []
+    for function in functions:
+        node = HANDOFF_MODULE + "::" + function.name
+        marks = [mark for mark in function.decorator_list
+                 if isinstance(mark, ast.Call) and ast.unparse(mark.func) == "pytest.mark.pcc_gate"]
+        if node == HANDOFF_NODE:
+            assert len(marks) == 1
+            declaration = {kw.arg: list(ast.literal_eval(kw.value)) for kw in marks[0].keywords}
+            assert declaration == {"platforms": ["darwin"], "machines": ["arm64"]}
+            gates = [declaration]
+        else:
+            assert not marks
+            gates = []
+        rows.append(dict(file=HANDOFF_MODULE, function=function.name, nodeid=node,
+                         canonical_nodeid=node, lane=classify(HANDOFF_MODULE, function.name, False, registry),
+                         groups=[], gates=gates, selected_by_repository=node != HANDOFF_NODE,
+                         reference_activity=registry.get(HANDOFF_MODULE, {}).get(function.name)
+                         or "reference-classification-unknown; retained in original marker lane"))
+    assert all(entry["lane"] == "ordinary" for entry in rows)
+    return sorted(rows, key=lambda entry: entry["canonical_nodeid"])
+
+
+def test_exact_handoff_source_owner_transfers_only_the_darwin_closure():
+    actual, _ = owners.read_manifest(ROOT)
+    rules = [rule for rule in actual["overrides"]
+             if rule["nodeid"].split("::", 1)[0] == HANDOFF_MODULE]
+    assert rules == [{"domain": "shared", "lane": "ordinary", "nodeid": HANDOFF_NODE,
+                      "platforms": [MAC], "tools": {MAC: []}}]
+    assert HANDOFF_MODULE in owners.owner_modules(actual, "shared", "ordinary", MAC)
+    assert {"domain": "shared", "lane": "ordinary", "platform": MAC, "runner": "macos-15"} in owners.additional_campaigns(["shared"], actual)
+    scoped = {**actual, "overrides": rules}
+    rows = handoff_darwin_rows()
+    frozen = copy.deepcopy(rows)
+    linux = owners.partition(rows, scoped, "shared", "ordinary", LINUX)
+    assert linux["local_nodeids"] == [HANDOFF_MODULE + "::test_handoff_owned_import_census_source_policy"]
+    assert linux["transfers"] == [dict(domain="shared", lane="ordinary", nodeid=HANDOFF_NODE, platform=MAC, tools=[])]
+    assert rows == frozen and not next(entry for entry in rows if entry["nodeid"] == HANDOFF_NODE)["selected_by_repository"]
+    mac_rows = [dict(entry, selected_by_repository=True) for entry in rows]
+    mac = owners.partition(mac_rows, scoped, "shared", "ordinary", MAC, complete=False)
+    assert mac["local_nodeids"] == [HANDOFF_NODE]
+    assert owners.additional_campaigns(["shared"], scoped) == [
+        dict(domain="shared", lane="ordinary", platform=MAC, runner="macos-15")]
+    from scripts.ci_validation_plan import requires_native_inputs
+    assert requires_native_inputs("shared", "ordinary", platform=LINUX)
+    assert not requires_native_inputs("shared", "ordinary", platform=MAC)
