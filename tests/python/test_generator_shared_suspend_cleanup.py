@@ -61,6 +61,7 @@ def _resume_body(tmp_path, monkeypatch, parks: int) -> str:
     from pcc.frontends.python.pipeline import compile_python
 
     monkeypatch.setenv("PCC_LOG", "")
+    monkeypatch.setenv("PCC_GENERATOR_SHARED_EXIT", "1")
     source = tmp_path / f"parks_{parks}.py"
     source.write_text(_generator_source(parks))
     output = tmp_path / f"parks_{parks}.ll"
@@ -187,8 +188,10 @@ print("exit")
 '''
 
 
-def test_native_parks_and_returns_release_like_cpython(tmp_path, pcc_runtime_archive):
+def test_native_parks_and_returns_release_like_cpython(tmp_path, monkeypatch, pcc_runtime_archive):
     from pcc.frontends.python.pipeline import compile_python
+
+    monkeypatch.setenv("PCC_GENERATOR_SHARED_EXIT", "1")
 
     source = tmp_path / "shared_exit.py"
     source.write_text(PROGRAM)

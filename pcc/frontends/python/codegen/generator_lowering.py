@@ -2948,9 +2948,13 @@ class GeneratorLoweringMixin:
         exit carries its state, the slot of the yielded owner to take (or
         null) and otherwise the value to return. Returns None where an exit
         keeps its inline cleanup: a function with owned valueclass payload
-        roots, or ``PCC_GENERATOR_SHARED_EXIT=0``.
+        roots, or unless ``PCC_GENERATOR_SHARED_EXIT=1``. Off by default:
+        Stage1's direct indexed capture rejected a shared exit's phi
+        (`phi-predecessors`, excess edges, in
+        ``pcc.backend.native_object._iter_raw_relocations``); the text path
+        and the handler program verify and run.
         """
-        if str(os.environ.get("PCC_GENERATOR_SHARED_EXIT", "1") or "1").strip() == "0":
+        if str(os.environ.get("PCC_GENERATOR_SHARED_EXIT", "0") or "0").strip() != "1":
             return None
         fn = self.current_function
         records = self._fn_valueclass_payload_root_slots.get(fn.name, ())
