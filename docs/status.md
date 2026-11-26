@@ -1590,6 +1590,23 @@ in the relevant section or issue and removes the entry.
    cheap; the cycle gap is elsewhere and is the next thing to locate. Test:
    `tests/python/test_aarch64_call_operand_registers.py` (swap, rotation,
    duplicate, constant and call-crossing operands, native execution).
+   (h) Not merged, no request-level gain (Claude, 2026-11-26): callee-saved
+   pairs with the higher register at the lower address (`stp x20, x19`, as
+   clang) and one SP adjustment for the frame record and the callee saves
+   (`stp x20, x19, [sp, #-(n+16)]!` ... `stp x29, x30, [sp, #n]`). A call
+   loop microbenchmark on the Mac measured 2.15 ns per call for the old
+   layout, 1.45 with the pair order and 1.04 with both (clang 0.95). The
+   handler request did not follow: `instr` with a control arm (a second
+   build of the base; load 11.8, five runs) gave cycles -1.59% (pair order)
+   and -0.07% (both; instructions -0.60%) against a control floor of
+   +2.05%, and two earlier screens were +2.07% and +1.14%. Backend test set
+   7248/7250 passed (the two pcc1-gated nodes were not run). The patch is
+   kept outside the repository as `p0-callee-pair-order-and-folded-frame.diff`
+   beside `p0-frameless-atomic-leaves.diff` (frameless atomic leaves: -2.51%
+   cycles in the same run, also inside the floor). The same run's
+   instruction counts varied 32% between runs at load 11.8, against 0.3% at
+   load 3: some request path executes more instructions when it waits
+   longer, so `instr` is not load-independent; not yet located.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2
@@ -1607,7 +1624,21 @@ in the relevant section or issue and removes the entry.
    -3.51% instructions), then register copies, then frames; signing waits
    on the maintainer.
    J2. Fewer root stores and release chains in code generation: 104 of the
-       304 calls per request clear a slot that is already empty.
+       304 calls per request clear a slot that is already empty. Compile
+       side (2026-11-26, `scripts/pcc_perf.py compile` on 40216ff43): one
+       function, `pcc_gateway.server._proxy_exchange_attempt` (263 source
+       lines, 73 park points), lowers to a 327865-line resume function, 20%
+       of the program's 1.66M IR lines, and its emit worker (67 s) is the
+       longest serial step of a 131 s cold compile. It has 51456 blocks and
+       21935 release-if-flagged sequences (`_emit_release_owned_local_if_flagged`:
+       flag load, branch, `pcc_gc_store_root`): each hidden selection slot
+       (`handled.resume.pending.owner`, `except.class.owner`,
+       `except.class.replacement.owner`, one fresh slot per site from
+       `_exception_selection_owner_slot`) is released about 40 times, and
+       each of the 73 park points saves 90 to 142 slots with
+       `py_gen_frame_move` (9852 calls), which is also per-park run time.
+       Next: attribute the release sites to their emitters, then share one
+       cleanup per scope and save only the slots live across a park.
    J3. TaskScope (5x CPython), `time.perf_counter` (7x), `str.encode` (5x).
    A1. Darwin thread-local access inline (TSD slot through `tpidrro_el0`,
        startup check, fallback to the call): the resolver is 0.65 us per
@@ -1663,7 +1694,7 @@ in the relevant section or issue and removes the entry.
    on 2026-11-26.
 
    Claims:
-   - P0 unit 1: self AArch64 register copies and immediate operands: Claude, macOS, 2026-11-25T21:10Z, area backend (AArch64 selection, register allocation and their tests; native and bootstrap gates authorized by the user on 2026-11-26)
+   - P0 unit 1: self AArch64 register copies and immediate operands: Claude, macOS, 2026-11-25T21:10Z (renewed 2026-11-26T04:05Z), area backend (AArch64 selection, register allocation and their tests; native and bootstrap gates authorized by the user on 2026-11-26)
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
