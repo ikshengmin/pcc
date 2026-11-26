@@ -2114,6 +2114,7 @@ in the relevant section or issue and removes the entry.
    [Phase investigation](investigations/stage2-worker-budget-parity-45643044565.md).
 
    Claims:
+   - Stage2 AArch64 empty-label elimination compile-time optimization: Codex, Linux, 2026-11-26T12:02Z, area backend
    - Stage1 compile time on macOS (J2s): Claude, macOS, 2026-11-26T09:45Z, area backend (`self_backend_aarch64_typed_peepholes.py`, `self_backend_aarch64_typed_pass_context.py`, `self_backend_aarch64_fragments.py`, the AArch64 allocator `self_backend_aarch64_darwin_regalloc.py`, the Mach-O link files, `pcc/frontends/python/direct_object_cache.py` and their tests; not `self_backend_aarch64_typed_pair.py` or `self_backend_aarch64_typed_cfg.py`, which the Stage2 pairing/trampoline unit above holds)
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
