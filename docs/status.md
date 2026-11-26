@@ -3589,6 +3589,31 @@ in the relevant section or issue and removes the entry.
    object-vs-raw free paths and owner functions; seek structural lifetime
    reduction independent of previously rejected sorted/factory patch.
 
+   Actual raw/managed allocator request and free attribution (source
+   23892fb0, diagnostic only): 72 linked source modules,288 literal
+   malloc/calloc/realloc sites with count and size argument; allocator
+   26 path-event classes, count/requested/usable bytes. Guarded native
+   ELF5b41d0a6302997feef5d131dd17f3137c8f068642796f412314a8587c6ef2858
+   compile234.807s peak772014080B. Five alternating C20 round10/50
+   pairs delta800 each w1/w4 exact output, free count/byte sums and
+   magazine route=hit+refill. w1 all five exact raw malloc17.57625
+   (2306.72 requested/2664.32 usable B), managed35.45 (2658.4/3600 B),
+   frees52.0025 (raw17.5525/2104.48 requested B; object34.45/
+   2634.4). No large mapping, calloc or realloc. Raw magazine
+  17.5 hits/0 refill, object35.44125 hits/.00875 refill. Source
+   owner residual zero for every pair: list11.4525/1375.36B (initial
+   7.1/227.2B, append growth4.3/1004.8B, extend.05/128B, other
+   grow.0025/15.36B), dict4/384B (two48 and two144 allocations),
+   continuation node2.1/352.8B (168 each), young log.02375/194.56B.
+   w4 median raw17.57375, managed35.45, free52.0025, identical
+   list/dict counts, raw refill.00125, object refill.02875. This
+   indicates almost all allocator work is cache hit, not slow
+   refill; prioritize reducing actual raw buffer creation/growth.
+   Diagnostic instrumentation restored, no production change.
+   Next exact quiet native raw pair and same-output list growth
+   costs, then shape/ownership proof before choosing a layout or
+   pre-sizing candidate; no unsafe blanket lock/provenance removal.
+
    Claims:
    - Stage1 ARM typed trampoline branches shared resolution and sparse branch owner: Codex, Linux, 2026-11-26T20:16Z, area backend-aarch64-cfg
    - Actual raw allocator callsite and slab lifecycle attribution: Codex, Linux, 2026-11-26T20:17Z, area runtime-gc-raw-allocation
