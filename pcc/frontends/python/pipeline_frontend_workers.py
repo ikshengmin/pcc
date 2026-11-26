@@ -1115,4 +1115,8 @@ def resource_tasks_for_commands(commands):
             tasks[-1]["startup_prior_model"] = "host-" + manifest["job_kind"] + "-v1"
             if manifest["job_kind"] == "codegen" and len(indices) > 1:
                 tasks[-1]["class"] += "|host-codegen-batch:" + str(len(indices))
+            elif (manifest["job_kind"] == "codegen" and exports_path
+                  and sys.implementation.name == "cpython"):
+                # A CPython worker for one module; native workers keep v1.
+                tasks[-1]["startup_prior_model"] = "host-codegen-module-v1"
     return tasks

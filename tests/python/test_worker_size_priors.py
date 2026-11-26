@@ -231,6 +231,7 @@ def task(model="host-indexed-frontend-v1", source=100, ast=200, exports=300):
     ("host-export-v1", 160 * MIB + 160 * 100),
     ("host-summary-v1", 192 * MIB + 5 * (200 + 300)),
     ("host-codegen-v1", 128 * MIB + 224 * (100 + 200) + 43 * 300),
+    ("host-codegen-module-v1", 256 * MIB + 256 * (100 + 200) + 4 * 300),
     ("host-indexed-frontend-v1", 128 * MIB + 80 * (100 + 200) + 11 * 300),
 ])
 def test_phase_models_use_bytes_and_apply_existing_margin_once(model, working):
@@ -551,6 +552,43 @@ def test_only_the_actual_cpython_worker_prefix_receives_a_host_prior(tmp_path, m
         assert policy.task_startup_prior_bytes(item) == 0
 
 
+def test_module_codegen_prior_covers_exactly_one_module():
+    item = task("host-codegen-module-v1")
+    item["inputs"][5] = 2
+    with pytest.raises(policy.WorkerMemoryError, match="exactly one module"):
+        policy.task_startup_prior_bytes(item)
+
+
+@pytest.mark.parametrize("owner,count,model", [
+    ("host", 1, "host-codegen-module-v1"),
+    ("host", 2, "host-codegen-v1"),
+    ("native", 1, "host-codegen-v1"),
+])
+def test_single_module_cpython_codegen_with_exports_gets_the_module_prior(
+        tmp_path, monkeypatch, owner, count, model):
+    """A CPython worker for one module reads its root's export closure; a
+    batch or a native pcc worker keeps the v1 model."""
+    from pcc.frontends.python import pipeline_stage1_checkpoint as checkpoint
+
+    manifest = dict(assigned_indices=list(range(count)), job_kind="codegen", ast_dir="",
+                    exports_path=str(tmp_path / "exports.json"),
+                    src_paths=["one.py", "two.py"], module_names=["pkg.one", "pkg.two"])
+    monkeypatch.setattr(workers, "read_worker_manifest", lambda path: manifest)
+    monkeypatch.setattr(workers, "_artifact_size", lambda path: 123)
+    monkeypatch.setattr(checkpoint, "file_sha256", lambda path: "a" * 64)
+    if owner == "native":
+        own = workers.own_worker_prefixes("pcc", "/private/native-pcc1", "./pcc1")
+        monkeypatch.setattr(workers, "own_worker_prefixes", lambda: own)
+        monkeypatch.setattr(workers.sys, "implementation", type(sys.implementation)(name="pcc"))
+        prefix = ["/private/native-pcc1"]
+    else:
+        prefix = [sys.executable, "-m", "pcc"]
+    command = shlex.join([*prefix, "--pcc-python-multi-codegen-worker", str(tmp_path / "manifest")])
+    item = workers.resource_tasks_for_commands([command])[0]
+    assert item["startup_prior_model"] == model
+    assert policy.task_startup_prior_bytes(item) > 0
+
+
 def test_own_worker_prefixes_name_only_the_running_compiler():
     assert workers.own_worker_prefixes("cpython", "/usr/bin/python3", "x") == [["/usr/bin/python3", "-m", "pcc"]]
     assert workers.own_worker_prefixes("cpython", "", "x") == []
@@ -638,15 +676,17 @@ def test_backend_prior_byte_binding_is_exact_and_detects_stale_task_mutation():
         case.doCleanups()
 
 
+@pytest.mark.parametrize("frontend_model", ["host-codegen-v1", "host-codegen-module-v1"])
 @pytest.mark.parametrize("frontend_host,backend_host", [(False, False), (False, True), (True, False), (True, True)])
-def test_split_models_classify_frontend_and_backend_prefixes_independently(tmp_path, monkeypatch, frontend_host, backend_host):
+def test_split_models_classify_frontend_and_backend_prefixes_independently(
+        tmp_path, monkeypatch, frontend_host, backend_host, frontend_model):
     from tests.python import test_host_indexed_process_split as fixture
     from pcc.frontends.python import pipeline_frontend_indexed_stage as stage
     from pcc.frontends.python import worker_process_pool as pool
 
     prepared = fixture._stage_fixture(tmp_path, monkeypatch, count=1)
     if frontend_host:
-        prepared["frontend_tasks"][0]["startup_prior_model"] = "host-codegen-v1"
+        prepared["frontend_tasks"][0]["startup_prior_model"] = frontend_model
     captured = []
 
     def observe(commands, tasks, width, budget, **kwargs):
@@ -665,4 +705,4 @@ def test_split_models_classify_frontend_and_backend_prefixes_independently(tmp_p
     assert len(captured) == 2
     assert captured[0].get("startup_prior_model") == ("host-indexed-frontend-v1" if frontend_host else None)
     assert captured[1].get("startup_prior_model") == ("host-indexed-backend-v2" if backend_host else None)
-    assert prepared["frontend_tasks"][0].get("startup_prior_model") == ("host-codegen-v1" if frontend_host else None)
+    assert prepared["frontend_tasks"][0].get("startup_prior_model") == (frontend_model if frontend_host else None)

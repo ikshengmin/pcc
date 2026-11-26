@@ -166,6 +166,20 @@ def task_startup_prior_bytes(task) -> int:
         working_bytes = 160 * mib + 160 * source_bytes
     elif model == "host-summary-v1":
         working_bytes = 192 * mib + 5 * (ast_bytes + export_bytes)
+    elif model == "host-codegen-module-v1":
+        # One module on a CPython worker. Its export view is the root's
+        # dependency closure, not the whole graph that v1 charges at 43 B
+        # per export byte. A macOS Stage1 (445 completed workers, 30.7 MB
+        # exports file, which every worker then decoded in full): peaks
+        # 0.28-2.3 GB against v1 reservations of 2.1-6.9 GB, so 3-4
+        # workers ran where 6 fit. Source bytes do not bound every peak:
+        # pcc.frontends.python.py_ast (10 KB) reached 1.68 times its padded
+        # forecast, and completed samples raise the scale as for v1.
+        # Replaying that run's admission with its durations, the codegen
+        # phase takes 1506 s under this model and 1823 s under v1.
+        if inputs[5] != 1:
+            raise WorkerMemoryError("module codegen prior needs exactly one module")
+        working_bytes = 256 * mib + 256 * (source_bytes + ast_bytes) + 4 * export_bytes
     elif model == "host-codegen-v1":
         if inputs[5] > 1:
             # Bounded host batches reserve the SUM of singleton forecasts.

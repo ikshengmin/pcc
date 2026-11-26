@@ -73,7 +73,7 @@ def run_host_indexed_stage(commands, manifest_paths, result_paths, chunks,
         raise ValueError("host indexed process split requires complete worker resource identities")
     frontend_tasks = [dict(task) for task in frontend_tasks]
     for task in frontend_tasks:
-        if task.get("startup_prior_model", "") == "host-codegen-v1":
+        if task.get("startup_prior_model", "") in ("host-codegen-v1", "host-codegen-module-v1"):
             task["startup_prior_model"] = "host-indexed-frontend-v1"
     backend_host_prior = (sys.implementation.name == "cpython"
                           and list(worker_prefix) == [sys.executable, "-m", "pcc"])
