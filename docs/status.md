@@ -1189,7 +1189,7 @@ in the relevant section or issue and removes the entry.
    general trap weakening. Latest integrated hosted CI UNRUN.
 
    Claims:
-   - none
+   - Indexed handoff missing receipt strict retirement failure: Codex, Linux, 2026-11-26T20:35Z, area indexed-handoff-retirement-test
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
