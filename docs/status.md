@@ -1072,8 +1072,30 @@ in the relevant section or issue and removes the entry.
    tests, 3/3 PASS, unchanged90s/1GiB guard COMPLETE6.654s/110702592 B.
    No gate weakening or hosted acceptance claim.
 
+   Frame registry flags / stackmap policy (2026-11-26, frozen
+   source10f25029 strict archive a86281a5): hosted artifact15145043938
+   stale expected walk_state1 on Linux reproduced locally1 FAIL/2 PASS,
+   actual [1,0,0,1,0], guard COMPLETE4.886s/103460864 B. Runtime mode
+   lazily caches only a validated published table; current target
+   contract Mach-O owned link publishes, ELF/PE main does not (including
+   experimental object tables). Existing application retains all
+   40 rooted chain/GC semantic results (sum517140) and configuration
+   flag conjunction, checks actual table pointer and explicitly calls
+   native mode. Linux observed flags [1,0,0,1,0,0,0,0,1,0]:
+   no table/mode0/walk_state0/index0, policy setting1; ignored requested
+   "0" gives identical result. For actual linked Mach-O table requires
+   publication, mode1/state1 and validated index>0; native Darwin UNRUN.
+   Independent owned C native control uses backend-encoded one-function
+   table resolved to actual native probe's address, validates no-table
+   mode0 before publishing, valid mode1 default/ignored0, report2, state1
+   and index1, malformed magic fails closed with native abort reason.
+   This tests mode/index admission, not a claim of ELF program publication
+   or actual stack traversal. All4 affected plus5 explicit platform
+   policy controls PASS, 9/9 under unchanged90s/1GiB guard
+   COMPLETE5.630s/95928320 B. No production or gate change.
+
    Claims:
-   - Actual frame registry stackmap publication policy and native mode admission model: Codex, Linux, 2026-11-26T19:54Z, area ci-frame-registry-stackmap-policy
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
