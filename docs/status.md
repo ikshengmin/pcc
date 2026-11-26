@@ -191,8 +191,36 @@ codegen3752.082s; indexed receipts backend2728.8 worker-seconds,
 function emission1546.7, stackmap plan640.36, prepare verification351.2,
 layout128.95. Prioritize actual codegen worker common owners rather than
 minor link changes; stage1 target 5m six-worker not yet met.
-All three Stage2 owners active in run 45856871699. Run 45862787448
-is pending. Since c20c2c01 a substantial additional independent batch
+All three Stage2 owners in run 45856871699 FAILED their existing
+1800s deadlines (not complete Stage2 or Stage3). Linux x64 owner
+artifact15143077466 elapsed1800.1168s/outer tree peak3715461120B;
+full bootstrap artifact15143435682 sampled native compiler tree through
+1783.600s peak3202990080B (+11.31% against same-scope Stage1).
+ARM64 owner artifact15143715322 1800.2300s/outer peak4783247360B;
+full artifact15142914311 sampled compiler tree through1781.758s
+peak4278870016B (below Stage1 4676341760B, but incomplete).
+Windows owner artifact15143139129 existing watchdog timed out
+1800.074s; peak compiler-tree receipt not yet retrieved.
+Latest x64 Stage2 actual export659.022s (prior789.855), summary202.441,
+preload220.162; ARM export356.308s, summary99.855, preload117.749.
+Both Linux lanes only completed three frontend codegen modules before
+timeout: x64 c_parsetab23.672s/c_codegen323.536/cli_bootstrap258.986;
+ARM 23.556/581.023/406.817. Actual terminal singleton class_gen index209
+on both. x64 compiler tree samples show one child at a time during the
+oversized codegen sequence; codegen worker_3 still active at timeout.
+Class_gen had reached direct indexed capture (332713 instructions,
+86393 blocks, 727 functions, zero fallback) but not final emission.
+Production oversized handoff intentionally serializes oversized workers
+and forces indexed assembly rather than direct native sections to
+respect historical heap risk. Do not merely widen worker limits or
+concurrency: reduce actual single-worker CPU/RSS, measure safe admission
+within the existing resource envelope and Stage2<=Stage1 memory target.
+Authentic Linux x64 Stage1 ELF from same source receipt c88e3ba1...,
+272120580 bytes, manifest verified, canary executed successfully; use
+focused old-source singleton native worker replay for exact attribution
+without a full local bootstrap. Neither latest compact class preload
+nor future AST v2 is included in this run. Run 45862787448 was pending
+at last verified check. Since c20c2c01 a substantial additional independent batch
 landed: actual native class-preload private compact wire `16f2386b`
 (80.08% worker CPU and 81.20% RSS reduction across 5/5 pairs), real
 compiler typed CFG `81af95e8`, exact four-platform worker-prior test
