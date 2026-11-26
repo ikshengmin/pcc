@@ -5543,7 +5543,39 @@ in the relevant section or issue and removes the entry.
    no relaxed limits or unqualified Stage2 parity. CI ELF contexts
    receive next heavy slot.
 
+   Actual #638 x64 Stage2 source9223aca1 phase attribution (read
+   only, partial timeout). Exact bootstrap artifact15155193219:
+   class_gen frontend148.631s/backend177.498s (function emit105.496,
+   stackmap33.514,verify26.098,layout10.306), completed worker
+   codegen326.890s. Child PID13038 observed elapsed1332.777->1681.627s,
+   child peak1,799,413,760B, parent979,582,976B,
+   partial tree2,778,996,736B (Stage1 peak2,799,013,888B, partial
+   not completed acceptance). Next unsafe_lowering PID14420 observed
+   elapsed1682.043->1783.604s (only101.561s before outer timeout),
+   peak child742,371,328B, tree1,721,954,304B. Actual infer6.351,
+   prepare8.373,class65.696,module_init1.866,capture8.899s, render0,
+   CFG184 funcs/164,226 inst/45,461 blocks,fallback0. Only about10s
+   observed time remained for backend after frontend, so no evidence
+   unsafe/render stalled; serial oversized predecessors/deadline
+   dominate. Never raise cap/add speculative concurrency.
+   Actual coordinator collect_relative_module_closure98.756s plus
+   collect_multi_source_relative_closure34.150s (total132.906s)
+   before export476.078s. Exact #638/current dependency closure and
+   lexical scan owner blobs identical9441a032/30792d5f. Source
+   currently calls relative and absolute _package_import_targets
+   separately per source, each rereads/normalizes/masks/scans from
+   specs, plus _top_level_import_targets. Quantify actual duplicate
+   source bytes/counts/call sites first on exact source graph; local
+   within-iteration snapshot/spec reuse only if exact source and
+   original hooks, preserve relative/absolute root ordering,
+   top-level-only flags, source change/error/monkeypatch behavior.
+   No persistent source/AST cache; require exact closure order/
+   sources, focused native strict context and CPU/RSS controls.
+   Stage1 route harness disjoint. CI ELF context heavy first;
+   source-only attribution prep until release.
+
    Claims:
+   - Stage2 coordinator local lexical closure scan attribution: Codex, Linux, 2026-11-26T23:11Z, area selfhost
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
