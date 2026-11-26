@@ -3824,7 +3824,7 @@ in the relevant section or issue and removes the entry.
    mutations and choose safe sparse alternative only if justified.
 
    Claims:
-   - none
+   - Stage2 class method function-map snapshot attribution: Codex, Linux, 2026-11-26T19:00Z, area selfhost
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
