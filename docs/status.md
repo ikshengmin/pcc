@@ -2539,6 +2539,7 @@ in the relevant section or issue and removes the entry.
    on 2026-11-26.
 
    Claims:
+   - #13 described-layout exact raw-mapping publication and large repeated lifecycle: Codex, Linux, 2026-11-26T17:51Z, area runtime-gc-described-layout
    - Closed-world continuation factory immediate result handoff proof and narrow candidate: Codex, Linux, 2026-11-26T17:39Z, area runtime-codegen-factory
    - J2s actual Linux x64 Stage1 indexed worker stack-map planning repeated-work attribution (self_backend_precise_stackmaps x64 only, disjoint from runtime GC and AArch64 selection): Codex, Linux, 2026-11-26T17:35Z, area stage1-codegen
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
