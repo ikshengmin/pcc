@@ -775,7 +775,7 @@ in the relevant section or issue and removes the entry.
    failures remain unresolved. Hosted verification pending.
 
    Claims:
-   - none
+   - ci-contracts integration exact weakset authentic pcc1 worker memory and fixture import attribution: Codex, Linux, 2026-11-26T18:39Z, area ci-weakset-resource-admission
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
