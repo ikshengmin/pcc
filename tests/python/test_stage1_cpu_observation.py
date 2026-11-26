@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -212,9 +213,9 @@ def test_clock_unit_is_queried_once_per_enabled_run(tmp_path, monkeypatch):
     assert other.result["stage1_observation"]["ticks_per_second"] == 500
 
 
-def test_windows_and_mac_are_unavailable_without_queries(monkeypatch):
+def test_mac_is_unavailable_without_queries(monkeypatch):
     monkeypatch.setattr(watchdog.os, "sysconf", lambda *a: pytest.fail("unsupported platform queried"), raising=False)
-    for platform in ("win32", "darwin"):
+    for platform in ("darwin",):
         receipt = watchdog._stage1_observation({}, platform)
         assert receipt["cpu_status"] == "unavailable"
         assert receipt["ticks_per_second"] is None
@@ -289,3 +290,153 @@ def test_malformed_cpu_cannot_mask_memory_enforcement(tmp_path, monkeypatch):
     assert run.lines[0]["rss"] == 4096
     assert run.lines[0]["cpu_time"] == [[101, "700", None, None]]
     assert run.events[-1] == ("wait", 10)
+
+
+@pytest.mark.parametrize("failure", [None, "membership-false", "membership-api", "times-api", "times-error"])
+def test_windows_same_job_handle_cpu_times_and_unavailable(failure):
+    from ctypes import wintypes as w
+    import ctypes
+    calls=[]
+    def membership(handle, job, result):
+        calls.append(("member", handle, job))
+        ctypes.cast(result, ctypes.POINTER(w.BOOL)).contents.value = int(failure != "membership-false")
+        return int(failure != "membership-api")
+    def times(handle, *fields):
+        calls.append(("times", handle))
+        if failure == "times-error":
+            raise OSError("optional query")
+        for field, value in zip(fields, (2**33+5, 999, 2**34+7, 2**35+9)):
+            v=ctypes.cast(field,ctypes.POINTER(w.FILETIME)).contents
+            v.dwHighDateTime=value>>32
+            v.dwLowDateTime=value&0xffffffff
+        return int(failure != "times-api")
+    kernel=SimpleNamespace(IsProcessInJob=membership, GetProcessTimes=times)
+    actual=watchdog._windows_job_own_cpu_times(kernel, 101, 201)
+    assert actual == ((2**33+5,2**35+9,2**34+7) if failure is None else (None,None,None))
+    assert calls[0] == ("member",101,201)
+    assert calls[1:] == ([] if failure in ("membership-false", "membership-api") else [("times",101)])
+
+
+def test_windows_stage1_metadata_records_filetime_not_host_quota(monkeypatch):
+    monkeypatch.setattr(watchdog.os,"sysconf",lambda *a:pytest.fail("Windows sysconf query"),raising=False)
+    receipt=watchdog._stage1_observation({"ImageVersion":"20261126.1"},"win32")
+    assert receipt["cpu_status"]=="sampled"
+    assert receipt["cpu_source"]=="same_windows_job_process_handle_GetProcessTimes"
+    assert receipt["cpu_columns"]==["pid","creation_filetime_100ns","own_user_100ns","own_kernel_100ns"]
+    assert receipt["cpu_unit"]=="filetime_100ns" and receipt["ticks_per_second"]==10_000_000
+    assert receipt["tick_frequency_source"]=="Windows FILETIME (100 ns)"
+    assert receipt["unavailable_reason"] is None and receipt["capacity_status"]=="unavailable_not_observed"
+    assert receipt["effective_cpu_quota"] is None and receipt["affinity_cpu_count"] is None
+
+
+def test_windows_sample_reuses_existing_rss_and_image_handles(monkeypatch):
+    import ctypes
+    job=object.__new__(watchdog.WindowsJob)
+    job.handle=71
+    events=[]
+    def pids(handle,kind,buffer,size,ret):
+        assert handle==71 and kind==3
+        ctypes.c_uint32.from_buffer(buffer,4).value=3
+        for i,pid in enumerate((10,11,12)):
+            ctypes.c_size_t.from_buffer(buffer,8+i*ctypes.sizeof(ctypes.c_size_t)).value=pid
+        return 1
+    def open_process(mask,inherit,pid):
+        assert mask==0x410 and not inherit
+        events.append(("open",pid))
+        return pid+100 if pid!=12 else 0
+    def memory(handle,mem,size):
+        p=mem._obj
+        events.append(("memory",handle))
+        p.working_set=2048
+        return int(handle!=111)
+    def name(handle,flags,text,size):
+        text.value="owned.exe";return 1
+    def cpu(kernel,handle,owner):
+        events.append(("cpu",handle,owner))
+        return (123,50,70)
+    job.kernel=SimpleNamespace(QueryInformationJobObject=pids,OpenProcess=open_process,
+                               QueryFullProcessImageNameW=name,CloseHandle=lambda h:events.append(("close",h)))
+    job.psapi=SimpleNamespace(GetProcessMemoryInfo=memory)
+    monkeypatch.setattr(watchdog,"_windows_job_own_cpu_times",cpu,raising=False)
+    baseline=job.sample();ordinary=list(events);events.clear();rows=[]
+    observed=job.sample(cpu_observations=rows)
+    assert observed==baseline==[(10,2048,"owned.exe")]
+    assert rows==[(10,123,50,70)]
+    assert [x for x in events if x[0]!="cpu"]==ordinary
+    assert events.index(("memory",110))<events.index(("cpu",110,71))<events.index(("close",110))
+    assert events.count(("close",110))==events.count(("close",111))==1
+
+
+@pytest.mark.parametrize("observe,native,outcome", [
+    (True, False, "complete"), (False, False, "complete"),
+    (True, True, "complete"), (True, False, "memory"),
+    (True, False, "timeout"), (True, False, "nonzero"),
+])
+def test_windows_run_cpu_observation_is_optional_and_preserves_guard(tmp_path, monkeypatch, observe, native, outcome):
+    events=[];clock=[0.0]
+    class Job:
+        def __init__(self, limit):
+            events.append(("job",limit))
+        def attach(self, process, before_resume):
+            events.append(("attach",process.pid));before_resume();events.append(("resume",process.pid))
+        def sample(self, *, cpu_observations=None):
+            events.append(("sample",cpu_observations is not None))
+            if cpu_observations is not None:
+                cpu_observations.append((101,None,None,None) if outcome=="memory" else (101,700,13,7))
+            return [(101,4096 if outcome=="memory" else 1024,"owned.exe")]
+        def kill(self):events.append(("kill",))
+        def close(self):events.append(("close",))
+    process=SimpleNamespace(pid=101,returncode=None,polls=0)
+    def poll():
+        process.polls+=1
+        if outcome in ("complete","nonzero") and process.polls>=3:process.returncode=9 if outcome=="nonzero" else 0
+        return process.returncode
+    process.poll=poll
+    process.wait=lambda timeout:events.append(("wait",timeout))
+    def popen(args, **kwargs):
+        assert kwargs["creationflags"]==0x204 and not kwargs["start_new_session"]
+        events.append(("popen",));return process
+    monkeypatch.setattr(watchdog,"WindowsJob",Job)
+    monkeypatch.setattr(watchdog,"_publish_windows_root_guard",lambda *args:events.append(("guard",)))
+    monkeypatch.setattr(watchdog,"sys",SimpleNamespace(platform="win32",implementation=SimpleNamespace(name="cpython"),executable="host.exe",_base_executable="host.exe"))
+    monkeypatch.setattr(watchdog,"os",SimpleNamespace(name="nt",path=os.path))
+    monkeypatch.setattr(watchdog,"subprocess",SimpleNamespace(Popen=popen,STDOUT=subprocess.STDOUT,CalledProcessError=subprocess.CalledProcessError))
+    monkeypatch.setattr(watchdog,"time",SimpleNamespace(monotonic=lambda:clock[0],sleep=lambda d:clock.__setitem__(0,clock[0]+d)))
+    kwargs=dict(cwd=tmp_path,env={},log_path=tmp_path/"windows.log",timeout=0.1 if outcome=="timeout" else 3,rss_limit=2048,native=native,observe_stage1=observe)
+    if outcome=="complete":
+        receipt=watchdog.run(["owned.exe"],**kwargs)
+        assert ("stage1_observation" in receipt)==(observe and not native)
+    else:
+        exception={"memory":RuntimeError,"timeout":TimeoutError,"nonzero":subprocess.CalledProcessError}[outcome]
+        with pytest.raises(exception):watchdog.run(["owned.exe"],**kwargs)
+    rows=[json.loads(line) for line in (tmp_path/"windows.resources.jsonl").read_text().splitlines()]
+    assert rows and all(("cpu_time" in row)==(observe and not native) for row in rows)
+    if observe and not native:
+        assert rows[0]["stage1_observation"]["cpu_status"]=="sampled"
+        assert all(row["cpu_time"]==([[101,None,None,None]] if outcome=="memory" else [[101,700,13,7]]) for row in rows)
+    assert events[:5]==[("job",2048),("popen",),("attach",101),("guard",),("resume",101)]
+    assert all(event==("sample",observe and not native) for event in events[5:-3])
+    assert events[-3:]==[("kill",),("close",),("wait",10)]
+
+
+@pytest.mark.pcc_gate(probe=lambda: sys.platform == "win32")
+def test_real_windows_own_cpu_observation(tmp_path):
+    """Hosted-only smoke: actual Job handle and real Win32 CPU counters."""
+    log = tmp_path / "win-cpu.log"
+    child = "import time; end=time.monotonic()+0.9\nwhile time.monotonic()<end: pass\n"
+    receipt = watchdog.run([sys.executable, "-c", child], cwd=tmp_path,
+                           env=dict(os.environ), log_path=log, timeout=10,
+                           rss_limit=256 * 1024**2, observe_stage1=True)
+    samples = [json.loads(line) for line in log.with_suffix(".resources.jsonl").read_text().splitlines()]
+    assert receipt["stage1_observation"]["cpu_unit"] == "filetime_100ns"
+    assert samples[0]["stage1_observation"] == receipt["stage1_observation"]
+    measured = {}
+    for sample in samples:
+        assert {row[0] for row in sample["cpu_time"]} == {row[0] for row in sample["processes"]}
+        for pid, birth, user, kernel in sample["cpu_time"]:
+            if birth is not None:
+                assert birth > 0 and user >= 0 and kernel >= 0
+                measured.setdefault((pid, birth), []).append(user + kernel)
+            else:
+                assert user is None and kernel is None
+    assert any(len(values) >= 2 and values[-1] > values[0] for values in measured.values()), measured

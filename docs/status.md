@@ -182,8 +182,24 @@ RSS4598730752→4676341760 (+1.69%); Windows x64 1181.080718→1738.978787
 (+47.24%), RSS3627479040→3730415616 (+2.84%). Windows wall regression
 requires diagnosis: 604/606 matched codegen modules slower, median
 1.757x (p10 1.618/p90 1.880); infer median1.553x, all major phases
-including export/link slower. Windows observer has no own CPU or
+including export/link slower. That run's Windows observer has no own CPU or
 affinity/quota measurement, so no causal source vs machine conclusion.
+Future Windows Stage1 observer now reads optional GetProcessTimes own
+user/kernel FILETIME 100ns durations and creation identity from the same
+already-open RSS process handle, with IsProcessInJob on that exact handle
+before reading to reject a reused foreign PID. Failed membership/time
+queries are explicit nulls, never zero/estimated CPU. No extra inventory,
+no host quota/affinity claims, no summed complete-tree CPU, no guard/
+deadline/RSS/native-path change; disabled observation still does not query.
+Test-first seven failures; Linux proper-gated affected observer/export/
+Windows guard/Linux admission modules 393 passed, two actual Windows
+nodes UNRUN (including new real Job CPU smoke). Wider direct host ordinary
+CI contract module inventory was not a hosted equivalent: 3,212 passed,
+34 failures and six deselections, six subtests passed. Two Darwin-owned
+nodes, nine CPython3.13 platform uname calls inside subprocess mocks,
+21 child launches lacking pytest after PYTHONPATH reset, one pinned
+Python3.15 input inventory, one pytest9.2 subtest representation. Explicitly
+not green; exact Windows hosted CPU receipts still needed.
 Linux x64 runner image also changed; do not attribute all speedup to
 source. Actual codegen worker wall1096.943s (91% of Linux x64 compile),
 export62.352, link34.983. 625 module records sum infer149.1s,
@@ -712,7 +728,7 @@ in the relevant section or issue and removes the entry.
    under the unchanged 90 s / 1 GiB guard. Hosted verification pending.
 
    Claims:
-   - Windows Stage1 same-job process own CPU observation with explicit unavailable semantics: Codex, Linux source/tests, 2026-11-26T18:21Z, area ci-stage1-observer
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and

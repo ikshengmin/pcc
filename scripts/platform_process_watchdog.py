@@ -92,6 +92,31 @@ def _windows_creation_time(handle):
     return (values[0].dwHighDateTime << 32) | values[0].dwLowDateTime
 
 
+def _windows_job_own_cpu_times(kernel, handle, job):
+    """Read optional identity and own CPU from the existing RSS handle.
+
+    The PID from the Job snapshot could have exited before OpenProcess; an
+    exact handle membership check prevents attributing a reused foreign PID.
+    Windows FILETIME creation identity and kernel/user durations are 100 ns
+    units. Exit and waited-child time are never aggregated. Optional query
+    failure must not change the existing memory/enforcement observations.
+    """
+    from ctypes import wintypes as w
+    try:
+        member = w.BOOL()
+        if not kernel.IsProcessInJob(handle, job, ctypes.byref(member)) or not member.value:
+            return None, None, None
+        creation, exit_time, kernel_time, user_time = (w.FILETIME() for _ in range(4))
+        if not kernel.GetProcessTimes(handle, ctypes.byref(creation), ctypes.byref(exit_time),
+                                      ctypes.byref(kernel_time), ctypes.byref(user_time)):
+            return None, None, None
+        def filetime(value):
+            return (value.dwHighDateTime << 32) | value.dwLowDateTime
+        return filetime(creation), filetime(user_time), filetime(kernel_time)
+    except Exception:
+        return None, None, None
+
+
 def _publish_windows_root_guard(path, process, limit, deadline):
     # Called after assignment and before resume: the child cannot observe a
     # receipt for a launch that has not entered the actual enforcing Job.
@@ -138,6 +163,10 @@ class WindowsJob:
         self.kernel.OpenProcess.argtypes = [w.DWORD, w.BOOL, w.DWORD]
         self.kernel.OpenProcess.restype = w.HANDLE
         self.kernel.CloseHandle.argtypes = [w.HANDLE]
+        self.kernel.IsProcessInJob.argtypes = [w.HANDLE, w.HANDLE, ctypes.POINTER(w.BOOL)]
+        self.kernel.IsProcessInJob.restype = w.BOOL
+        self.kernel.GetProcessTimes.argtypes = [w.HANDLE] + [ctypes.POINTER(w.FILETIME)] * 4
+        self.kernel.GetProcessTimes.restype = w.BOOL
         self.ntdll.NtResumeProcess.argtypes = [w.HANDLE]
         self.psapi = ctypes.WinDLL("psapi", use_last_error=True)
         self.psapi.GetProcessMemoryInfo.argtypes = [w.HANDLE, ctypes.c_void_p, w.DWORD]
@@ -165,7 +194,7 @@ class WindowsJob:
             self.kill()
             raise RuntimeError("NtResumeProcess failed")
 
-    def sample(self):
+    def sample(self, *, cpu_observations=None):
         from ctypes import wintypes as w
         capacity = 4096
         buffer = ctypes.create_string_buffer(8 + capacity * ctypes.sizeof(ctypes.c_size_t))
@@ -193,6 +222,8 @@ class WindowsJob:
                 length = w.DWORD(len(name))
                 self.kernel.QueryFullProcessImageNameW(handle, 0, name, ctypes.byref(length))
                 rows.append((pid, memory.working_set, name.value))
+                if cpu_observations is not None:
+                    cpu_observations.append((pid, *_windows_job_own_cpu_times(self.kernel, handle, self.handle)))
             finally:
                 self.kernel.CloseHandle(handle)
         return rows
@@ -231,24 +262,32 @@ def _stage1_observation(environment, platform):
         image[name] = {"value": value if valid else None,
                        "status": "supplied_environment" if valid else "unavailable"}
     linux = platform.startswith("linux")
+    windows = platform == "win32"
     tick_frequency = None
+    tick_frequency_source = None
+    if windows:
+        tick_frequency = 10_000_000
+        tick_frequency_source = "Windows FILETIME (100 ns)"
     if linux:
         try:
             value = os.sysconf("SC_CLK_TCK")
             if type(value) is int and value > 0:
                 tick_frequency = value
+                tick_frequency_source = "os.sysconf(SC_CLK_TCK)"
         except Exception:
             # Optional unit metadata cannot become an admission requirement.
             pass
     return {
         "schema": "pcc.stage1-cpu-observation.v1",
-        "cpu_status": "sampled" if linux else "unavailable",
-        "cpu_source": "same_linux_proc_stat_read" if linux else None,
-        "unavailable_reason": None if linux else "recurring_observer_does_not_read_cpu_time",
-        "cpu_columns": ["pid", "start_time_ticks", "own_user_ticks", "own_system_ticks"],
-        "cpu_unit": "clock_ticks",
+        "cpu_status": "sampled" if linux or windows else "unavailable",
+        "cpu_source": ("same_linux_proc_stat_read" if linux else
+                       "same_windows_job_process_handle_GetProcessTimes" if windows else None),
+        "unavailable_reason": None if linux or windows else "recurring_observer_does_not_read_cpu_time",
+        "cpu_columns": (["pid", "creation_filetime_100ns", "own_user_100ns", "own_kernel_100ns"]
+                        if windows else ["pid", "start_time_ticks", "own_user_ticks", "own_system_ticks"]),
+        "cpu_unit": "filetime_100ns" if windows else "clock_ticks",
         "ticks_per_second": tick_frequency,
-        "tick_frequency_source": "os.sysconf(SC_CLK_TCK)" if tick_frequency is not None else None,
+        "tick_frequency_source": tick_frequency_source,
         "tick_frequency_status": "available" if tick_frequency is not None else "unavailable",
         "null_cpu_fields": "unavailable_or_malformed_own_cpu_fields",
         "coverage": "sampled_owned_processes_only_not_complete_tree_cpu",
@@ -337,9 +376,11 @@ def run(command, *, cwd, env, log_path, timeout, rss_limit, native=False, cancel
             while process.poll() is None:
                 if cancel is not None and cancel.is_set():
                     raise RuntimeError("qualification cancelled after a peer failure")
-                cpu_rows = [] if observation is not None and sys.platform.startswith("linux") else None
+                cpu_rows = [] if observation is not None and observation["cpu_status"] == "sampled" else None
                 if cpu_rows is None:
                     rows = job.sample() if job else linux_sample(process.pid, known)
+                elif job:
+                    rows = job.sample(cpu_observations=cpu_rows)
                 else:
                     rows = linux_sample(process.pid, known, cpu_observations=cpu_rows)
                 rss = sum(row[1] for row in rows)
