@@ -11,6 +11,7 @@ from pcc.frontends.python.py_ast_contract import (
 
 
 _PY_AST_WIRE_SCHEMA = "pcc.frontends.python.py_ast.v1"
+_PY_AST_WIRE_SCHEMA_V2 = "pcc.frontends.python.py_ast.v2"
 _PY_AST_WIRE_NODE_KEY = "__pcc_py_ast_v1__"
 _PY_AST_WIRE_BYTES_KEY = "__pcc_bytes_v1__"
 
@@ -489,8 +490,20 @@ def _py_ast_wire_bytes(items):
     return bytes(raw)
 
 
+class _PyAstV2Fields:
+    """Private positional field view for the shared AST constructor."""
+
+    def __init__(self, row: list, positions: dict) -> None:
+        self.row: list = row
+        self.positions: dict = positions
+
+
 def _py_ast_wire_field(fields, name: str, default=None):
     if not isinstance(fields, dict):
+        if isinstance(fields, _PyAstV2Fields):
+            positions = fields.positions
+            if name in positions:
+                return fields.row[positions[name]]
         return default
     if name not in fields:
         return default
@@ -936,6 +949,148 @@ def _py_ast_node_from_wire(kind: str, fields):
     raise PyPipelineError("unknown py_ast wire node kind " + kind)
 
 
+def _py_ast_to_wire_v2(value, files: list, file_ids: dict):
+    """Compact positional sidecar wire; never elide an AST field."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, bytes):
+        return {"b": _py_ast_bytes_to_wire(value)[_PY_AST_WIRE_BYTES_KEY]}
+    kind = _closed_world_node_kind(value)
+    if kind == "bytes":
+        return {"b": _py_ast_bytes_to_wire(value)[_PY_AST_WIRE_BYTES_KEY]}
+    if isinstance(value, (tuple, list)):
+        return [_py_ast_to_wire_v2(item, files, file_ids) for item in value]
+    if isinstance(value, dict):
+        # Explicitly tag opaque maps so even keys named n/s/b/d cannot
+        # collide with the wire's record tags.
+        out = {}
+        for key, item in value.items():
+            out[str(key)] = _py_ast_to_wire_v2(item, files, file_ids)
+        return {"d": out}
+    field_names = _PY_AST_FIELD_NAME_OVERRIDES.get(kind)
+    if field_names is None:
+        raise PyPipelineError("cannot serialize py_ast node kind " + kind)
+    if kind == "SourceSpan":
+        file = _py_ast_field_value(value, "file", None)
+        if not isinstance(file, str):
+            raise PyPipelineError("invalid positional py_ast source file")
+        if file not in file_ids:
+            file_ids[file] = len(files)
+            files.append(file)
+        row = [file_ids[file]]
+        for field_name in ("line", "col", "end_line", "end_col"):
+            position = _py_ast_field_value(value, field_name, None)
+            if not isinstance(position, int) or isinstance(position, bool):
+                raise PyPipelineError("invalid positional py_ast source position")
+            row.append(position)
+        return {"s": row}
+    row = [kind]
+    for field_name in field_names:
+        row.append(_py_ast_to_wire_v2(
+            _py_ast_field_value(value, field_name, None), files, file_ids,
+        ))
+    return {"n": row}
+
+
+def _py_ast_v2_field_positions() -> dict:
+    positions = {}
+    for kind, field_names in _PY_AST_FIELD_NAME_OVERRIDES.items():
+        row = {}
+        for index, name in enumerate(field_names):
+            row[name] = index + 1
+        positions[kind] = row
+    return positions
+
+
+def _py_ast_from_wire_v2(value, files: list, positions: dict):
+    if isinstance(value, dict):
+        if len(value) != 1:
+            raise PyPipelineError("invalid positional py_ast wire tag")
+        if "n" in value:
+            row = value["n"]
+            if not isinstance(row, list) or not row or not isinstance(row[0], str):
+                raise PyPipelineError("invalid positional py_ast wire node")
+            kind = row[0]
+            if kind not in positions:
+                raise PyPipelineError("unknown py_ast wire node kind " + kind)
+            if kind == "SourceSpan":
+                raise PyPipelineError("invalid positional py_ast source span tag")
+            field_positions = positions[kind]
+            if len(row) != len(field_positions) + 1:
+                raise PyPipelineError("invalid positional py_ast wire field count")
+            # Validate every encoded field, including any field that an older
+            # constructor normalizes or ignores. This is not a partial decode.
+            decoded = [kind]
+            for index in range(1, len(row)):
+                decoded.append(_py_ast_from_wire_v2(row[index], files, positions))
+            return _py_ast_node_from_wire(kind, _PyAstV2Fields(decoded, field_positions))
+        if "s" in value:
+            from pcc.frontends.python import py_ast as _pa
+
+            row = value["s"]
+            if not isinstance(row, list) or len(row) != 5:
+                raise PyPipelineError("invalid positional py_ast source span")
+            file_id = row[0]
+            if (
+                not isinstance(file_id, int) or isinstance(file_id, bool)
+                or file_id < 0 or file_id >= len(files)
+            ):
+                raise PyPipelineError("invalid positional py_ast source file id")
+            for index in range(1, 5):
+                position = row[index]
+                if not isinstance(position, int) or isinstance(position, bool):
+                    raise PyPipelineError("invalid positional py_ast source position")
+            return _pa.SourceSpan(files[file_id], row[1], row[2], row[3], row[4])
+        if "b" in value:
+            row = value["b"]
+            if not isinstance(row, list):
+                raise PyPipelineError("invalid positional py_ast bytes")
+            for item in row:
+                if (not isinstance(item, int) or isinstance(item, bool)
+                        or item < 0 or item > 255):
+                    raise PyPipelineError("invalid positional py_ast byte")
+            return _py_ast_wire_bytes(row)
+        if "d" in value:
+            mapping = value["d"]
+            if not isinstance(mapping, dict):
+                raise PyPipelineError("invalid positional py_ast opaque map")
+            out = {}
+            for key, item in mapping.items():
+                out[str(key)] = _py_ast_from_wire_v2(item, files, positions)
+            return out
+        raise PyPipelineError("unknown positional py_ast wire tag")
+    if isinstance(value, list):
+        return tuple(_py_ast_from_wire_v2(item, files, positions) for item in value)
+    return value
+
+
+def _py_ast_v2_payload(ast_mod) -> dict:
+    files: list = []
+    file_ids: dict = {}
+    module = _py_ast_to_wire_v2(ast_mod, files, file_ids)
+    return {"schema": _PY_AST_WIRE_SCHEMA_V2, "files": files, "module": module}
+
+
+def _decode_py_ast_v2_payload(payload):
+    if len(payload) != 3 or "files" not in payload or "module" not in payload:
+        raise PyPipelineError("invalid positional py_ast wire payload")
+    files = payload["files"]
+    if not isinstance(files, list):
+        raise PyPipelineError("invalid positional py_ast source file table")
+    seen = {}
+    for file in files:
+        if not isinstance(file, str) or file in seen:
+            raise PyPipelineError("invalid positional py_ast source file table")
+        seen[file] = True
+    return _py_ast_from_wire_v2(payload["module"], files, _py_ast_v2_field_positions())
+
+
+def _write_py_ast_wire_v2(path: str, ast_mod) -> None:
+    payload = _py_ast_v2_payload(ast_mod)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(payload))
+
+
 def _write_py_ast_wire(path: str, ast_mod) -> None:
     payload = {"schema": _PY_AST_WIRE_SCHEMA, "module": _py_ast_to_wire(ast_mod)}
     with open(path, "w", encoding="utf-8") as f:
@@ -953,6 +1108,8 @@ def _decode_py_ast_wire(text: str, path: str = ""):
 
     payload = json.loads(text)
     schema = payload.get("schema") if isinstance(payload, dict) else None
+    if schema == _PY_AST_WIRE_SCHEMA_V2:
+        return _decode_py_ast_v2_payload(payload)
     if schema != _PY_AST_WIRE_SCHEMA:
         raise PyPipelineError(
             "invalid frontend py_ast wire file " + path + " schema=" + str(schema)

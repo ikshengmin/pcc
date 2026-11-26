@@ -721,3 +721,24 @@ def test_transport_supports_source_rebuilt_and_exports_only_workers(tmp_path):
     assert reason == ""
     assert snapshots[0]
     assert snapshots[1] == {}
+
+
+def test_transport_accepts_strict_positional_ast_snapshots_and_rejects_corruption(tmp_path):
+    from pcc.frontends.python import pipeline_ast_wire
+
+    exports_path, ast_dir = _transport_fixture(tmp_path, indexed=True)
+    path = tmp_path / "asts" / "module_0.json"
+    module = pipeline_ast_wire._read_py_ast_wire(str(path))
+    pipeline_ast_wire._write_py_ast_wire_v2(str(path), module)
+    original = path.read_text(encoding="utf-8")
+    token, reason = prepare_closed_young_transport(exports_path, ast_dir, [0])
+    assert reason == ""
+    assert validate_closed_young_transport(token, exports_path, ast_dir, [0]) == ""
+    snapshots, reason = load_closed_young_transport(token, exports_path, ast_dir, [0])
+    assert reason == "" and snapshots[1][0] == original
+    assert pipeline_ast_wire._decode_py_ast_wire(snapshots[1][0]) == module
+    payload = json.loads(original)
+    payload["module"] = {"unknown": []}
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    assert prepare_closed_young_transport(exports_path, ast_dir, [0])[0] is None
+    assert validate_closed_young_transport(token, exports_path, ast_dir, [0])

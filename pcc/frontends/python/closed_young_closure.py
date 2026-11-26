@@ -620,9 +620,18 @@ def _prepare_transport(exports_path, ast_dir, assigned_indices, *, snapshots=Non
             seen_paths.add(record["path"])
             ast_text = contents.decode("utf-8")
             payload = json.loads(ast_text)
-            if (not isinstance(payload, dict) or set(payload) != {"schema", "module"}
-                    or payload["schema"] != pipeline_ast_wire._PY_AST_WIRE_SCHEMA
-                    or payload["schema"] != "pcc.frontends.python.py_ast.v1"):
+            if not isinstance(payload, dict):
+                return None, "unsupported AST transport schema/members"
+            ast_schema = payload.get("schema")
+            if ast_schema == pipeline_ast_wire._PY_AST_WIRE_SCHEMA:
+                if (ast_schema != "pcc.frontends.python.py_ast.v1"
+                        or set(payload) != {"schema", "module"}):
+                    return None, "unsupported AST transport schema/members"
+            elif ast_schema == pipeline_ast_wire._PY_AST_WIRE_SCHEMA_V2:
+                if (ast_schema != "pcc.frontends.python.py_ast.v2"
+                        or set(payload) != {"schema", "files", "module"}):
+                    return None, "unsupported AST transport schema/members"
+            else:
                 return None, "unsupported AST transport schema/members"
             if type(pipeline_ast_wire._decode_py_ast_wire(ast_text, record["path"])) is not py_ast.Module:
                 return None, "AST transport does not contain a module"

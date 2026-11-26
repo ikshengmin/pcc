@@ -12,9 +12,9 @@ NATIVE_WIRE_CONTRACT_PROGRAM = '''import json
 from pcc.frontends.python.py_ast_contract import PY_AST_FIELD_NAME_OVERRIDES
 from pcc.frontends.python.pipeline_ast_wire import (
     _PY_AST_FIELD_NAME_OVERRIDES, _py_ast_to_wire, _py_ast_from_wire,
-    _decode_py_ast_wire,
+    _decode_py_ast_wire, _py_ast_v2_payload,
 )
-from pcc.frontends.python.py_ast import DynType, SetType, ClassType, ValueArrayType
+from pcc.frontends.python.py_ast import DynType, SetType, ClassType, ValueArrayType, SourceSpan
 from pcc.frontends.python.py_lift import parse_and_lift
 def main():
     assert _PY_AST_FIELD_NAME_OVERRIDES is PY_AST_FIELD_NAME_OVERRIDES
@@ -31,10 +31,18 @@ def main():
     recovered = _py_ast_from_wire(json.loads(json.dumps(_py_ast_to_wire(module))))
     assert recovered == module
     assert recovered.body[0].body[1].args[1].default.ident == "token"
+    compact = _py_ast_v2_payload(module)
+    assert compact["files"] == ["wire.py"]
+    assert _decode_py_ast_wire(json.dumps(compact)) == module
+    spans = (SourceSpan("例.py", -1, 0, 1, 2), SourceSpan("<builtins>", 0, 0, 0, 0))
+    compact_spans = _py_ast_v2_payload(spans)
+    assert compact_spans["files"] == ["例.py", "<builtins>"]
+    assert _decode_py_ast_wire(json.dumps(compact_spans)) == spans
     escaped = _decode_py_ast_wire(__HOST_ESCAPE_WIRE__)
     assert [ord(character) for character in escaped.docstring] == __ESCAPE_POINTS__
     assert json.dumps(escaped.docstring) == __HOST_ESCAPE_TEXT__
     assert _py_ast_from_wire(_py_ast_to_wire(escaped)) == escaped
+    assert _decode_py_ast_wire(json.dumps(_py_ast_v2_payload(escaped))) == escaped
     print("AST_WIRE_CONTRACT_OK")
 main()
 '''
@@ -236,3 +244,169 @@ def test_native_ast_wire_uses_shared_contract_all_gcs(
         assert result.returncode == 0, (gc, result.stderr)
         assert result.stdout == "AST_WIRE_CONTRACT_OK\n"
         assert result.stderr == ""
+
+
+def test_private_positional_ast_wire_roundtrip_and_v1_compatibility(tmp_path):
+    from pcc.frontends.python import pipeline_ast_wire as wire
+    from pcc.frontends.python.py_lift import parse_and_lift
+
+    source = (
+        "class Box:\n"
+        "    def method(self, value: int = 7, *, label=None):\n"
+        "        return (value, label, b'a\\x00b', 'é')\n"
+        "def call(*items, **kwargs):\n"
+        "    return Box().method(*items, **kwargs)\n"
+    )
+    module = parse_and_lift(source, "例\\probe.py", "wire")
+    legacy = tmp_path / "legacy.json"
+    compact = tmp_path / "compact.json"
+    wire._write_py_ast_wire(str(legacy), module)
+    wire._write_py_ast_wire_v2(str(compact), module)
+    v2 = json.loads(compact.read_text(encoding="utf-8"))
+    assert v2["schema"] == wire._PY_AST_WIRE_SCHEMA_V2
+    assert v2["files"] == ["例\\probe.py"]
+    assert json.loads(legacy.read_text(encoding="utf-8"))["schema"] == wire._PY_AST_WIRE_SCHEMA
+    assert wire._read_py_ast_wire(str(legacy)) == module
+    assert wire._read_py_ast_wire(str(compact)) == module
+    assert wire._py_ast_to_wire(wire._read_py_ast_wire(str(compact))) == wire._py_ast_to_wire(module)
+    first = compact.read_bytes()
+    wire._write_py_ast_wire_v2(str(compact), module)
+    assert compact.read_bytes() == first
+
+
+def test_positional_ast_wire_preserves_opaque_fields_and_source_locations():
+    from pcc.frontends.python import pipeline_ast_wire as wire, py_ast as ast
+
+    opaque = {"n": ("node", None), "s": b"\x00\xff", "b": True, "d": {"nested": 3},
+              "__pcc_py_ast_v1__": ["opaque"]}
+    first = ast.SourceSpan("first.py", -1, 0, 4, 7)
+    second = ast.SourceSpan("<builtins>", 0, 0, 0, 0)
+    module = ast.Module("m", (
+        ast.ExprStmt(first, ast.Name(first, ast.DynType("dyn"), "x")),
+        ast.ExprStmt(second, ast.Name(second, ast.DynType("dyn"), "y")),
+    ), opaque)
+    payload = wire._py_ast_v2_payload(module)
+    assert payload["files"] == ["first.py", "<builtins>"]
+    restored = wire._decode_py_ast_wire(json.dumps(payload))
+    assert restored == wire._py_ast_from_wire(wire._py_ast_to_wire(module))
+    assert restored.docstring["n"] == ("node", None)
+    assert restored.docstring["s"] == b"\x00\xff"
+    assert restored.body[0].span == first
+    assert restored.body[1].span == second
+
+
+@pytest.mark.parametrize("module,files", [
+    ({"unknown": []}, []),
+    ({"n": ["Module"], "d": {}}, []),
+    ({"n": []}, []),
+    ({"n": ["unknown"]}, []),
+    ({"n": ["Module", "m", [], None, "extra"]}, []),
+    ({"n": ["Module", "m", [], {"bad": 1}]}, []),
+    ({"s": [0, 1, 2, 3, 4]}, []),
+    ({"s": [-1, 1, 2, 3, 4]}, ["f"]),
+    ({"s": [True, 1, 2, 3, 4]}, ["f"]),
+    ({"s": [0, 1, "2", 3, 4]}, ["f"]),
+    ({"s": [0, 1, 2, 3]}, ["f"]),
+    ({"n": ["SourceSpan", "f", 1, 2, 3, 4]}, ["f"]),
+    ({"b": [256]}, []),
+    ({"b": [True]}, []),
+    ({"b": "bad"}, []),
+    ({"d": []}, []),
+    (None, ["duplicate", "duplicate"]),
+    (None, [1]),
+    (None, {}),
+])
+def test_positional_ast_wire_rejects_malformed_records(module, files):
+    from pcc.frontends.python import pipeline_ast_wire as wire
+    from pcc.frontends.python.pipeline_modes import PyPipelineError
+
+    payload = {"schema": wire._PY_AST_WIRE_SCHEMA_V2, "files": files, "module": module}
+    with pytest.raises(PyPipelineError):
+        wire._decode_py_ast_wire(json.dumps(payload))
+
+
+@pytest.mark.parametrize("change", ["missing_files", "missing_module", "extra"])
+def test_positional_ast_wire_rejects_malformed_envelope(change):
+    from pcc.frontends.python import pipeline_ast_wire as wire
+    from pcc.frontends.python.pipeline_modes import PyPipelineError
+
+    payload = {"schema": wire._PY_AST_WIRE_SCHEMA_V2, "files": [], "module": None}
+    if change == "extra":
+        payload["extra"] = 1
+    else:
+        payload.pop(change.removeprefix("missing_"))
+    with pytest.raises(PyPipelineError):
+        wire._decode_py_ast_wire(json.dumps(payload))
+
+
+def test_positional_ast_wire_validates_before_opening_destination(tmp_path):
+    from pcc.frontends.python import pipeline_ast_wire as wire, py_ast as ast
+    from pcc.frontends.python.pipeline_modes import PyPipelineError
+
+    path = tmp_path / "ast.json"
+    path.write_bytes(b"prior complete sidecar")
+    with pytest.raises(PyPipelineError):
+        wire._write_py_ast_wire_v2(str(path), ast.SourceSpan("f", "bad", 0, 0, 0))
+    assert path.read_bytes() == b"prior complete sidecar"
+
+
+@pytest.mark.parametrize("checkpoint", [False, True])
+def test_ordinary_owned_export_selects_private_ast_wire_but_checkpoint_keeps_v1(monkeypatch, checkpoint):
+    from pcc.frontends.python import pipeline, pipeline_ast_wire as wire
+
+    if checkpoint:
+        monkeypatch.setenv("PCC_STAGE1_CHECKPOINT_STAGE", "1")
+    else:
+        monkeypatch.delenv("PCC_STAGE1_CHECKPOINT_STAGE", raising=False)
+    captured = {}
+
+    def worker(manifest, **kwargs):
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(pipeline._pipeline_frontend_worker_execution, "run_export_worker", worker)
+    assert pipeline._run_python_multi_export_worker({}) == 0
+    chosen = wire._write_py_ast_wire if checkpoint else wire._write_py_ast_wire_v2
+    assert captured["write_ast_wire"] is chosen
+    assert pipeline._write_py_ast_wire is wire._write_py_ast_wire
+
+
+def test_positional_ast_wire_layout_is_version_pinned():
+    import hashlib
+    from pcc.frontends.python.py_ast_contract import PY_AST_FIELD_NAME_OVERRIDES
+
+    # Any positional field-order change requires a new wire schema version.
+    layout = json.dumps(PY_AST_FIELD_NAME_OVERRIDES, sort_keys=True, separators=(",", ":"))
+    assert hashlib.sha256(layout.encode()).hexdigest() == (
+        "32cd8342c47b8d8ea41dacb06cebe7a19fc73e22bba90d8e1be0811c465b5242"
+    )
+
+
+def test_parallel_codegen_v1_and_private_v2_sidecars_emit_identical_ir(tmp_path, monkeypatch):
+    from pcc.frontends.python.pipeline import compile_python_multi
+
+    entry = tmp_path / "entry.py"
+    helper = tmp_path / "helper.py"
+    entry.write_text("from helper import value\ndef main():\n    print(value(3))\n", encoding="utf-8")
+    helper.write_text("def value(x: int) -> int:\n    return x + 4\n", encoding="utf-8")
+    monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", "2")
+    monkeypatch.setenv("PCC_PY_FRONTEND_AST_WIRE", "1")
+    monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
+    monkeypatch.delenv("PCC_STAGE1_CHECKPOINT_DIR", raising=False)
+    outputs = []
+    for legacy in (True, False):
+        with monkeypatch.context() as patch:
+            if legacy:
+                patch.setenv("PCC_STAGE1_CHECKPOINT_STAGE", "1")
+            else:
+                patch.delenv("PCC_STAGE1_CHECKPOINT_STAGE", raising=False)
+            path = tmp_path / ("legacy.ll" if legacy else "compact.ll")
+            profile = {}
+            compile_python_multi(
+                [str(entry), str(helper)], str(path),
+                module_names=["entry", "helper"], entry_module="entry",
+                backend="self", emit_llvm_only=True, profile=profile,
+            )
+            assert profile.get("counters", {}).get("multi_frontend_ast_wire_enabled") == 1
+            outputs.append(path.read_bytes())
+    assert outputs[0] == outputs[1]

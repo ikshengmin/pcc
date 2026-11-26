@@ -3106,13 +3106,19 @@ def _run_python_multi_export_worker(manifest) -> int:
         )
     except NameError:
         ordinary_callbacks = False
+    write_ast_wire = _write_py_ast_wire
     if ordinary_callbacks:
         owned_metadata = _pipeline_closed_world._closed_world_owned_export_metadata
+        # The checkpoint binds the original v1 sidecar contract. Ordinary
+        # owned export workers use the compact private sidecar, while public
+        # writer hooks and checkpoint identity remain unchanged.
+        if os.environ.get("PCC_STAGE1_CHECKPOINT_STAGE") != "1":
+            write_ast_wire = _pipeline_ast_wire._write_py_ast_wire_v2
     return _pipeline_frontend_worker_execution.run_export_worker(
         manifest,
         worker_timing_enabled=_python_frontend_worker_timing_enabled,
         build_closed_world_context=build_closed_world_context,
-        write_ast_wire=_write_py_ast_wire,
+        write_ast_wire=write_ast_wire,
         closed_world_reexport_edges=_closed_world_reexport_edges,
         closed_world_module_dependencies=_closed_world_module_dependencies,
         mark_function_object_exports=_mark_closed_world_function_object_exports,

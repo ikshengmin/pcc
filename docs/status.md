@@ -3442,8 +3442,79 @@ in the relevant section or issue and removes the entry.
    actual native five-pair read/write validation. No whole Stage2
    inference from these isolated attribution phases.
 
+   Stage2 private versioned positional AST sidecar transport:
+   ordinary exact-owned export worker writes v2 tagged positional nodes,
+   interned SourceSpan file table, strict location index/coordinate and
+   node arity/tag validation, explicit bytes/opaque map records. All
+   encoded fields decoded/validated; shared AST constructors retain
+   defaults, None normalization and original values. Positional layout
+   fingerprint pinned to v2; future field-order changes require version
+   bump. Public raw/v1 writer and Stage1 checkpoint-stage=1 sidecars
+   unchanged. Legacy v1 decoder unchanged, v2 exact envelope supported;
+   closed_young token validates exact members per version and decodes
+   same hashed bytes. Worker budgets/concurrency unchanged. Hosted
+   Stage1 direct python -m pcc and Stage2 effective worker env have no
+   checkpoint flag, so ordinary route configured in both; next hosted
+   receipt must verify actual use.
+   Frozen actual 32-module sidecars from625-source graph: all v2 decode
+   semantic AST and canonical v1 reencode exact originals; total
+   66,430,186 ->16,405,999B (-75.3%), aggregate original SHA256
+   2abf89280bd39fc3a85f54058e3a44dbf727470e811c2a710883b01700c2a703.
+   Actual c_parsetab17,852,685 ->4,359,081B; class_gen11,209,510 ->
+   2,687,524B; pipeline3,591,026 ->936,160B.
+   190 final focused host tests pass (native integration node deselected
+   but direct native fixture below), actual parallel two-module v1/v2
+   emitted IR byte-identical, checkpoint selector and closed_young
+   strict corruption/hash tests. Broader checkpoint suite298 pass,
+   7 reds reproduced on exact base56064cab (6 stale link mock signatures,
+   1 tracked Node body). No candidate regression claim for those.
+   Quiet source-matched host five pairs per real module, same codec
+   read/write roundtrip and small v1 control: c_parsetab CPU1.023089 ->
+   .958744s (-6.29%,5/5), RSS145,820 ->102,284KiB (-29.86%,5/5);
+   class_gen .772595 ->.651827s (-15.63%,5/5), RSS96,240 ->68,236KiB
+   (-29.10%,5/5); pipeline .308510 ->.243362s (-21.12%,4/5), RSS
+   startup floor neutral. Control .126–.130s, exact bytes, guard23.01s.
+   Source-owned runtime118.93s/386,174,976B, current193-member
+   provenance valid. Actual pcc0+self static x64 ELF codec fixture
+   52 modules/168,642,561B IR built149.70s/1,338,155,008B.
+   Native strict contract prints AST_V2_CONTRACT_OK (Unicode source
+   locations, opaque dict/bytes, 7 malformed tag/arity/location cases).
+   Same binary 3 actual modules x5 alternating exclusive quiet pairs
+   + unchanged small v1 control, full codec CPU/RSS all15/15 wins:
+   c_parsetab CPU15.154631 ->9.457991s (-37.59%), RSS415,252 ->
+   246,220KiB (-40.71%), reader component medians10.003575 ->
+   6.005407s, writer4.505764 ->3.021704; class_gen CPU9.704605 ->
+   6.052958s (-37.63%), RSS256,932 ->148,252KiB (-42.30%),
+   reader6.175384 ->3.902141, writer3.138149 ->1.839769; pipeline
+   CPU3.022381 ->1.919901s (-36.48%), RSS102,524 ->57,008KiB
+   (-44.40%), reader1.930198 ->1.271359, writer.913157 ->.572798.
+   Small v1 control .649–.731s, all45 output bytes exact respective
+   inputs, guard COMPLETE238.17s/452,395,008B. Same source-owned
+   corrected native downstream fixture58 modules/184,508,180B IR
+   built188.25s/1,373,794,304B; explicit pipeline_exports local-import
+   owner resolves initial isolated scratch omission. Actual class_gen
+   v1/v2 AST through real summary builder and lazy effect exports
+   produces exact prior native/host summary SHA256
+   add924f6487f4a56b59948ffacddf2d8d2895556605a5dd2ebce9ba5df06056a.
+   Both guarded native summary runs complete; single correctness runs,
+   not an additional A/B. No whole Stage2 parity claim.
+   Latest hosted x64 source6cbafc4a (not compact/V2) artifact15143435682:
+   export659.022s, summary202.441, preload220.162. Stage2 compiler tree
+   peak3,202,990,080B vs Stage1 2,877,579,264; owner outer3.715GB.
+   Only three codegen modules complete at timeout; terminal singleton
+   class_gen index209 (also ARM64). Exact latest log has class_gen
+   infer5.243s, prepare12.478s, completed frontend direct capture
+   17.729s/440,208 records/zero fallback, no completed backend emit.
+   c_codegen Stage2 frontend145.417/backend177.213s vs Stage1
+   23.242/62.348; cli_bootstrap121.096/137.198 vs18.061/47.021.
+   Oversized assembly handoff is intentional memory guard, not an
+   unexplained concurrency bug. Next: replay actual retained CI
+   pcc1 exact source6cbafc4a singleton class_gen/c_codegen with
+   source-matched context and actual phase/RSS instrumentation; no
+   full bootstrap or relaxed guard, then choose measured owner fix.
+
    Claims:
-   - Stage2 versioned positional AST wire and source file table: Codex, Linux, 2026-11-26T17:42Z, area selfhost
+   - none
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
