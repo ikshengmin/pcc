@@ -2063,13 +2063,23 @@ in the relevant section or issue and removes the entry.
    owner 4.902→2.665 s (-45.63%, normalized -46.96%, 5/5), exact frame
    text and packed objects. Helper median peak +1.58 MB under unchanged
    1 GiB guard; 126 focused and 1,421 ordinary x86 tests pass, one known
-   pointer-retirement register-home witness still red. Next: remaining
-   pairing/trampoline and frontend/backend owners, actual equal-ceiling
-   Stage2/3 CI. No full Stage2/3 speedup or ARM execution claim.
+   pointer-retirement register-home witness was subsequently repaired by
+   `698937ea`. The AArch64 typed adjacent-memory pairing pass now rejects
+   non-transfer first opcodes before probing the next event. On Linux host
+   CPython 3.13, actual `worker_resource_plan.py` compiled to AArch64 IR
+   (SHA256 `adff74021697f54cdd66549de703c9729a2bed4520837ebefda5f572f318d57b`),
+   indexed transport supplied 202,882 pre-pair events. Five alternating
+   same-input CPU pairs: median 0.531 -> 0.305 s (-42.6%, 5/5 wins),
+   unchanged disabled-pair control 0.173 -> 0.170 s; output record fields,
+   opcodes, operand tokens and encoded words identical, sections assembled.
+   144 focused typed pair/CFG/pipeline nodes pass (host, six workers,
+   standalone pytest); the new work-count test fails against the old pass.
+   This is a cross-target pass-level measurement, not native ARM, Stage2,
+   or whole-language acceptance. CI qualification pending. Next: trampoline
+   threading and remaining frontend/backend owners, equal-ceiling Stage2/3 CI.
    [Phase investigation](investigations/stage2-worker-budget-parity-45643044565.md).
 
    Claims:
-   - Stage2 backend pairing/trampoline compile-time attribution and optimization: Codex, Linux, 2026-11-26T09:07Z, area backend
    - Stage1 compile time on macOS (J2s): Claude, macOS, 2026-11-26T09:45Z, area backend (`self_backend_aarch64_typed_peepholes.py`, `self_backend_aarch64_typed_pass_context.py`, `self_backend_aarch64_fragments.py`, the AArch64 allocator `self_backend_aarch64_darwin_regalloc.py`, the Mach-O link files, `pcc/frontends/python/direct_object_cache.py` and their tests; not `self_backend_aarch64_typed_pair.py` or `self_backend_aarch64_typed_cfg.py`, which the Stage2 pairing/trampoline unit above holds)
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work

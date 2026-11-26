@@ -95,3 +95,19 @@ def test_unbalanced_barrier_fails_closed(begin):
     ctx = PairEvents()
     with pytest.raises(Exception, match="barrier"):
         typed.pair_adjacent_aarch64_64bit_memory_ops_records(ctx, [ctx.add("", barrier=begin)])
+
+
+def test_nontransfer_events_do_not_probe_pair_operands():
+    class CountingEvents(PairEvents):
+        def __init__(self):
+            super().__init__()
+            self.reads = []
+
+        def opcode(self, record):
+            self.reads.append(record)
+            return super().opcode(record)
+
+    ctx = CountingEvents()
+    records = [ctx.add("mov"), ctx.add("ret"), ctx.add("nop")]
+    assert typed.pair_adjacent_aarch64_64bit_memory_ops_records(ctx, records) == records
+    assert ctx.reads == records

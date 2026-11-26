@@ -77,7 +77,8 @@ def pair_adjacent_aarch64_64bit_memory_ops_records(ctx, records, *, enabled=True
         opcode = ctx.opcode(record_id)
         if opcode.startswith(("ldaxr", "ldxr", "ldaxp", "ldxp")):
             exclusive = True
-        if enabled and depth == 0 and not exclusive and index + 1 < len(records):
+        if (enabled and depth == 0 and not exclusive and index + 1 < len(records)
+                and opcode in ("ldr", "str", "ldur", "stur")):
             if ctx.memory_pair_barrier(records[index + 1]) is None:
                 paired = _pair(ctx, record_id, records[index + 1])
                 if paired is not None:
