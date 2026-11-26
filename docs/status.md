@@ -1869,7 +1869,11 @@ in the relevant section or issue and removes the entry.
    J3. TaskScope (5x CPython), `time.perf_counter` (7x), `str.encode` (5x).
    A1. Darwin thread-local access inline (TSD slot through `tpidrro_el0`,
        startup check, fallback to the call): the resolver is 0.65 us per
-       request, the inline read is not free; waits on the maintainer.
+       request, the inline read is not free. Approved by the user on
+       2026-11-26 (answer to a question naming this design). Starts after
+       the Stage2 TLV resolver-save unit (Codex, backend) releases its claim:
+       the inline fast path changes the call sequence that unit's
+       `self_backend_aarch64_typed_tlv.py` matches.
    B1. On an idle host, why a w4 request costs about 50% more processor
        time than a w1 request. B2. Scheduler: the global ready-node pool
        lock and the shared counters become per-carrier caches and batched
