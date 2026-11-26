@@ -91,6 +91,65 @@ def _same(a: CompilerInt4, b: CompilerInt4) -> bool:
             and a.third == b.third and a.fourth == b.fourth)
 
 
+# Candidate search on the CPython host. Every window a pass can rewrite
+# starts with one of a few opcodes, and most records start none, yet each
+# pass used to test every position in Python. _host_positions finds the
+# positions whose record has one of the given header opcodes with C-level
+# bytes and regular-expression scans (an instruction's header carries its
+# opcode; a label or directive's is zero), and the passes bulk-copy the IDs
+# between those positions. The result is a superset of the positions a pass
+# can rewrite, so the output is unchanged. Native arenas (pcc1) and opcodes
+# at or above 254 keep the record-by-record scan.
+_HOST_OPCODE_BYTES = bytes([value if value < 254 else 255 for value in range(1024)])
+_HOST_PATTERNS: dict = {}
+
+
+def _host_positions(p, opcodes: tuple):
+    """Sorted positions of P.ids whose header opcode is in OPCODES, or None."""
+    fragments = p.fragments
+    semantics = p.semantics
+    if (p.ids._address != 0 or fragments.records._address != 0
+            or semantics.headers._address != 0 or type(p.ids._values) is not list):
+        return None
+    for opcode in opcodes:
+        # Zero selects the records without an instruction header.
+        if type(opcode) is not int or opcode < 0 or opcode >= 254:
+            return None
+    headers = semantics.headers._values
+    total = semantics.headers._length // 4
+    codes = getattr(fragments, "decoded_opcode_codes", None)
+    try:
+        if semantics is fragments.semantics and type(codes) is bytearray:
+            # Records and headers are append-only while a module is emitted.
+            if len(codes) < total:
+                codes.extend(map(_HOST_OPCODE_BYTES.__getitem__, headers[len(codes) * 4:total * 4:4]))
+        else:
+            codes = bytes(map(_HOST_OPCODE_BYTES.__getitem__, headers[0:total * 4:4]))
+        sequence = bytes(map(codes.__getitem__, p.ids._values))
+    except IndexError:
+        return None
+    pattern = _HOST_PATTERNS.get(opcodes)
+    if pattern is None:
+        import re
+        pattern = re.compile(b"[" + b"".join(re.escape(bytes((opcode,))) for opcode in opcodes) + b"]")
+        _HOST_PATTERNS[opcodes] = pattern
+    return [match.start() for match in pattern.finditer(sequence)]
+
+
+def _host_copy_to_candidate(p, positions, cursor: int, index: int, copy: bool):
+    """Bulk-copy P.ids from INDEX to the next candidate; return (cursor, index).
+
+    INDEX is unchanged when it is itself a candidate. COPY false only skips
+    (the deferred-prefix stack pass replays the prefix at its first rewrite).
+    """
+    while cursor < len(positions) and positions[cursor] < index:
+        cursor += 1
+    stop = positions[cursor] if cursor < len(positions) else p.ids._length
+    if stop > index and copy:
+        p.output.extend_from(p.ids, index, stop - index)
+    return cursor, max(stop, index)
+
+
 class _SpanOwnerTransfer:
     """One-shot authority issued only by the fresh private native-sink factory.
 
@@ -136,6 +195,14 @@ class _Pass:
             records = fragments.records
             record_count = len(records) // 4
             index = len(self.ids) if checked else 0
+            if (not checked and semantics is fragments.semantics and not semantics.verify_each
+                    and getattr(semantics, "complete_records", -1) == record_count
+                    and self.ids._address == 0 and type(self.ids._values) is list
+                    and self.ids._length > 0):
+                # require_complete already validated every record's header
+                # (the typed passes start with it); only the IDs remain.
+                if min(self.ids._values) >= 0 and max(self.ids._values) < record_count:
+                    index = len(self.ids)
             while index < len(self.ids):
                 record_id = self.ids.get_unchecked(index)
                 if record_id >= record_count:
@@ -450,7 +517,15 @@ def _run(fragments, semantics, span, mode, owned_matcher_only: bool = False):
             sturb_opcode: int = sem.semantic_opcode_id("sturb")
             strb_opcode: int = sem.semantic_opcode_id("strb")
             scan: int = 0
+            # The host scans only the positions holding mov_opcode.
+            scans = _host_positions(p, (mov_opcode,))
+            scan_cursor: int = 0
             while scan + 1 < len(p.ids):
+                if scans is not None:
+                    if scan_cursor >= len(scans) or scans[scan_cursor] + 1 >= len(p.ids):
+                        break
+                    scan = scans[scan_cursor]
+                    scan_cursor += 1
                 first_id: int = p.ids._values[scan]
                 second_id: int = p.ids._values[scan + 1]
                 if (fragments.records._values[first_id * 4 + 1] >= 0
@@ -463,13 +538,30 @@ def _run(fragments, semantics, span, mode, owned_matcher_only: bool = False):
                         or (mode in (3, 4) and next_opcode in (stur_opcode, str_opcode, sturb_opcode, strb_opcode))):
                         sparse_positions.append(scan)
                 scan += 1
+        if owned_matcher_only and mode in (9, 13, 14):
+            # Mode 9 rewrites at a mov, mode 13 at a cmp or fcmp; the
+            # identity mode 14 checks function labels, which are records
+            # without an instruction header.
+            if mode == 9:
+                first_opcodes = (sem.semantic_opcode_id("mov"),)
+            elif mode == 13:
+                first_opcodes = (sem.semantic_opcode_id("cmp"), sem.semantic_opcode_id("fcmp"))
+            else:
+                first_opcodes = (0,)
+            sparse_positions = _host_positions(p, first_opcodes)
+            if sparse_positions is None:
+                sparse_positions = list(range(len(p.ids)))
         while index < len(p.ids):
-            if owned_matcher_only and mode in (3, 4, 6, 7, 10):
+            if owned_matcher_only and mode in (3, 4, 6, 7, 9, 10, 13, 14):
                 while sparse_cursor < len(sparse_positions) and sparse_positions[sparse_cursor] < index:
                     sparse_cursor += 1
                 if sparse_cursor >= len(sparse_positions) or sparse_positions[sparse_cursor] != index:
-                    p.output.append(p.rid(index))
-                    index += 1
+                    # Copy every ID up to the next candidate at once.
+                    stop: int = sparse_positions[sparse_cursor] if sparse_cursor < len(sparse_positions) else len(p.ids)
+                    if stop <= index:
+                        stop = index + 1
+                    p.output.extend_from(p.ids, index, stop - index)
+                    index = stop
                     continue
             a, b, c, d = (p.rid(index + n) for n in range(4))
             replacement = -2
@@ -706,7 +798,14 @@ def fold_sign_extending_load(fragments, semantics, span):
     try:
         changed = False
         index = 0
+        candidates = _host_positions(p, (sem.semantic_opcode_id("ldr"), sem.semantic_opcode_id("ldur")))
+        cursor = 0
         while index < p.ids._length:
+            if candidates is not None:
+                cursor, stop = _host_copy_to_candidate(p, candidates, cursor, index, True)
+                if stop > index:
+                    index = stop
+                    continue
             a = p.rid(index)
             b = p.rid(index + 1) if index + 1 < p.ids._length else -1
             replacement = -2
@@ -876,7 +975,7 @@ def _run_aarch64_typed_peepholes(
             phase_timing.complete_backend_finalize("typed_fold_mov_arith_self_update", started)
         if phase_timing is not None:
             started = phase_timing.begin_backend_finalize("typed_fold_scratch_def_into_move")
-        span = fold_scratch_def_into_move(fragments, semantics, span)
+        span = _run_owned_sparse(fragments, semantics, span, 9) if owned_stack_windows and _owned_timer_is_canonical(phase_timing) else fold_scratch_def_into_move(fragments, semantics, span)
         if phase_timing is not None:
             phase_timing.complete_backend_finalize("typed_fold_scratch_def_into_move", started)
         if phase_timing is not None:
@@ -896,7 +995,7 @@ def _run_aarch64_typed_peepholes(
             phase_timing.complete_backend_finalize("typed_fold_forwarded_cset_branch", started)
         if phase_timing is not None:
             started = phase_timing.begin_backend_finalize("typed_fold_cset_zero_branch")
-        span = fold_cset_zero_branch(fragments, semantics, span)
+        span = _run_owned_sparse(fragments, semantics, span, 13) if owned_stack_windows and _owned_timer_is_canonical(phase_timing) else fold_cset_zero_branch(fragments, semantics, span)
         if phase_timing is not None:
             phase_timing.complete_backend_finalize("typed_fold_cset_zero_branch", started)
         if phase_timing is not None:
@@ -965,7 +1064,16 @@ def _run_owned_stack(fragments, semantics, span, mode, transfer: _SpanOwnerTrans
             view = (record_snapshot, list(semantics.headers._values), list(semantics.tokens._values))
             index = 0
             changed = False
+            # Every window starts with a stack store (owned_stack.decide).
+            from .self_backend_aarch64_owned_stack import STUR, STURB
+            candidates = _host_positions(p, (STUR, STURB))
+            cursor = 0
             while index < p.ids._length:
+                if candidates is not None:
+                    cursor, stop = _host_copy_to_candidate(p, candidates, cursor, index, mode != 2 or changed)
+                    if stop > index:
+                        index = stop
+                        continue
                 a = p.rid(index)
                 decision = decide(view, mode, a, p.rid(index + 1), p.rid(index + 2), compact_records)
                 if decision[0] != 0:
@@ -1054,7 +1162,7 @@ def _owned_timer_is_canonical(phase_timing) -> bool:
 
 
 def _run_owned_cset(fragments, semantics, span):
-    from .self_backend_aarch64_owned_cset import decide
+    from .self_backend_aarch64_owned_cset import CSET, decide
     if fragments.records._address != 0 or semantics.headers._address != 0 or semantics.tokens._address != 0:
         return _run(fragments, semantics, span, 12)
     p = _Pass(fragments, semantics, span)
@@ -1062,7 +1170,14 @@ def _run_owned_cset(fragments, semantics, span):
         view = (list(fragments.records._values), list(semantics.headers._values), list(semantics.tokens._values))
         index = 0
         changed = False
+        candidates = _host_positions(p, (CSET,))
+        cursor = 0
         while index < p.ids._length:
+            if candidates is not None:
+                cursor, stop = _host_copy_to_candidate(p, candidates, cursor, index, True)
+                if stop > index:
+                    index = stop
+                    continue
             a = p.rid(index)
             b = p.rid(index + 1)
             decision = decide(view, a, b, p.rid(index + 2), p.rid(index + 3))
@@ -1088,7 +1203,7 @@ def _run_owned_cset(fragments, semantics, span):
 
 
 def _run_owned_arith(fragments, semantics, span):
-    from .self_backend_aarch64_owned_arith import decide
+    from .self_backend_aarch64_owned_arith import MOV, decide
     if fragments.records._address != 0 or semantics.headers._address != 0 or semantics.tokens._address != 0:
         return _run(fragments, semantics, span, 8)
     p = _Pass(fragments, semantics, span)
@@ -1096,7 +1211,14 @@ def _run_owned_arith(fragments, semantics, span):
         view = (list(fragments.records._values), list(semantics.headers._values), list(semantics.tokens._values))
         index = 0
         changed = False
+        candidates = _host_positions(p, (MOV,))
+        cursor = 0
         while index < p.ids._length:
+            if candidates is not None:
+                cursor, stop = _host_copy_to_candidate(p, candidates, cursor, index, True)
+                if stop > index:
+                    index = stop
+                    continue
             a = p.rid(index)
             b = p.rid(index + 1)
             decision = decide(view, a, b)
@@ -1119,7 +1241,7 @@ def _run_owned_arith(fragments, semantics, span):
 
 
 def _run_owned_zero_compare(fragments, semantics, span):
-    from .self_backend_aarch64_owned_compare import decide
+    from .self_backend_aarch64_owned_compare import MOVZ, decide
     if fragments.records._address != 0 or semantics.headers._address != 0 or semantics.tokens._address != 0:
         return _run(fragments, semantics, span, 5)
     p = _Pass(fragments, semantics, span)
@@ -1127,7 +1249,14 @@ def _run_owned_zero_compare(fragments, semantics, span):
         view = (list(fragments.records._values), list(semantics.headers._values), list(semantics.tokens._values))
         index = 0
         changed = False
+        candidates = _host_positions(p, (MOVZ,))
+        cursor = 0
         while index < p.ids._length:
+            if candidates is not None:
+                cursor, stop = _host_copy_to_candidate(p, candidates, cursor, index, True)
+                if stop > index:
+                    index = stop
+                    continue
             a = p.rid(index)
             decision = decide(view, a, p.rid(index + 1))
             if decision[0] >= 0 and p.dead(index + 2, decision[1]):
@@ -1150,7 +1279,7 @@ def _run_owned_zero_compare(fragments, semantics, span):
 
 
 def _run_owned_zero_branch(fragments, semantics, span):
-    from .self_backend_aarch64_owned_zero_branch import CBZ, decide
+    from .self_backend_aarch64_owned_zero_branch import CBZ, MOVZ, decide
     if fragments.records._address != 0 or semantics.headers._address != 0 or semantics.tokens._address != 0:
         return _run(fragments, semantics, span, 11)
     p = _Pass(fragments, semantics, span)
@@ -1158,7 +1287,14 @@ def _run_owned_zero_branch(fragments, semantics, span):
         view = (list(fragments.records._values), list(semantics.headers._values), list(semantics.tokens._values))
         index = 0
         changed = False
+        candidates = _host_positions(p, (MOVZ,))
+        cursor = 0
         while index < p.ids._length:
+            if candidates is not None:
+                cursor, stop = _host_copy_to_candidate(p, candidates, cursor, index, True)
+                if stop > index:
+                    index = stop
+                    continue
             a = p.rid(index)
             decision = decide(view, a, p.rid(index + 1))
             if decision[0] >= 0:
@@ -1190,6 +1326,13 @@ def _run_owned_store(fragments, semantics, span, mode):
 
 
 def _run_owned_move_matchers(fragments, semantics, span, mode):
+    if fragments.records._address != 0 or semantics.headers._address != 0 or semantics.tokens._address != 0:
+        return _run(fragments, semantics, span, mode)
+    return _run(fragments, semantics, span, mode, True)
+
+
+def _run_owned_sparse(fragments, semantics, span, mode):
+    """Modes 9 and 13 on the host: evaluate only windows that can start a rewrite."""
     if fragments.records._address != 0 or semantics.headers._address != 0 or semantics.tokens._address != 0:
         return _run(fragments, semantics, span, mode)
     return _run(fragments, semantics, span, mode, True)

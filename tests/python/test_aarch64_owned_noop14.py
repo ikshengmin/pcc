@@ -29,7 +29,12 @@ def test_private_identity_words_ids_and_scan_witness(monkeypatch):
         assert after==words and live.execute(after)==live.execute(words), 'identity words oracle'
         assert o._ids(f,out)==before and out!=span
         assert len(f.spans.nodes)==nodes
-        assert events==[('label',rid) for rid in before], 'private scan oracle'
+        # The host route visits every record without an instruction header
+        # (labels, directives, empty events) and skips instructions, whose
+        # function_label is False without any check that can fail.
+        events_only=[rid for rid in before if f.records.get4_unchecked(rid).second<0]
+        assert set(labels)<=set(events_only)
+        assert events==[('label',rid) for rid in events_only], 'private scan oracle'
     finally:s.close();f.close()
 
 

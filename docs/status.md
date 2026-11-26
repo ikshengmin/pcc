@@ -1808,7 +1808,11 @@ in the relevant section or issue and removes the entry.
        store/load forward 2265/2259; the other sixteen together under 300,
        ten of them none. Instruction selection already emits what most
        passes look for, yet each pass still copies and sweeps every
-       record. Next: (1) attribute the warm tail (link); (2) passes that
+       record. The typed peepholes now find their candidate windows on
+       the host from the header opcodes in one bytes scan and bulk-copy
+       the IDs between them (peephole passes on array_core 1.81 -> 0.83 s;
+       worker CPU array_core -14.1%, 297 -12.9%, five pairs, 5/5 wins,
+       objects byte-identical). Next: (1) attribute the warm tail (link); (2) passes that
        did not rewrite publish nothing and build no output; (3) the
        allocation model toward LLVM's (the maintainer's answer to P0 (c):
        at least LLVM parity): values without stack slots unless spilled,

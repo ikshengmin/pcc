@@ -108,6 +108,9 @@ class AArch64EmissionFragments:
         self.decoded_branches: dict = {}
         self.decoded_boundaries: dict = {}
         self.decoded_tokens: dict = {}
+        # One byte per record ID: its header opcode, or 255 at and above 254
+        # (typed_peepholes._host_positions; CPython host arenas only).
+        self.decoded_opcode_codes: bytearray = bytearray()
         if capture_semantics:
             try:
                 self.semantics = AArch64InstructionSemantics()
@@ -438,6 +441,7 @@ class AArch64EmissionFragments:
         self.decoded_branches.clear()
         self.decoded_boundaries.clear()
         self.decoded_tokens.clear()
+        self.decoded_opcode_codes.clear()
         if self.semantics is not None:
             self.semantics.reset()
         self.symbol_names.clear()
