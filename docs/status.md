@@ -2183,6 +2183,25 @@ in the relevant section or issue and removes the entry.
    plus CI contracts: 6290 tests and 49 subtests passed. Next: hosted Clang
    86-node gate; independent Source / cpp / reference remains at its 9/1207
    G++ failures, not waived. See [reference qualification](cpp-frontend.md#cpp17-platform-reference-qualification).
+   NumPy C++ source first-blocker unit: an owned C++17 `<assert.h>` and
+   `<cassert>` now rebind on every inclusion to the current NDEBUG state.
+   Active assertion is contextual-bool conditional evaluation, with a
+   source expression/file/line/enclosing function diagnostic on stderr
+   followed by the existing target C write/abort ABI, not fake-libc's
+   no-op. Source templates retain failure metadata; unrelated arbitrary
+   noexcept/noreturn calls remain rejected. Focused Linux host: 238 tests
+   passed, including x86-64/AArch64 Linux and Darwin AArch64 object emission.
+   Three real x86-64 ELF runs using a bounded runtime archive whose
+   write/abort source and object SHA receipts matched the current two
+   owners passed: successful side effect once, NDEBUG no evaluation and
+   reinclusion, and failed template emits expected diagnostic and SIGABRT.
+   G++ 14.2 independently confirms those outcomes (format differs by
+   implementation). Strict current-whole-runtime fixture added, hosted
+   execution pending; active Windows assertion and other unimplemented
+   C++ expression capabilities remain explicit frontiers. Actual unchanged
+   NumPy 2.4.4 halffloat.cpp (cef1d814...cd26) moves from missing assert.h
+   to missing stdlib.h, not an emitted object or NumPy build. Next NumPy
+   C++: owned C header spelling of cstdlib, then real generated config.
    The opt-in Go source probe reached `internal/bytealg/bytealg.go:9:2`; no dependency-closure executable exists.
    See the
    [closure audit](investigations/go-math-bits-original-closure-frontier.md).
@@ -2220,7 +2239,7 @@ in the relevant section or issue and removes the entry.
    neither an external token nor a caller-provided crate named core waives it.
 
    Claims:
-   - Owned C++ assertion header semantics (NumPy halffloat first C++ source blocker): Codex, Linux, 2026-11-26T16:05Z, area frontend-cpp
+   - none
 5. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:

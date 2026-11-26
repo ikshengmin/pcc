@@ -1,0 +1,2 @@
+// C++17 [assertions.assert]: the same macro and reinclusion semantics.
+#include "assert.h"

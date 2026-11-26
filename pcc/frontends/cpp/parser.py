@@ -185,6 +185,11 @@ class CppParser:
         self.language_linkage = None
         tokens = self._tokenize(text, filename)
         self.projection_names = {token.value for token in tokens if token.kind == "ID"}
+        if "__pcc_cpp_assert_fail" in self.projection_names:
+            # The assertion projection calls the target C runtime, not a
+            # same-spelled user local. Reserve the C projection names before
+            # binding any preceding parameters or local declarations.
+            self.function_projection_names.update(("write", "abort"))
         self.cursor = TokenCursor(tokens)
         declarations = self._declarations()
         for symbol in self.namespace_objects:
@@ -2960,6 +2965,9 @@ class CppParser:
 
     def _primary(self, address_operand=False):
         token = self.cursor.take()
+        if token.value == "__pcc_cpp_assert_fail":
+            from pcc.frontends.cpp.assertions import parse_failure
+            return parse_failure(self, token)
         from pcc.frontends.cpp.varargs import BUILTINS, parse_builtin
         if token.value in BUILTINS:
             return parse_builtin(self, token)
@@ -3259,6 +3267,9 @@ class CppParser:
         if kind == "literal":
             literal_kind, value, dtype, integer_value = pattern.value
             return self._literal(literal_kind, value, dtype, coord, integer_value)
+        if kind == 'assertion-failure':
+            from pcc.frontends.cpp.assertions import failure
+            return failure(self, pattern.value, coord)
         if kind == "string-literal":
             from pcc.frontends.cpp.string_literals import literal_expression
             spelling, length = pattern.value
