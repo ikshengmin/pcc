@@ -2963,6 +2963,7 @@ in the relevant section or issue and removes the entry.
    finalizer and suspension semantics. No benchmark-specific bypass.
 
    Claims:
+   - Stage1 worker-owned timed x64 per-function global index reuse: Codex, Linux, 2026-11-26T19:11Z, area backend-x64-global-index
    - Ordinary list iterator consumer attribution and private loop cursor proof: Codex, Linux, 2026-11-26T19:06Z, area runtime-codegen-iterator
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
