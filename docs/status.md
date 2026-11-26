@@ -3951,8 +3951,34 @@ in the relevant section or issue and removes the entry.
    structural method owner to count function-table snapshot visits vs
    mutations and choose safe sparse alternative only if justified.
 
+   Actual class_gen snapshot attribution (diagnostic only, old exact source
+   6cbafc4a, same retained native AST/context, same one-worker indexed
+   assembly route; only manifest output destinations differ). Host trace
+   enabled only inside method body, no map mutation: before existing restore
+   loop capture original snapshot size, current identities/new/deleted keys;
+   direct writer and alias-restoration site observations count actual map
+   mutations, plus paired local-binding inventory visit counters.
+   COMPLETE 107.810384 s, wait4 CPU 107.356188 s, peak isolated tree
+   844,271,616 B. Exact byte-identical 57,304,557-byte assembly SHA256
+   7165f5ed623388294453b9a74154db3e9562185daf3d9f446b03c35811777e16,
+   exact 727 funcs/332,713 instructions/86,393 blocks. 156 restored method
+   scopes (155 ClassLowering +1 ClassInfo): 18,843 entries copied and
+   18,843 restore writes, table size 118–123; exactly five direct binding
+   mutation attempts/effective, all new helpers preserved; zero changed
+   preexisting identities, deletes, or preexisting effective writes.
+   Duplicate forced-vs-mixed local binding inventory scans each involved
+   2,079 recursive calls and 3,697 statement visits (ClassLowering alone
+   2,078/3,660 each). Trace rows SHA256
+   2bfb98bb5a58c2109304f7d8e138a299cdf9b58528a1d002cd07f12d9c08293c.
+   Decision: real redundant work, but low absolute count versus 129.594 s
+   native class owner; no isolated native cost evidence. Do not replace
+   broad restore semantics with risky sparse journal as primary fix.
+   No speed claim or production changes. Next: actual host nested
+   method-generation call profile (not methods-being-compiled trace),
+   then source-matched native focused experiment on measured owner.
+
    Claims:
-   - Stage2 class method function-map snapshot attribution: Codex, Linux, 2026-11-26T19:00Z, area selfhost
+   - none
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
