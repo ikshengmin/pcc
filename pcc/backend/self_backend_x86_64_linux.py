@@ -21,6 +21,7 @@ guessing.
 """
 
 from . import BackendUnavailable
+from .indexed_phase_timing import begin_x86_backend_progress, complete_x86_backend_progress
 from .code_profile import apply_function_order_profile
 from .precise_stackmap import precise_stackmap_tables_enabled
 from .self_backend_dynamic_alloca import X86_DYNAMIC_ARRAY
@@ -3583,7 +3584,11 @@ def _emit_x86_64_module(
         valid = is_x86_64_windows_triple(prepared.triple) if windows else is_x86_64_linux_triple(prepared.triple)
         if not valid:
             raise BackendUnavailable("x86 emitter target mismatch: " + prepared.triple)
+        if phase_timing is not None:
+            progress_start = begin_x86_backend_progress(phase_timing, "target_memory_passes")
         prepared = run_self_target_memory_pass_pipeline(prepared, "self-x86_64-linux-v0")
+        if phase_timing is not None:
+            complete_x86_backend_progress(phase_timing, "target_memory_passes", progress_start)
         return _emit_prepared_x86_64_module(
             prepared, ir_text, stack_map_plans_out=stack_map_plans_out,
             phase_timing=phase_timing,
@@ -3635,6 +3640,8 @@ def _emit_prepared_x86_64_module(
     as the function is finished, and no module text is joined.
     """
     global _MODULE_SYMBOLS, _VARARG_FUNCTIONS, _TLS_GLOBALS
+    if phase_timing is not None:
+        progress_start = begin_x86_backend_progress(phase_timing, "module_setup")
     triple = prepared.triple
     validate_x86_tls_globals(prepared.globals_)
     _MODULE_SYMBOLS = prepared.module_symbols
@@ -3686,6 +3693,9 @@ def _emit_prepared_x86_64_module(
     globals_index = (
         [] if _share_globals_index and phase_timing is None else None
     )
+    if phase_timing is not None:
+        complete_x86_backend_progress(phase_timing, "module_setup", progress_start)
+        progress_start = begin_x86_backend_progress(phase_timing, "function_loop")
     try:
         for func in functions:
             if phase_timing is not None:
@@ -3733,6 +3743,8 @@ def _emit_prepared_x86_64_module(
                 globals_index[0].clear()
             globals_index.clear()
     if phase_timing is not None:
+        complete_x86_backend_progress(phase_timing, "function_loop", progress_start)
+        progress_start = begin_x86_backend_progress(phase_timing, "finalize")
         phase_start = phase_timing.start()
     if functions and precise_stackmap_tables_enabled("x86_64-unknown-linux-gnu"):
         plans = tuple(stack_map_plans[func.name] for func in functions)
@@ -3754,6 +3766,7 @@ def _emit_prepared_x86_64_module(
         reset_operand_intern()
         if phase_timing is not None:
             phase_timing.add(7, phase_start)
+            complete_x86_backend_progress(phase_timing, "finalize", progress_start)
         return ""
     chunks.append('.section .note.GNU-stack,"",@progbits')
     # The empty final chunk supplies the newline without copying the full text.
@@ -3762,4 +3775,5 @@ def _emit_prepared_x86_64_module(
     result = "\n".join(chunks)
     if phase_timing is not None:
         phase_timing.add(7, phase_start)
+        complete_x86_backend_progress(phase_timing, "finalize", progress_start)
     return result

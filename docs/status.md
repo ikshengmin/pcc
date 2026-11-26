@@ -3798,8 +3798,33 @@ in the relevant section or issue and removes the entry.
    quantify actual method function-table snapshot visits and mutations
    before selecting a structural optimization.
 
+   Bounded x86 backend progress diagnostics (not a performance claim).
+   Existing worker timing produces a fixed twelve flushed begin/complete
+   receipts for verify, layout, target memory passes, module setup,
+   function loop and finalization, under scope x86_backend / parent
+   backend_call. Incomplete/killed work leaves open begin marker, does
+   not fabricate elapsed completion. Existing sixteen inclusive aggregate
+   indices remain unchanged; custom aggregate-only observer protocol and
+   disabled path untouched. Linux and Windows emitted assembly identical
+   with/without diagnostics; original verifier exception pass-through,
+   clock failure best effort. Host 554 focused suite tests + 3 new clock
+   failure cases pass. Exact candidate source contextual direct capture
+   across full 625-source closure, all three modified compiler modules
+   fallback zero (timing 69 funcs/16,106 instructions, prepare 26/5,676,
+   x86 backend 325/236,939), complete 64.076 s, peak 540,274,688 B.
+   Fresh owned runtime provenance validated, compile native helper 22
+   modules (25.498 s, peak 468,062,208 B), static ELF no dynamic libpython,
+   SHA256 39ca3dd7fed8b8e8d62da0ccb15907ffb557f4bb4d06759b7260b25c15cb63,
+   all 12 native event records exact order and clock_ok=1, aggregate
+   totals zero, unknown label rejected; NATIVE_X86_PROGRESS_OK, rc0.
+   This patch instruments future actual hosted native long-tail backend
+   phases; does not claim old retained native binary contains the patch.
+   No full bootstrap, no limit change. Next independent measured
+   structural method owner to count function-table snapshot visits vs
+   mutations and choose safe sparse alternative only if justified.
+
    Claims:
-   - Stage2 class_gen same-route host comparator and method attribution: Codex, Linux, 2026-11-26T18:30Z, area selfhost
+   - none
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its

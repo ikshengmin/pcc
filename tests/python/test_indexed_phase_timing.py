@@ -1512,3 +1512,96 @@ def test_backend_finalize_unknown_labels_and_missing_start_do_not_read_clock(mon
         "scope": "backend_finalize", "phase": "prepare", "parent": "backend_finalize",
         "event": "complete", "clock_ok": "0", "module": "sample",
     }]
+
+
+def test_x86_backend_progress_receipts_are_bounded_without_aggregate_changes(monkeypatch):
+    sink = RecordingSink()
+    ticks = iter((100, 107, 200, 211, 300, 313, 400, 417, 500, 519, 600, 623))
+    monkeypatch.setattr(timing_module.sys, 'stderr', sink)
+    monkeypatch.setattr(timing_module.time, 'perf_counter_ns', lambda: next(ticks))
+    timer = ModulePhaseTiming('sample')
+    phases = ('prepare_verify', 'prepare_layout', 'target_memory_passes',
+              'module_setup', 'function_loop', 'finalize')
+    for phase in phases:
+        started = timing_module.begin_x86_backend_progress(timer, phase)
+        timing_module.complete_x86_backend_progress(timer, phase, started)
+    rows = _events(sink)
+    assert len(rows) == sink.flushes == 12
+    assert [(row['phase'], row['event']) for row in rows] == [
+        (phase, event) for phase in phases for event in ('begin', 'complete')]
+    assert all(row['scope'] == 'x86_backend' and row['parent'] == 'backend_call' for row in rows)
+    assert all('duration_ns' not in row for row in rows[::2])
+    assert [row['duration_ns'] for row in rows[1::2]] == ['7', '11', '13', '17', '19', '23']
+    assert timer.totals_ns == [0] * 16
+    assert timing_module.begin_x86_backend_progress(timer, 'unknown') == 0
+    timing_module.complete_x86_backend_progress(timer, 'unknown', 1)
+    assert timing_module.begin_x86_backend_progress(Probe(), 'prepare_verify') == 0
+    assert len(sink.lines) == 12
+
+
+@pytest.mark.parametrize('triple', TARGETS[2:])
+def test_x86_backend_progress_preserves_assembly_and_real_phase_order(capsys, triple):
+    from pcc.backend.self_backend_parse import parse_self_backend_module
+    source = 'target triple = "' + triple + '"\n' + '''
+        define i64 @add(i64 %a, i64 %b) {
+        entry:
+            %sum = add i64 %a, %b
+            ret i64 %sum
+        }
+    '''
+    plain = target_objects.emit_indexed_assembly(parse_self_backend_module(source))
+    assert 'scope=x86_backend' not in capsys.readouterr().err
+    timer = ModulePhaseTiming('actual')
+    timed = target_objects.emit_indexed_assembly(parse_self_backend_module(source), phase_timing=timer)
+    assert plain == timed and plain
+    rows = [dict(part.split('=', 1) for part in line.split()[3:])
+            for line in capsys.readouterr().err.splitlines()
+            if line.startswith('pcc coarse phase scope=x86_backend ')]
+    assert [(row['phase'], row['event']) for row in rows] == [
+        (phase, event) for phase in (
+            'prepare_verify', 'prepare_layout', 'target_memory_passes',
+            'module_setup', 'function_loop', 'finalize',
+        ) for event in ('begin', 'complete')]
+    assert all(row['clock_ok'] == '1' for row in rows)
+    assert all('duration_ns' not in row for row in rows[::2])
+    assert all(int(row['duration_ns']) >= 0 for row in rows[1::2])
+
+
+def test_x86_backend_progress_failure_leaves_open_phase_and_original_exception(monkeypatch, capsys):
+    from pcc.backend import self_backend_prepare
+    from pcc.backend.self_backend_parse import parse_self_backend_module
+    original = RuntimeError('original verifier failure')
+    def fail(_module):
+        raise original
+    monkeypatch.setattr(self_backend_prepare, 'verify_parsed_module', fail)
+    module = parse_self_backend_module('target triple = "x86_64-unknown-linux-gnu"\n')
+    with pytest.raises(RuntimeError) as caught:
+        target_objects.emit_indexed_assembly(module, phase_timing=ModulePhaseTiming('actual'))
+    assert caught.value is original
+    lines = [line for line in capsys.readouterr().err.splitlines()
+             if line.startswith('pcc coarse phase scope=x86_backend ')]
+    assert len(lines) == 1
+    assert 'phase=prepare_verify' in lines[0] and 'event=begin' in lines[0]
+    assert 'duration_ns' not in lines[0]
+
+
+@pytest.mark.parametrize('failure', ('start', 'end', 'backwards'))
+def test_x86_backend_progress_clock_failure_is_best_effort(monkeypatch, failure):
+    sink = RecordingSink()
+    calls = []
+    def clock():
+        calls.append(None)
+        if failure == 'start' or (failure == 'end' and len(calls) == 2):
+            raise DiagnosticAbort('clock unavailable')
+        return 100 if len(calls) == 1 else 99
+    monkeypatch.setattr(timing_module.sys, 'stderr', sink)
+    monkeypatch.setattr(timing_module.time, 'perf_counter_ns', clock)
+    timer = ModulePhaseTiming('sample')
+    started = timing_module.begin_x86_backend_progress(timer, 'prepare_verify')
+    timing_module.complete_x86_backend_progress(timer, 'prepare_verify', started)
+    before = len(calls)
+    started = timing_module.begin_x86_backend_progress(timer, 'prepare_layout')
+    timing_module.complete_x86_backend_progress(timer, 'prepare_layout', started)
+    assert len(calls) == before and timer.failed
+    assert all('duration_ns' not in row for row in _events(sink))
+    assert len(sink.lines) == 4 and timer.totals_ns == [0] * 16

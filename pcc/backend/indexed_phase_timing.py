@@ -303,6 +303,47 @@ def _write_event(scope, phase, parent, event, clock_ok, duration_ns, module_name
         pass
 
 
+# Fixed x86 module boundaries: receipt-only, overlapping aggregate 2.
+_X86_BACKEND_PROGRESS_PHASES = (
+    "prepare_verify", "prepare_layout", "target_memory_passes",
+    "module_setup", "function_loop", "finalize",
+)
+
+
+def begin_x86_backend_progress(timer, phase: str) -> int:
+    # Public emitter callers may supply their own aggregate-only timer. Do not
+    # add methods to that protocol or invoke arbitrary observer callbacks.
+    try:
+        if type(timer) is not ModulePhaseTiming or phase not in _X86_BACKEND_PROGRESS_PHASES:
+            return 0
+        started = timer.start()
+        _write_event("x86_backend", phase, "backend_call", "begin",
+                     not timer.failed and started > 0, 0,
+                     _bounded_module_name(timer.module_name))
+        return started
+    except BaseException:
+        return 0
+
+
+def complete_x86_backend_progress(timer, phase: str, started: int) -> None:
+    try:
+        if type(timer) is not ModulePhaseTiming or phase not in _X86_BACKEND_PROGRESS_PHASES:
+            return
+        elapsed = 0
+        if not timer.failed and started > 0:
+            try:
+                elapsed = time.perf_counter_ns() - started
+                if elapsed < 0:
+                    timer.failed = True
+            except BaseException:
+                timer.failed = True
+        _write_event("x86_backend", phase, "backend_call", "complete",
+                     not timer.failed and started > 0, elapsed,
+                     _bounded_module_name(timer.module_name))
+    except BaseException:
+        pass
+
+
 class CoarsePhaseTiming:
     """Fixed coordinator boundary labels in the direct build path.
 

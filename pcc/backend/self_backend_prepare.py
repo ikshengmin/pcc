@@ -5,11 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from . import BackendUnavailable
+from .indexed_phase_timing import begin_x86_backend_progress, complete_x86_backend_progress
 
 from .self_backend_ir import ParsedFunction, ParsedModule
 from .self_backend_module_symbols import PreparedModuleSymbols, prepare_module_symbols
 from .self_backend_parse import parse_self_backend_module
 from .self_backend_stackprep import assign_stack_slots
+from .self_backend_target_match import is_x86_64_linux_triple, is_x86_64_windows_triple
 from .self_backend_verify import verify_parsed_module
 from . import worker_phase_observer as _worker_phase_observer
 
@@ -70,6 +72,11 @@ def prepare_parsed_module_for_target(
     """Prepare an already-final parsed/indexed module without reparsing text."""
     # The verifier constructs each function's indexed kernel at its definition
     # boundary.  Every later migrated pass then observes the same stable IDs.
+    x86_progress = phase_timing is not None and (
+        is_x86_64_linux_triple(module.triple) or is_x86_64_windows_triple(module.triple)
+    )
+    if x86_progress:
+        progress_start = begin_x86_backend_progress(phase_timing, "prepare_verify")
     if phase_timing is not None:
         phase_start = phase_timing.start()
     verify_parsed_module(module)
@@ -85,6 +92,10 @@ def prepare_parsed_module_for_target(
         debug_to_wire(module.type_context.debug_info, module.functions)
     if phase_timing is not None:
         phase_timing.add(3, phase_start)
+    if x86_progress:
+        complete_x86_backend_progress(phase_timing, "prepare_verify", progress_start)
+        progress_start = begin_x86_backend_progress(phase_timing, "prepare_layout")
+    if phase_timing is not None:
         phase_start = phase_timing.start()
     globals_ = list(module.globals_)
     functions = list(module.functions)
@@ -109,4 +120,6 @@ def prepare_parsed_module_for_target(
     )
     if phase_timing is not None:
         phase_timing.add(4, phase_start)
+    if x86_progress:
+        complete_x86_backend_progress(phase_timing, "prepare_layout", progress_start)
     return prepared
