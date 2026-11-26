@@ -169,7 +169,20 @@ stdlib surface (`e3b0440f`) have landed with focused evidence. This
 non-skip receipt queued the new integrated source in
 [run 45862787448](https://github.com/ikshengmin/pcc/actions/runs/45862787448),
 head `c20c2c01`, alongside the older comparison (maintainer allows
-accumulating CI; no current useful run canceled). Do not claim any hosted lane green from focused tests. The latest completed
+accumulating CI; no current useful run canceled). At 17:31 UTC on
+2026-11-26, run 45856871699 is in progress (23 green, 10 red, 4 active).
+Linux x86_64 Stage1 step succeeded in 21m50s versus prior 28m14s;
+Linux ARM64 Stage1 step succeeded in 29m01s versus 30m33s. These are
+job-step wall times, not exact compile-time or peak RSS receipts. Both
+Stage2 owner steps active, Windows Stage1 still active. Run 45862787448
+is pending. Since c20c2c01 a substantial additional independent batch
+landed: actual native class-preload private compact wire `16f2386b`
+(80.08% worker CPU and 81.20% RSS reduction across 5/5 pairs), real
+compiler typed CFG `81af95e8`, exact four-platform worker-prior test
+fix `bd763672`, and unchanged NumPy C++ frontier header fixes
+`b53d7e49`, `54ba01e6`, `9ea658c7`, `fdbe7161`. This non-skip receipt
+queues a distinct integrated snapshot covering all these units; existing
+runs remain intact. Do not claim any hosted lane green from focused tests. The latest completed
 [checkpoint comparison](investigations/checkpoint-validation-45427972345.md)
 keeps that baseline: candidate `7ec14d388` has exact test regressions
 [#19](https://github.com/ikshengmin/pcc/issues/19) and
