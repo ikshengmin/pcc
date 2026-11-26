@@ -3224,10 +3224,45 @@ in the relevant section or issue and removes the entry.
        Windows safe workers1,633.741s, backend4,097.461, function
        emit2,427.939, stack-map857.304, verify478.381. These snapshots
        predate recent optimizations; no causal platform comparison.
+       Actual ARM typed publication attribution/rejected candidates
+       (Codex/Linux, base7f8a3bda, diagnostic only). Full contextual
+       625-source direct indexed no-libpython/fallback0 capture of real
+       ARM Linux c_codegen (1039 funcs/95,041 blocks/358,843 instructions)
+       and worker_resource_plan (105/13,050/47,696). c_codegen final
+       publication one contiguous ordinary run (-2,18182085,1493150),
+       1,493,150 events, 558,137 no-reloc words (37.4%), 265,150
+       contiguous no-reloc runs (mean2.105), 32,210 runs >=4 totaling
+       230,299 words, 494,150 fixups. Full actual PCO22,204,134B sha256
+       88554c1a84e58c21ae6def1a6a56049726bdfc5ed8c6c726feb94e427264a7b0;
+       exact same PCO hash from independent recapture, frozen publication
+       replay with actual metadata directives and both redesigned arms.
+       Diagnostic publication CPU4.787s,1,188 samples: next_record_id,
+       get_unchecked, set_unchecked, next_record 372 (31.3%);
+       frozen CompilerInt4 constructors226 (19.0%). Small actual PCO
+       2,777,336B sha256
+       cbff0094db13b8b62e2abb637264d6c9902579c1c1d09e7f36f46cc5f2307717.
+       First private marked-worker borrowed final run bypassed cursor
+       with no copy, 77 host tests pass, strict contextual capture
+       fallback0 but native publication gained a valuebox_new edge
+       (actual unchanged closure has existing call_slots19,
+       valuebox_get_field2; focused kernel contract is stricter).
+       Reject this candidate before timing; no production changes.
+       Second design left publish_fragment byte-identical and accelerated
+       exact host middle-of-run cursor positions with canonical fallback
+       for malformed/overridden accessors and final element; 101 host
+       tests pass, one stock Darwin native invocation not run on Linux.
+       Contextual value_arena199 funcs/11,586 blocks/41,035 instructions,
+       emitter324/34,162/143,487, both fallback0/no libpython; native
+       next_record no py_obj_call/valuebox edge, but new native cursor
+       address/length condition per event. Exact full PCO and all event
+       counters match, preliminary non-quiet owner CPU5.162 vs4.706s
+       (+9.7% one-off, NOT formal A/B). Reject as unpromising rather
+       than consume formal quiet slot or risk Stage2 overhead.
+       Both changes restored; no Stage1 or Stage2 speed claim.
        Next (latest actual Stage1 codegen priority): (1) ARM typed
-       finalize/prepare repeated read/write span/publication work, guided
-       by the measured dominant child phases and preserving private/public
-       snapshot contracts; then remaining common indexed fact/emission
+       finalize/prepare trampoline branch indexing or typed validation
+       repeated work, guided by measured dominant child phases and
+       preserving private/public snapshot contracts; then common indexed fact/emission
        owner; (2) J2 (e) one error
        landing per function after registering temporaries once, measured
        against the actual CI block inventory; (3) the allocation model
@@ -3498,7 +3533,6 @@ in the relevant section or issue and removes the entry.
    only an independently validated safe reuse design if worthwhile.
 
    Claims:
-   - Stage1 ARM typed final publication and contiguous word runs: Codex, Linux, 2026-11-26T19:56Z, area backend-aarch64-publish
    - Actual runtime thread-local access count and owner cost: Codex, Linux, 2026-11-26T20:01Z, area runtime-gc-tls
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
