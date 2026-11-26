@@ -36,12 +36,63 @@ def fixed_emission_configuration(monkeypatch):
     monkeypatch.setenv("PCC_SELF_TARGET_PASS_TRANSPORT", "text")
 
 
+def _without_protocol_fact_replay(function):
+    """Reverse only the later x86 private fact-cache plumbing.
+
+    The older globals-index oracle still has its original fixed SHA, below;
+    neither the new implementation nor a new hash defines that reference.
+    """
+    for parent in list(ast.walk(function)):
+        for field, values in ast.iter_fields(parent):
+            if not isinstance(values, list) or not values or not isinstance(values[0], ast.stmt):
+                continue
+            output = []
+            index = 0
+            while index < len(values):
+                node = values[index]
+                if (isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+                        and node.targets[0].id == "protocol_facts"):
+                    index += 1
+                    continue
+                if isinstance(node, ast.If) and ast.unparse(node.test) == "protocol_facts is None":
+                    first = node.body[0]
+                    if (isinstance(first, ast.Assign) and isinstance(first.targets[0], ast.Name)
+                            and first.targets[0].id == "protocol_facts"):
+                        index += 1
+                        continue
+                    if (isinstance(first, ast.Assign) and isinstance(first.targets[0], ast.Name)
+                            and first.targets[0].id == "entries"):
+                        output.extend(node.body)
+                        index += 1
+                        continue
+                    if (isinstance(first, ast.Assign) and isinstance(first.targets[0], ast.Name)
+                            and first.targets[0].id == "applied"):
+                        following = values[index + 1]
+                        assert isinstance(following, ast.If) and ast.unparse(following.test) == "applied"
+                        output.append(ast.If(test=first.value, body=following.body, orelse=following.orelse))
+                        index += 2
+                        continue
+                if (isinstance(node, ast.If)
+                        and ast.unparse(node.test) == "protocol_facts is not None"
+                        and ast.unparse(node.body[0]) == "protocol_facts.clear()"):
+                    index += 1
+                    continue
+                output.append(node)
+                index += 1
+            setattr(parent, field, output)
+    return function
+
+
 def original_planner():
     """Restore only this change and require the exact baseline function AST."""
     source = Path(planner.__file__).read_text()
     function = next(node for node in ast.parse(source).body
                     if isinstance(node, ast.FunctionDef)
                     and node.name == "build_function_stack_map_plan")
+    function = _without_protocol_fact_replay(function)
+    assert function.args.kwonlyargs[-2].arg == "_protocol_facts"
+    function.args.kwonlyargs.pop(-2)
+    function.args.kw_defaults.pop(-2)
     assert function.args.kwonlyargs[-1].arg == "_globals_index"
     function.args.kwonlyargs.pop()
     function.args.kw_defaults.pop()

@@ -2961,7 +2961,27 @@ def _apply_frame_protocol_indexed(
     active: dict[str, _RootGroup],
     kernel: IndexedFunctionKernel,
     call_id: int,
+    protocol_facts: dict | None = None,
 ) -> bool:
+    # The direct host planner can revisit one call's static protocol fact.
+    # The active state itself is never cached: each traversal still checks
+    # duplicate enters and unmatched leaves against its own incoming state.
+    if protocol_facts is not None:
+        fact = protocol_facts.get(call_id)
+        if fact is not None:
+            if fact[0]:
+                group = fact[1]
+                if group is not None:
+                    if group.key in active:
+                        _fail(func, f"managed slot {group.key!r} is registered twice")
+                    active[group.key] = group
+            else:
+                key = fact[2]
+                if key:
+                    if key not in active:
+                        _fail(func, f"managed slot {key!r} leaves without an active enter")
+                    del active[key]
+            return True
     header: CompilerInt4 = kernel.call_header(call_id)
     span: CompilerInt4 = kernel.call_span(call_id)
     if not header.third & CALL_FLAG_FRAME_PROTOCOL:
@@ -2986,10 +3006,14 @@ def _apply_frame_protocol_indexed(
             func, globals_by_name, aliases, frame_map_value, slots_value,
         )
         if group is None:
+            if protocol_facts is not None:
+                protocol_facts[call_id] = (True, None, "")
             return True
         if group.key in active:
             _fail(func, f"managed slot {group.key!r} is registered twice")
         active[group.key] = group
+        if protocol_facts is not None:
+            protocol_facts[call_id] = (True, group, "")
         return True
     if header.third & CALL_FLAG_FRAME_LEAVE:
         if span.first != 1:
@@ -3005,11 +3029,15 @@ def _apply_frame_protocol_indexed(
             ),
         )
         if _origin_is_registry_owned(func, origin):
+            if protocol_facts is not None:
+                protocol_facts[call_id] = (False, None, "")
             return True
         key = f"{origin.base}@{origin.offset}"
         if key not in active:
             _fail(func, f"managed slot {key!r} leaves without an active enter")
         del active[key]
+        if protocol_facts is not None:
+            protocol_facts[call_id] = (False, None, key)
         return True
     return False
 
@@ -3053,6 +3081,7 @@ def _block_entry_states(
     func: ParsedFunction,
     globals_by_name: dict[str, GlobalDef],
     aliases: dict[int, list[tuple[str, _PointerOrigin]]],
+    protocol_facts: dict | None = None,
 ) -> list[tuple[_RootGroup, ...] | None]:
     kernel = get_indexed_function_kernel(func)
     block_count = len(kernel.block_names)
@@ -3084,14 +3113,16 @@ def _block_entry_states(
                         active = {
                             group.key: group for group in entry_state
                         }
-                    _apply_frame_protocol_indexed(
-                        func,
-                        globals_by_name,
-                        aliases,
-                        active,
-                        kernel,
-                        metadata.second,
-                    )
+                    if protocol_facts is None:
+                        _apply_frame_protocol_indexed(
+                            func, globals_by_name, aliases, active, kernel,
+                            metadata.second,
+                        )
+                    else:
+                        _apply_frame_protocol_indexed(
+                            func, globals_by_name, aliases, active, kernel,
+                            metadata.second, protocol_facts,
+                        )
             instruction_index += 1
         # `_state` sorts every active key (string compares) and builds a fresh
         # tuple, per block edge -- yet in the huge shard functions thousands
@@ -3129,6 +3160,7 @@ def _registered_stack_root_offsets(
     func: ParsedFunction,
     globals_by_name: dict[str, GlobalDef],
     aliases: dict[int, list[tuple[str, _PointerOrigin]]],
+    protocol_facts: dict | None = None,
 ) -> dict[tuple[str, int], int]:
     """Map each explicitly registered stack slot to its final FP offset."""
 
@@ -3166,18 +3198,27 @@ def _registered_stack_root_offsets(
                 if second.second >= 0
                 else kernel.call_texts[second.third]
             )
-            if _frame_map_is_registry_owned(func, aliases, frame_map_value):
-                continue
-            count, _owned = _frame_map_count(
-                func, globals_by_name, aliases, frame_map_value
-            )
-            group = _root_group(
-                func,
-                globals_by_name,
-                aliases,
-                frame_map_value,
-                slots_value,
-            )
+            group = None
+            if protocol_facts is not None:
+                fact = protocol_facts.get(call_id)
+                if fact is not None and fact[0]:
+                    group = fact[1]
+            if group is None or not group.locations:
+                # Unreachable, registry-owned and empty-group calls retain
+                # their original independent checks and error order.
+                if _frame_map_is_registry_owned(func, aliases, frame_map_value):
+                    continue
+                count, _owned = _frame_map_count(
+                    func, globals_by_name, aliases, frame_map_value
+                )
+                group = _root_group(
+                    func, globals_by_name, aliases, frame_map_value, slots_value,
+                )
+            else:
+                # A nonempty successful enter is necessarily the strict
+                # compiler map + checked local alloca path. _root_group
+                # materialized exactly one location per validated count.
+                count = len(group.locations)
             # Global, heap, and continuation slot arrays remain registry
             # roots.  Only an actual machine-frame location can refresh a
             # spilled SSA value after a moving-collector safepoint.
@@ -3225,13 +3266,17 @@ def _managed_value_origins(
     func: ParsedFunction,
     globals_by_name: dict[str, GlobalDef],
     aliases: dict[int, list[tuple[str, _PointerOrigin]]],
+    protocol_facts: dict | None = None,
 ) -> tuple[dict[int, _ManagedValueOrigin], frozenset[int]]:
     """Classify root-derived pointer SSA without treating every ``ptr`` as GC."""
 
     kernel = get_indexed_function_kernel(func)
-    registered = _registered_stack_root_offsets(
-        func, globals_by_name, aliases
-    )
+    if protocol_facts is None:
+        registered = _registered_stack_root_offsets(func, globals_by_name, aliases)
+    else:
+        registered = _registered_stack_root_offsets(
+            func, globals_by_name, aliases, protocol_facts,
+        )
     states: dict[int, object | None] = {}
     transfers: dict[int, tuple[str, tuple]] = {}
 
@@ -5419,12 +5464,63 @@ def _build_function_stack_map_plan_native(
     )
 
 
+# Only a captured direct host function has no caller-owned text blocks.
+# Preserve public/custom owner callbacks and the native arena route.
+_ORIGINAL_X86_PROTOCOL_FACT_HELPERS = (
+    _pointer_aliases, _resolve_pointer, _root_group, _frame_map_count,
+    _frame_map_is_registry_owned, _origin_is_registry_owned,
+    _frame_protocol_enter_group, _apply_frame_protocol_indexed,
+    _block_entry_states, _registered_stack_root_offsets, _managed_value_origins,
+)
+
+
+def _x86_protocol_facts(func, kernel, globals_):
+    if (type(func) is not ParsedFunction or func.blocks
+            or type(kernel) is not IndexedFunctionKernel
+            or kernel.instruction_metadata._address != 0
+            or type(globals_) is not list):
+        return None
+    helpers = (
+        _pointer_aliases, _resolve_pointer, _root_group, _frame_map_count,
+        _frame_map_is_registry_owned, _origin_is_registry_owned,
+        _frame_protocol_enter_group, _apply_frame_protocol_indexed,
+        _block_entry_states, _registered_stack_root_offsets,
+        _managed_value_origins,
+    )
+    for index in range(len(helpers)):
+        if helpers[index] is not _ORIGINAL_X86_PROTOCOL_FACT_HELPERS[index]:
+            return None
+    if build_function_stack_map_plan is not _ORIGINAL_X86_PROTOCOL_PLAN:
+        return None
+    for global_ in globals_:
+        if (type(global_) is not GlobalDef or type(global_.name) is not str
+                or type(global_.initializer) is not str):
+            return None
+    return {}
+
+
+def _build_x86_plan_with_owned_protocol_facts(
+    func, globals_, target, identity_name, globals_index, protocol_facts,
+):
+    # This cleanup wrapper is host-only. Keep the native arena path outside
+    # its exception handler, and clear the private static facts even when a
+    # saved traceback retains the aborted planning frames.
+    try:
+        return build_function_stack_map_plan(
+            func, globals_, target=target, identity_name=identity_name,
+            _protocol_facts=protocol_facts, _globals_index=globals_index,
+        )
+    finally:
+        protocol_facts.clear()
+
+
 def build_function_stack_map_plan(
     func: ParsedFunction,
     globals_: list[GlobalDef],
     *,
     target: str,
     identity_name: str = "",
+    _protocol_facts: dict | None = None,
     _globals_index: list[dict[str, GlobalDef]] | None = None,
 ) -> FunctionStackMapPlan:
     if target not in ("aarch64-darwin", "x86_64-linux"):
@@ -5436,6 +5532,14 @@ def build_function_stack_map_plan(
             identity_name,
         )
     kernel = get_indexed_function_kernel(func)
+    protocol_facts = _protocol_facts
+    if protocol_facts is None:
+        protocol_facts = _x86_protocol_facts(func, kernel, globals_)
+        if protocol_facts is not None:
+            return _build_x86_plan_with_owned_protocol_facts(
+                func, globals_, target, identity_name, _globals_index,
+                protocol_facts,
+            )
     if _globals_index is None or type(globals_) is not list:
         globals_by_name = {global_.name: global_ for global_ in globals_}
     elif _globals_index:
@@ -5454,10 +5558,16 @@ def build_function_stack_map_plan(
         if shareable:
             _globals_index.append(globals_by_name)
     aliases = _pointer_aliases(func)
-    entries = _block_entry_states(func, globals_by_name, aliases)
-    managed_origins, ambiguous_managed = _managed_value_origins(
-        func, globals_by_name, aliases
-    )
+    if protocol_facts is None:
+        entries = _block_entry_states(func, globals_by_name, aliases)
+        managed_origins, ambiguous_managed = _managed_value_origins(
+            func, globals_by_name, aliases,
+        )
+    else:
+        entries = _block_entry_states(func, globals_by_name, aliases, protocol_facts)
+        managed_origins, ambiguous_managed = _managed_value_origins(
+            func, globals_by_name, aliases, protocol_facts,
+        )
     managed_names = frozenset(managed_origins) | ambiguous_managed
     live_after = _managed_live_after(func, managed_names)
     identity = identity_name or func.name
@@ -5702,14 +5812,16 @@ def build_function_stack_map_plan(
                     active = {
                         group.key: group for group in active_groups
                     }
-                if _apply_frame_protocol_indexed(
-                    func,
-                    globals_by_name,
-                    aliases,
-                    active,
-                    kernel,
-                    call_id,
-                ):
+                if protocol_facts is None:
+                    applied = _apply_frame_protocol_indexed(
+                        func, globals_by_name, aliases, active, kernel, call_id,
+                    )
+                else:
+                    applied = _apply_frame_protocol_indexed(
+                        func, globals_by_name, aliases, active, kernel,
+                        call_id, protocol_facts,
+                    )
+                if applied:
                     active_groups_dirty = True
                     active_version += 1
                     last_instruction_has_record = False
@@ -5862,6 +5974,9 @@ def build_function_stack_map_plan(
         target=target,
         packed_records=packed_records,
     )
+
+
+_ORIGINAL_X86_PROTOCOL_PLAN = build_function_stack_map_plan
 
 
 def build_stack_map_plans(

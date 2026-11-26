@@ -2444,14 +2444,82 @@ in the relevant section or issue and removes the entry.
        per-relocation object and repeated symbol-name resolution while
        preserving the exact final row wire and source error order; measure
        its own actual phase and full preparation against fresh base.
-       Next: (1) per-object link preparation in the codegen workers;
-       (2) remeasure remaining dense loop NOP/pair scans and no-rewrite
-       pass publication (preserving public snapshot contracts); (3) the
-       allocation model toward LLVM's (the maintainer's answer to P0 (c):
-       at least LLVM parity): values without stack slots unless spilled,
-       live-range splitting, compare/branch and immediate fusion at
-       selection, then remove passes that no longer fire; (4) J2 (e) one
-       error landing per function after registering temporaries once.
+       Actual Linux x64 CI 6cbafc4a Stage1 (artifact 15140867848,
+       2026-11-26, four workers): compile 1206.446 s, peak RSS
+       2,877,579,264 B, 625 completed modules; coordinator workers
+       1096.943 s (91%), exports 62.352 s, link 34.983 s (2.9%).
+       Sum of all 625 indexed-native-sections receipts: frontend generation
+       923.499 worker-s, backend 2728.814 (function emission 1546.725,
+       stack-map planning 640.363, verification 351.200, layout 128.953),
+       object assembly 51.127, encoding 11.897. Largest c_codegen
+       backend62.35 s (35.98 function,14.21 stack), class_gen58.33
+       (32.92,14.49), type_infer48.85 (29.58,10.13). These are inclusive
+       original worker wall durations, not inferred CPU totals.
+       Codex Linux replay against 9790f3f1, whose planner/kernel/x86 emitter
+       and tested module sources match CI 6cbafc4a: exact direct-indexed
+       capture from current 625-source closed world, passes off, zero
+       fallback, no text render. c_codegen 1039 functions, 95,041 blocks,
+       358,843 instructions (CI same blocks, 358,849 instructions);
+       class_gen727/86,393/332,713; worker_resource_plan105/13,050/47,696.
+       c_codegen CPU sampling (11,572 samples, 2,381 inside planner)
+       attributed planner block-entry states457, managed origins454,
+       record construction318, liveness276, repeat final frame protocol225;
+       frozen value constructors896 (37.6%), stable text hash267 (11.2%).
+       Although 725/1039 functions track no managed SSA, they account
+       for just 13,564/358,843 instructions (3.8%); skip-empty is not
+       the dominant owner.
+       Host-only direct x86 frame-protocol facts: reuse each successful
+       reachable call's checked enter group or leave key from entry-state
+       analysis in final emission, while independently applying duplicate/
+       unmatched active-state checks. Registered-root derivation reuses
+       only nonempty compiler local groups and resolves the original slots
+       again; uncached/empty/registry paths retain canonical validation.
+       Exact native arena/public nonexact or replaced helper paths remain
+       uncached. First candidate large actual c_codegen planner-only
+       five quiet alternating triples (same verified/layout preparation
+       as the indexed streamed owner, same-base complete planner control):
+       CPU 9.988 -> 9.074 s (-9.15%, 5/5), control10.159,
+       normalized median -11.51%, 5/5, control drift3.38%;
+       wall10.035 -> 9.128, normalized -11.28%, 5/5;
+       RSS324,292 -> 323,564 KiB, control324,300, 5/5 lower.
+       All 15 arms have identical 205,755-record plan digest
+       4e023b53c79c55047906ff71c6bd6d460347077f3d8db3417f14e0ee976766bb.
+       Decode control normalized +4.46% within6.10% drift, preparation
+       +0.91%. This isolated planner result is not a full module or
+       Stage1 timing.
+       Final hardened source keeps the cleanup wrapper host-only (native
+       arena path outside the exception handler), rejects nonexact global
+       initializers, and clears the private facts even with a saved error
+       traceback. 239 focused tests pass vs233 base (including exact
+       streamed object, active duplicate/leave errors, missing-fact
+       validation and retirement; the older frozen global-index oracle
+       keeps its original SHA). Final actual changed planner direct-indexed
+       capture in 625-source compiler closure: 625 functions, 57,034 blocks,
+       229,371 instructions, zero fallback and no py_cpy_* edge. Final
+       c_codegen full streamed ELF exact 13,508,968 bytes
+       (sha256 04d4276f7a85b5e7d3c1fe76a60967ba1d2af582355c2419f0c2a2ca74e3e584)
+       and exact 205,755-record plan digest in a loaded correctness replay.
+       Final exact hardened source five quiet alternating full streamed
+       worker_resource_plan triples: backend+object CPU5.697 -> 5.538 s
+       (-2.79%,4/5), same-base control5.744; normalized -4.217%4/5,
+       control drift1.577%. Including indexed codec decode, CPU6.172 ->
+       6.021 s, control6.192, normalized -3.954%4/5; wall normalized
+       -4.072%4/5; peak RSS81,084 -> 81,076 KiB, control81,388,
+       normalized -0.152%5/5. Actual stack-map phase wall1.108 -> 0.956
+       s (-13.69%,5/5), control1.159, normalized -15.466%5/5.
+       All15 full streamed ELF objects byte-identical (1,739,192 bytes,
+       sha256 11b507bf67fd12674abef4d977a093bc7261cd6e58b052a695727383f77eac63).
+       No whole Stage1 bootstrap timing or native compiler speed claim.
+       Next (latest actual Linux CI codegen priority): (1) the 1,546.7
+       worker-s function-emission owner, especially x64 register-copy,
+       dead-move and frame-promotion repeated scans; (2) J2 (e) one error
+       landing per function after registering temporaries once, measured
+       against the actual CI block inventory; (3) the allocation model
+       toward LLVM parity, then remove passes that no longer fire;
+       (4) remaining dense loop NOP/pair scans and no-rewrite publication
+       preserving public snapshot contracts. Per-object link preparation
+       remains useful on the measured Darwin tail, but is only 2.9% of
+       this Linux Stage1 report and is not the next Linux priority.
    J3. TaskScope (5x CPython), `time.perf_counter` (7x), `str.encode` (5x).
    A1. Darwin thread-local access inline (TSD slot through `tpidrro_el0`,
        startup check, fallback to the call): the resolver is 0.65 us per
@@ -2541,7 +2609,6 @@ in the relevant section or issue and removes the entry.
    Claims:
    - #13 final small/raw lifecycle cross-target owned ABI and paired Linux QPS non-regression: Codex, Linux, 2026-11-26T17:59Z, area runtime-gc-described-layout
    - Closed-world continuation factory immediate result handoff proof and narrow candidate: Codex, Linux, 2026-11-26T17:39Z, area runtime-codegen-factory
-   - J2s actual Linux x64 Stage1 indexed worker stack-map planning repeated-work attribution (self_backend_precise_stackmaps x64 only, disjoint from runtime GC and AArch64 selection): Codex, Linux, 2026-11-26T17:35Z, area stage1-codegen
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
