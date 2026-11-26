@@ -941,8 +941,19 @@ in the relevant section or issue and removes the entry.
    memory1; IR scaffold integer8. Independent corrections pending;
    no hosted lane acceptance inferred.
 
+   Darwin TLS protection model (Linux object proof, 2026-11-26):
+   baseline default-off compiler reproduced 16 stale PAC expectations
+   (3 PASS, 2 real Darwin execution UNRUN). Explicit opt-in restores
+   all 16 signed direct/indexed internal/external TLS cases, preserving
+   PACIASP-before-frame-save and AUTIASP-after-restore around real BLR.
+   New 16 default plain cases require exact balanced aligned SP16/LR
+   save and restore around hidden BLR (no PAC/AUT/BTI/full frame pair).
+   True leaf retains BTI-only opt-in; explicit off also verified.
+   All 35 model/object cases PASS; four actual native Darwin driver
+   cases UNRUN on Linux, not waived. No production or policy change.
+
    Claims:
-   - Darwin TLS hidden-call branch protection explicit opt-in and plain default ABI model: Codex, Linux object tests, 2026-11-26T19:21Z, area ci-darwin-tls-protection
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and

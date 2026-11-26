@@ -21,6 +21,22 @@ from tests.python.test_self_backend_darwin_tls import _TLS_IR
 
 PACIASP = bytes.fromhex("3f2303d5")
 AUTIASP = bytes.fromhex("bf2303d5")
+BTI_C = bytes.fromhex("5f2403d5")
+FRAME_SAVE = bytes.fromhex("fd7bbfa9")      # stp x29,x30,[sp,#-16]!
+FRAME_RESTORE = bytes.fromhex("fd7bc1a8")   # ldp x29,x30,[sp],#16
+SP_SUB16 = bytes.fromhex("ff4300d1")       # sub sp,sp,#16
+SP_ADD16 = bytes.fromhex("ff430091")       # add sp,sp,#16
+LR_SAVE = bytes.fromhex("fe0300f9")        # str x30,[sp]
+LR_RESTORE = bytes.fromhex("fe0340f9")     # ldr x30,[sp]
+TLV_CALL = bytes.fromhex("00023fd6")        # blr x16
+RET = bytes.fromhex("c0035fd6")
+
+TLS_PROBE_BODIES = (
+    "%value = load i64, ptr @counter\n  ret i64 %value",
+    "store i64 41, ptr @counter\n  ret i64 0",
+    "%address = ptrtoint ptr @counter to i64\n  ret i64 %address",
+    "%address = getelementptr i8, ptr @counter, i64 1\n  %value = load i8, ptr %address\n  %wide = zext i8 %value to i64\n  ret i64 %wide",
+)
 
 
 def emit(text, indexed, tmp_path):
@@ -47,30 +63,61 @@ def text_bytes(data):
     return data[section["offset"]:section["offset"] + section["size"]]
 
 
-@pytest.mark.parametrize("indexed", (False, True))
-@pytest.mark.parametrize("body", (
-    "%value = load i64, ptr @counter\n  ret i64 %value",
-    "store i64 41, ptr @counter\n  ret i64 0",
-    "%address = ptrtoint ptr @counter to i64\n  ret i64 %address",
-    "%address = getelementptr i8, ptr @counter, i64 1\n  %value = load i8, ptr %address\n  %wide = zext i8 %value to i64\n  ret i64 %wide",
-))
-@pytest.mark.parametrize("external", (False, True))
-def test_tls_hidden_call_has_protected_return_address(body, indexed, external, tmp_path, monkeypatch):
-    monkeypatch.delenv("PCC_SELF_BRANCH_PROTECTION", raising=False)
+def _tls_probe_text(body, external):
     text = ('target triple = "arm64-apple-darwin"\n'
             '@counter = thread_local global i64 37, align 8\n'
             'define i64 @probe() {\nentry:\n  ' + body + '\n}\n')
     if external:
         text = text.replace('thread_local global i64 37', 'external thread_local global i64')
-    data = emit(text, indexed, tmp_path)
-    code = text_bytes(data)
-    protected = PACIASP in code and AUTIASP in code
-    assert protected, "TLS resolver spills LR: the caller return needs signing"
+    return text
+
+
+def _instruction_words(code):
+    assert len(code) % 4 == 0
+    return tuple(code[i:i + 4] for i in range(0, len(code), 4))
+
+
+def _assert_hidden_tls_call(code, protected):
+    words = _instruction_words(code)
+    # The TLS resolver is not a true leaf: x30 must survive its actual BLR
+    # in both modes. Signing is separate from the mandatory frame ABI.
+    assert words.count(TLV_CALL) == words.count(RET) == 1
+    call, ret = words.index(TLV_CALL), words.index(RET)
+    if protected:
+        assert words.count(FRAME_SAVE) == words.count(FRAME_RESTORE) == 1
+        save, restore = words.index(FRAME_SAVE), words.index(FRAME_RESTORE)
+        assert words.count(PACIASP) == words.count(AUTIASP) == 1
+        assert words.index(PACIASP) < save < call < restore < words.index(AUTIASP) < ret
+    else:
+        # Plain optimized TLV calls save just LR in a local 16-byte slot,
+        # not a full frame record. Stack alignment and lifetime remain strict.
+        for word in (SP_SUB16, LR_SAVE, LR_RESTORE, SP_ADD16):
+            assert words.count(word) == 1
+        assert words.index(SP_SUB16) < words.index(LR_SAVE) < call
+        assert call < words.index(LR_RESTORE) < words.index(SP_ADD16) < ret
+        assert FRAME_SAVE not in words and FRAME_RESTORE not in words
+        assert PACIASP not in words and AUTIASP not in words and BTI_C not in words
 
 
 @pytest.mark.parametrize("indexed", (False, True))
-def test_unused_tls_does_not_remove_plain_leaf_optimization(indexed, tmp_path, monkeypatch):
+@pytest.mark.parametrize("body", TLS_PROBE_BODIES)
+@pytest.mark.parametrize("external", (False, True))
+def test_tls_hidden_call_has_protected_return_address(body, indexed, external, tmp_path, branch_protection_on):
+    data = emit(_tls_probe_text(body, external), indexed, tmp_path)
+    _assert_hidden_tls_call(text_bytes(data), True)
+
+
+@pytest.mark.parametrize("indexed", (False, True))
+@pytest.mark.parametrize("body", TLS_PROBE_BODIES)
+@pytest.mark.parametrize("external", (False, True))
+def test_default_plain_tls_hidden_call_preserves_return_address(body, indexed, external, tmp_path, monkeypatch):
     monkeypatch.delenv("PCC_SELF_BRANCH_PROTECTION", raising=False)
+    data = emit(_tls_probe_text(body, external), indexed, tmp_path)
+    _assert_hidden_tls_call(text_bytes(data), False)
+
+
+@pytest.mark.parametrize("indexed", (False, True))
+def test_unused_tls_does_not_remove_plain_leaf_optimization(indexed, tmp_path, branch_protection_on):
     text = '''target triple = "arm64-apple-darwin"
 @counter = thread_local global i64 37, align 8
 @counter_suffix = global i64 41, align 8
@@ -81,9 +128,10 @@ entry:
 }
 '''
     data = emit(text, indexed, tmp_path)
-    code = text_bytes(data)
-    protected = PACIASP in code or AUTIASP in code
-    assert not protected
+    words = _instruction_words(text_bytes(data))
+    assert PACIASP not in words and AUTIASP not in words
+    assert FRAME_SAVE not in words and FRAME_RESTORE not in words and TLV_CALL not in words
+    assert BTI_C in words and RET in words
 
 
 def test_explicit_branch_protection_setting_is_preserved(tmp_path, monkeypatch):
@@ -97,9 +145,7 @@ entry:
 }
 '''
     data = emit(text, False, tmp_path)
-    code = text_bytes(data)
-    protected = PACIASP in code or AUTIASP in code
-    assert not protected
+    _assert_hidden_tls_call(text_bytes(data), False)
 
 
 DRIVER = '''
@@ -148,15 +194,16 @@ int main(void) {
 '''
 
 
-# requires native Darwin arm64 execution
-@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
-@pytest.mark.parametrize("indexed", (False, True))
-def test_protected_tls_executes_with_owned_c_driver(tmp_path, monkeypatch, indexed):
-    monkeypatch.delenv("PCC_SELF_BRANCH_PROTECTION", raising=False)
+def _execute_owned_tls_driver(tmp_path, indexed, protected):
     data = emit(_TLS_IR, indexed, tmp_path)
-    code = text_bytes(data)
-    protected = PACIASP in code and AUTIASP in code
-    assert protected
+    words = _instruction_words(text_bytes(data))
+    assert (PACIASP in words) == (AUTIASP in words) == protected
+    assert TLV_CALL in words
+    if protected:
+        assert FRAME_SAVE in words and FRAME_RESTORE in words
+    else:
+        assert all(word in words for word in (SP_SUB16, LR_SAVE, LR_RESTORE, SP_ADD16))
+        assert BTI_C not in words
     source = tmp_path / "driver.c"
     source.write_text(DRIVER)
     ir = _c_ir(DRIVER, "arm64-apple-darwin")
@@ -171,3 +218,17 @@ def test_protected_tls_executes_with_owned_c_driver(tmp_path, monkeypatch, index
                          env=dict(os.environ, PATH="/nonexistent"))
     assert run.returncode == 0, (run.returncode, run.stdout, run.stderr)
     assert run.stdout == "" and run.stderr == ""
+
+
+# Both actual threaded driver routes require native Darwin arm64 execution.
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
+@pytest.mark.parametrize("indexed", (False, True))
+def test_protected_tls_executes_with_owned_c_driver(tmp_path, indexed, branch_protection_on):
+    _execute_owned_tls_driver(tmp_path, indexed, True)
+
+
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
+@pytest.mark.parametrize("indexed", (False, True))
+def test_default_plain_tls_executes_with_owned_c_driver(tmp_path, indexed, monkeypatch):
+    monkeypatch.delenv("PCC_SELF_BRANCH_PROTECTION", raising=False)
+    _execute_owned_tls_driver(tmp_path, indexed, False)
