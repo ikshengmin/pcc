@@ -4196,8 +4196,39 @@ in the relevant section or issue and removes the entry.
    actual remaining high-count sites rather than repeat tiny terminal,
    accounting, TLS, empty-root or factory candidates.
 
+   Actual native flat owning sorted dictionary pair snapshot screen
+   (Linux, Codex). Exact handler attribution is 2 items-list, 4 pair
+   tuple and 2 sorted-output-list managed allocations/request, every
+   one- and four-carrier repeat. Actual pcc/stdlib/json.py assigns
+   items = sorted(obj.items()) if sort_keys else list(obj.items()),
+   then consumes its private local; native handler uses both n=2
+   selections (one exact string-valued, one counted-container-valued).
+   Controlled native C reference on archive fa4ef058 (not current
+   entire compiler), private flat owning tuple versus ordinary
+   materialize/sort/consume, 300k complete iterations, five alternating
+   blocks including unchanged controls, 60 exact-identity/telemetry
+   runs, ELF d2b1597ff56a887e892afafffa02c5e32cb1eecaf8d6f16cdc7c19df8ae8f996.
+   n=2 strings baseline 2078 ns -> 923.883 ns, paired saving
+   1164.123 ns (5/5, max control 140.390 ns); n=2 counted values
+   2148.417 -> 927.580 ns, saving 1220.837 ns (5/5, control
+   26.240 ns); n=1 and n=4 savings 876.923 and 1954.523 ns,
+   both 5/5. Measured primitive 4 -> 1 managed allocations/operation,
+   generous actual weighted reference envelope 2.385 us/request
+   (4.23% of ~56.4 us), not handler performance. Guard build 2.892s /
+   76.4MB, measure 34.763s / 18.8MB; same 1 GiB cap / 2 GiB reserve.
+   REJECT: the original output list and counted pair tuples are
+   tracked objects. A tracked flat tuple would become observable
+   by gc.get_objects/get_referrers while JSON's arbitrary _encode
+   calls run; another carrier can obtain and retain these owners.
+   A deliberately untracked tuple or raw root array would remove
+   the original observable graph and may change finalizer/callback
+   lifetime; lexical single-consumer alone is insufficient proof.
+   Do not hide GC metadata or introduce global virtualization for
+   this small primitive envelope. Source-only draft not published or
+   timed; no production or actual-handler speed claim. Continue
+   representation-preserving structural lifecycle attribution.
+
    Claims:
-   - Actual native flat owning sorted dictionary pair snapshot attribution: Codex, Linux, 2026-11-26T23:18Z, area runtime-gc-private-pair-snapshot-attribution
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
    - Hosted Stage1 inline error-edge route parity: Codex, Linux, 2026-11-26T22:42Z, area selfhost (bootstrap_platform.py only; existing direct inline edge semantics and actual class_gen A/B before enablement)
 4. **Source-language frontends**, in parallel with item 2 (different files;
