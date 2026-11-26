@@ -2477,8 +2477,23 @@ in the relevant section or issue and removes the entry.
    14.2 gives the same result. Strict complete runtime fixture added,
    hosted execution pending. Unchanged NumPy halffloat.cpp now advances
    from missing string.h to missing errno.h (same original SHA), not an
-   emitted object. Next NumPy C++: owned errno.h spelling, then real
-   generated configuration; no fabricated headers or production claim.
+   emitted object. C++ follow-up: owned `<errno.h>` selects `<cerrno>`'s
+   exact target error-number and location-lvalue ABI. Full macro inventory,
+   both include orders and repeated inclusion match; Linux x86-64/AArch64
+   and Darwin project only their correct C accessor, and Windows still
+   fails explicitly rather than borrowing Linux numbers. 90 focused host
+   tests passed. Actual Linux ELF sets errno through its address and then
+   observes the same slot after a real overflowing strtol returns LONG_MAX
+   and publishes ERANGE; result 42 and empty streams match G++ 14.2. The
+   bounded owned archive's libc/errno/strtoint source and object receipts
+   match current owners. Strict complete runtime fixture added; hosted
+   execution pending. Unchanged NumPy halffloat.cpp now stops at missing
+   limits.h, not an emitted object. Next NumPy C++: owned limits.h spelling,
+   then actual generated configuration; no fabricated inputs or production
+   acceptance. The new 45856871699 Java and Go receipts reproduce the
+   existing strict source frontiers: Java reference 15140386201 204/4 and
+   integration 15139682668 1255/4, Go integration 15141110841 878/2;
+   no oracle waiver or project-specific substitution.
    The opt-in Go source probe reached `internal/bytealg/bytealg.go:9:2`; no dependency-closure executable exists.
    See the
    [closure audit](investigations/go-math-bits-original-closure-frontier.md).
@@ -2516,7 +2531,7 @@ in the relevant section or issue and removes the entry.
    neither an external token nor a caller-provided crate named core waives it.
 
    Claims:
-   - Owned C++ errno.h spelling of target error ABI (NumPy halffloat next blocker): Codex, Linux, 2026-11-26T17:15Z, area frontend-cpp
+   - none
 5. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:

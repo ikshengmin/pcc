@@ -8,6 +8,7 @@ error-number tables are compared with the actual target C library headers.
 """
 from pathlib import Path
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -94,12 +95,90 @@ def test_error_numbers_are_the_target_library_constants(target, values):
 
 @pytest.mark.parametrize('target,location', [
     (LINUX, '__errno_location'), (LINUX_ARM, '__errno_location'), (DARWIN, '__error')])
+def test_errno_h_and_cerrno_share_the_exact_target_macro_and_accessor(target, location, monkeypatch):
+    monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('external preprocessor invoked'))
+    # Compare the full standard macro inventory, not only a selected constant,
+    # through both inclusion orders and repeated inclusion. Strip line markers
+    # only; every emitted token and the real accessor declaration must match.
+    names = '+'.join(ERROR_NUMBERS)
+    tail = f'int f(){{errno=EDOM;return errno+{names};}}\n'
+    def preprocess(headers):
+        return preprocess_cpp(headers + tail, target_triple=target, line_markers=False)
+    baseline = preprocess('#include <cerrno>\n')
+    for headers in ('#include <errno.h>\n#include <cerrno>\n',
+                    '#include <cerrno>\n#include <errno.h>\n',
+                    '#include <errno.h>\n#include <errno.h>\n'):
+        text = preprocess(headers)
+        assert text.split() == baseline.split()
+        assert text.count('extern "C"') == 1
+        assert '_fake_typedefs.h' not in text
+        assert location + '()' in text
+        parser = CppParser(target_triple=target)
+        parser.parse(text, 'errno.h-original.cpp')
+        accessor, = parser.scope.names[location].overloads
+        assert accessor.language_linkage == 'C' and not accessor.defined
+
+
+@pytest.mark.parametrize('target', ['x86_64-pc-windows-msvc', 'x86_64-w64-windows-gnu'])
+def test_errno_h_retains_explicit_unsupported_target_abi(target):
+    with pytest.raises(RuntimeError, match=r'#error owned C\+\+ <cerrno> has no error-number ABI'):
+        preprocess_cpp('#include <errno.h>\n', target_triple=target)
+
+
+@pytest.mark.parametrize('target,location', [
+    (LINUX, '__errno_location'), (LINUX_ARM, '__errno_location'), (DARWIN, '__error')])
 def test_errno_designates_the_target_library_location_lvalue(target, location):
     ir = lower('#include <cerrno>\nint f(){errno=0; int* p=&errno; *p=EDOM; return errno;}\n', target)
     assert re.search(rf'declare ptr @{location}\(\)', ir)
     assert len(re.findall(rf'call ptr \(\) @{location}\(\)', ir)) == 3
     other = '__error' if location == '__errno_location' else '__errno_location'
     assert other not in ir
+
+
+ERRNO_H_PROGRAM = (
+    '#include <errno.h>\n#include <cerrno>\n#include <stdlib.h>\n'
+    'int main(){errno=0;int* slot=&errno;*slot=EDOM;if(errno!=EDOM)return 1;'
+    'errno=0;char* end;long value=::strtol("9999999999999999999999999999",&end,10);'
+    'if(value!=9223372036854775807L||*end!=0||errno!=ERANGE||*slot!=ERANGE)return 2;'
+    'return errno+8;}'
+)
+
+
+@pytest.mark.parametrize('target,location', [
+    (LINUX, '__errno_location'), (LINUX_ARM, '__errno_location'), (DARWIN, '__error')])
+def test_errno_h_lowering_preserves_modifiable_location_lvalue(target, location):
+    ir = lower('#include <errno.h>\n#include <cerrno>\n'
+               'int f(){errno=0;int* p=&errno;*p=EDOM;return errno;}', target)
+    assert re.search(rf'declare ptr @{location}\(\)', ir)
+    assert len(re.findall(rf'call ptr \(\) @{location}\(\)', ir)) == 3
+    other = '__error' if location == '__errno_location' else '__errno_location'
+    assert other not in ir
+
+
+def run_errno_h_native(directory, archive, monkeypatch, target):
+    from pcc.backend.owned_elf_link import link_inputs
+    from pcc.backend.owned_object_emit import emit_owned_object
+    from pcc.driver.project import TranslationUnit
+    from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
+    from tests.cpp.owned_execution import Execution
+    from tests.cpp.test_cpp_class_execution import record_execution
+    obj, exe = directory / 'errno-header.o', directory / 'errno-header'
+    with monkeypatch.context() as guard:
+        guard.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('external compiler/linker invoked'))
+        units = CEvaluator(backend='self', target_triple=target).compile_translation_units(
+            [TranslationUnit('errno-header.cpp', None, ERRNO_H_PROGRAM)], use_system_cpp=False,
+            frontend_opt_level=0, use_compile_cache=False)
+        obj.write_bytes(emit_owned_object(units[0][1], target))
+        link_inputs(target=target, output=str(exe), objects=[str(obj)], archives=[str(archive)])
+    record_execution(exe, Execution(42, b'', b''))
+
+
+@pytest.mark.integration
+@pytest.mark.pcc_gate(unavailable=None if sys.platform == 'linux' and platform.machine().lower() in (
+    'amd64', 'x86_64', 'aarch64', 'arm64') else 'requires owned Linux errno runtime execution')
+def test_errno_h_lvalue_and_strtol_failure_share_runtime_storage(tmp_path, pcc_runtime_archive, monkeypatch):
+    from pcc.frontends.python.pipeline_targets import host_target_triple
+    run_errno_h_native(tmp_path, pcc_runtime_archive, monkeypatch, host_target_triple())
 
 
 @pytest.mark.parametrize('header', ['cerrno', 'ctime'])
