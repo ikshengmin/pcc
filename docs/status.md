@@ -1276,7 +1276,7 @@ in the relevant section or issue and removes the entry.
    Stage1/2, Darwin native or integrated hosted acceptance claimed.
 
    Claims:
-   - none
+   - Pressure Stage1 compact source lease identity and strict phase binding: Codex, Linux, 2026-11-26T20:48Z, area pressure-lease-source
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
