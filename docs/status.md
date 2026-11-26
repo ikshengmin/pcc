@@ -928,6 +928,28 @@ in the relevant section or issue and removes the entry.
    new failing node, and seven nodes that failed on HEAD pass; the native
    callback/finalizer program of `test_private_root_copy.py`, whose global
    source takes the new copy, passes. Not run: integration, pcc1 and Linux.
+   (d) U7, 4c batch 1 (Claude, local Mac, runtime `f4889035b`, tests
+   `f1e1e0169`): sixteen modules whose lease tokens stay inside the module
+   drop their leases (py_call_splat_runtime, py_capi_capsule_runtime,
+   py_capi_import_runtime, py_coroutine, py_dunder, py_exc_traceback,
+   py_gen, py_int_convert, py_obj_ops_compare, py_os_mkdir, py_os_substrate,
+   py_os_walk, py_process_substrate, py_tempfile, py_virtual_thread_runtime,
+   py_weakref). Lease acquisitions, releases and their failure branches,
+   the token arrays and the lease-only adopt helpers go; root copies take
+   the status-only `pcc_gc_root_copy`/`_borrowed`. Under the one collector
+   every lease was the no-op token 0 apart from the provenance probe, and
+   only movement checks and diagnostics read a lease count, so no
+   behavior changes. Each module compiles alone and none of their IR calls
+   a lease function. Test models bind the status-only copies and move
+   nothing; the lease-only cases are deleted or rewritten and listed in
+   the tests commit. Host pcc0, by node id against HEAD `0d01e13b0`, the
+   103 files naming the modules or their models and the 40 edited files
+   and importers have no new failing node. Not run: integration, pcc1,
+   Linux and `test_py_multi_file_bootstrap_shim.py`. Left for U8: the
+   cross-module token ABIs (freestanding_class_namespace,
+   freestanding_sequence_snapshot, py_re_bridge_entry, py_tuple's
+   `pcc_tuple_from_owned_roots_lease`) with their callers, and
+   py_capi_buffer_runtime's uncalled GC3 exporter path with its tests.
    4b is complete: no runtime module pins on its own paths or takes
    through `pcc_gc_take_pinned_slot`; what still pins is the old take
    protocol's ABI itself (`pcc_gc_pin_slot_for_take` in py_obj and the
@@ -941,7 +963,7 @@ in the relevant section or issue and removes the entry.
    Next for (d): the plan Claude runs without asking between units
    (the user, 2026-11-26: "你这么继续继续的有点需要我参与。能plan一下吗").
    Done: steps 1, 2 (pins outside the take protocol), 4a, 4b batches 1-2,
-   U1-U5 (4b) and U6. U7, the first 4c batch, is next.
+   U1-U5 (4b), U6 and U7. U8, the cross-module token ABIs, is next.
    Units, in order, each one claim, commit and push (runtime first, then
    its test models, then the status result):
    (U1) 4b batch 3: py_obj, py_coroutine, py_obj_ops_compare, py_tempfile
@@ -1109,7 +1131,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (d) plan U1-U14 (the units under "Next for (d)", in order): Claude, macOS, 2026-11-26T03:28Z, area runtime-codegen
+   - (d) plan U1-U14 (the units under "Next for (d)", in order): Claude, macOS, 2026-11-26T04:32Z, area runtime-codegen
 
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
