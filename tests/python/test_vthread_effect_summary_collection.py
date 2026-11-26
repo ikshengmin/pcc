@@ -407,15 +407,16 @@ def test_summary_collection_errors_are_not_suppressed(monkeypatch, summary_only)
 
 @pytest.mark.integration
 def test_summary_collection_native_program_matches_cpython(
-    tmp_path, pcc_runtime_archive, python_program_compiler,
+    tmp_path, pcc_runtime_archive, python_program_compiler, monkeypatch,
 ):
-    """Execute the changed analyzer in an owned binary under every collector.
+    """Execute eager and indexed summaries in an owned binary.
 
     The shared compiler fixture supplies separate host-pcc0 and native-pcc1
     cases.  Both run py_lift.parse_and_lift, the production native parser
     route, rather than the host-only parser.parse/ast.parse adapter.  CPython
     runs the identical source through that same route as a labeled reference.
-    This does not force GC pressure or establish full Stage2/Stage3 or
+    Both exports transports must produce the same summary wire. This does not
+    force GC pressure or establish full Stage2/Stage3 or
     performance qualification.
     """
     analyzed_source = _chain_source(8) + """
@@ -446,6 +447,9 @@ class Worker:
         "    compute_vthread_may_park_callables,\n"
         "    write_closed_world_vthread_effect_summary,\n"
         ")\n"
+        "from pcc.frontends.python.vthread_effect_summary_wire import (\n"
+        "    read_effect_exports, write_effect_exports,\n"
+        ")\n"
         f"SOURCE = {analyzed_source!r}\n"
         f"EXPORTS = {exports!r}\n"
         "def main():\n"
@@ -454,6 +458,11 @@ class Worker:
         "    summary = build_closed_world_vthread_effect_summary(\n"
         "        module, 'native_summary', EXPORTS)\n"
         "    write_closed_world_vthread_effect_summary(sys.argv[1], summary)\n"
+        "    write_effect_exports(sys.argv[1] + '.exports', EXPORTS)\n"
+        "    indexed_exports, unused = read_effect_exports(sys.argv[1] + '.exports')\n"
+        "    indexed_summary = build_closed_world_vthread_effect_summary(\n"
+        "        module, 'native_summary', indexed_exports)\n"
+        "    write_closed_world_vthread_effect_summary(sys.argv[1] + '.indexed', indexed_summary)\n"
         "    result = compute_vthread_may_park_callables(module, EXPORTS)\n"
         "    print('|'.join(sorted(result[1])))\n"
         "    print('|'.join(sorted(result[3])))\n"
@@ -465,6 +474,7 @@ class Worker:
     reference_path = tmp_path / "reference.wire"
     source.write_text(program, encoding="utf-8")
     repo = Path(__file__).resolve().parents[2]
+    monkeypatch.setenv("PCC_PACKAGE_SITE", str(repo))
     reference_env = dict(os.environ)
     reference_env["PYTHONPATH"] = str(repo) + os.pathsep + reference_env.get(
         "PYTHONPATH", "",
@@ -493,6 +503,7 @@ class Worker:
         ir_scaffold_mode="on",
     )
     expected_wire = reference_path.read_bytes()
+    assert Path(str(reference_path) + ".indexed").read_bytes() == expected_wire
     for collector in ("0",):
         actual_path = tmp_path / f"native_gc{collector}.wire"
         result = subprocess.run(
@@ -507,3 +518,4 @@ class Worker:
         assert result.stderr == "", collector
         assert result.stdout == reference.stdout, collector
         assert actual_path.read_bytes() == expected_wire, collector
+        assert Path(str(actual_path) + ".indexed").read_bytes() == expected_wire, collector

@@ -493,6 +493,7 @@ def build_shared_exports(
     annotate_vthread_effects,
     annotate_vthread_effect_summaries=None,
     vthread_effect_export_surface=None,
+    write_effect_exports_wire=None,
     derived_class_map,
     write_native_exports_wire,
     profile_counter,
@@ -666,11 +667,10 @@ def build_shared_exports(
             if vthread_effect_export_surface is not None
             else native_exports
         )
-        write_native_exports_wire(
-            pre_effect_exports_path,
-            worker_exports,
-            {},
-        )
+        if write_effect_exports_wire is None:
+            write_native_exports_wire(pre_effect_exports_path, worker_exports, {})
+        else:
+            write_effect_exports_wire(pre_effect_exports_path, worker_exports)
         worker_exports = None
         _phase_end(profile, "multi_frontend_summary_prepare", summary_prepare_started)
         summary_workers_started = _phase_begin(profile)

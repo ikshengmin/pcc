@@ -81,7 +81,7 @@ def test_existing_summary_semantics_with_compact_projection(monkeypatch,tmp_path
     else:existing.test_summary_duplicate_definition_uses_last_binding(tmp_path)
 
 
-@pytest.mark.parametrize('hook',['none','projector','writer'])
+@pytest.mark.parametrize('hook',['none','projector','writer','reader','builder'])
 def test_only_owned_private_worker_projection_is_compacted(monkeypatch,hook):
     captured={}
     def collect(*args,**kwargs):captured.update(kwargs);return 'done'
@@ -89,13 +89,18 @@ def test_only_owned_private_worker_projection_is_compacted(monkeypatch,hook):
     original=p._closed_world_vthread_effect_export_surface
     if hook=='projector':monkeypatch.setattr(p,'_closed_world_vthread_effect_export_surface',lambda exports:exports)
     if hook=='writer':monkeypatch.setattr(p,'_write_native_exports_wire',lambda *args,**kwargs:None)
+    if hook=='reader':monkeypatch.setattr(p,'_read_native_exports_wire',lambda *args,**kwargs:({},{}))
+    if hook=='builder':monkeypatch.setattr(p,'_build_closed_world_vthread_effect_summary',lambda *args: {})
     result=p._build_python_frontend_shared_exports_parallel('',[],[],[],[],entry_module='',sibling_inits=(),ir_scaffold_mode='on',verbose=False,max_parallel=1,oversized_chunk_count=0,safe_parallel=1)
     assert result=='done'
     chosen=captured['vthread_effect_export_surface']
     if hook=='none':
         assert chosen is p._summary_worker_export_surface
+        assert captured['write_effect_exports_wire'] is p._vthread_effect_summary_wire.write_effect_exports
         assert chosen({'m':{'f':{'kind':'function'}}})['m']['f']=={'kind':'function','semantic_decorator':False,'may_park':False}
-    else:assert chosen is p._closed_world_vthread_effect_export_surface
+    else:
+        assert chosen is p._closed_world_vthread_effect_export_surface
+        assert captured['write_effect_exports_wire'] is None
     assert 'may_park' in original({'m':{'f':{'kind':'function'}}})['m']['f']
 
 
@@ -180,3 +185,95 @@ def test_empty_class_name_method_key_fallback(module_name,class_name):
     full=a.closed_world_vthread_effect_export_surface(exports)
     compact=a.closed_world_vthread_effect_export_surface(exports,compact_redundant_names=True)
     assert a._vthread_effect_method_key(module_name,class_name,'run',full)==a._vthread_effect_method_key(module_name,class_name,'run',compact)
+
+
+def test_private_effect_rows_decode_only_accessed_modules_and_preserve_summary(tmp_path, monkeypatch):
+    from pcc.frontends.python import pipeline_exports, vthread_effect_summary_wire as wire
+    from pcc.frontends.python.py_lift import parse_and_lift
+
+    native = {
+        "pkg.leaf": {"park": {"kind": "function", "may_park": True}},
+        "pkg.owner": {"Worker": {"kind": "class", "methods": (
+            {"name": "run", "may_park": True}, {"name": "quiet", "may_park": False},
+        )}},
+        "pkg.unused": {"ignored": {"kind": "function", "may_park": True}},
+        "pkg.main": {"call": {"kind": "function"}},
+    }
+    projected = a.closed_world_vthread_effect_export_surface(native, compact_redundant_names=True)
+    legacy = tmp_path / "legacy.json"
+    encoded = tmp_path / "effect.indexed"
+    pipeline_exports._write_native_exports_wire(str(legacy), projected, {})
+    wire.write_effect_exports(str(encoded), projected)
+    full, _ = wire.read_effect_exports(str(legacy))
+    module = parse_and_lift(
+        "from pkg.leaf import park\nfrom pkg.owner import Worker\n"
+        "def call():\n    park()\n    Worker().run()\n    Worker().quiet()\n",
+        "case.py", "pkg.main",
+    )
+    expected = a.build_closed_world_vthread_effect_summary(module, "pkg.main", full)
+    original = wire.json.loads
+    calls = []
+
+    def observe(text):
+        calls.append(text)
+        return original(text)
+
+    monkeypatch.setattr(wire.json, "loads", observe)
+    lazy, derived = wire.read_effect_exports(str(encoded))
+    assert derived == {} and tuple(lazy) == tuple(projected)
+    assert "pkg.unused" in lazy and not calls
+    assert a.build_closed_world_vthread_effect_summary(module, "pkg.main", lazy) == expected
+    assert not isinstance(lazy["pkg.unused"], dict)
+    assert all(isinstance(lazy[name], dict) for name in ("pkg.leaf", "pkg.owner", "pkg.main"))
+    assert len(calls) == 3
+    assert a.build_closed_world_vthread_effect_summary(module, "pkg.main", lazy) == expected
+    assert len(calls) == 3
+    assert wire.effect_module_exports(full, "pkg.leaf") is full["pkg.leaf"]
+
+
+def test_effect_row_inventory_and_selected_json_validation(tmp_path):
+    from pcc.frontends.python import vthread_effect_summary_wire as wire
+
+    path = tmp_path / "effect.indexed"
+    path.write_text(wire.EFFECT_EXPORT_SCHEMA + "\nvalid\t{}\ninvalid\t{\n")
+    view, _ = wire.read_effect_exports(str(path))
+    assert tuple(view) == ("valid", "invalid")
+    assert wire.effect_module_exports(view, "valid") == {}
+    with pytest.raises(ValueError, match="invalid vthread effect export module payload"):
+        wire.effect_module_exports(view, "invalid")
+    path.write_text(wire.EFFECT_EXPORT_SCHEMA + "\nvalid\t{}\nvalid\t{}\n")
+    with pytest.raises(ValueError, match="duplicate vthread effect export module"):
+        wire.read_effect_exports(str(path))
+    path.write_text(wire.EFFECT_EXPORT_SCHEMA + "\nmissing-delimiter\n")
+    with pytest.raises(ValueError, match="invalid vthread effect export row"):
+        wire.read_effect_exports(str(path))
+
+
+def test_effect_export_writer_preserves_destination_on_metadata_error(tmp_path):
+    from pcc.frontends.python import vthread_effect_summary_wire as wire
+
+    path = tmp_path / "effect.indexed"
+    path.write_bytes(b"prior-complete-export")
+    with pytest.raises(ValueError, match="invalid vthread effect export module table"):
+        wire.write_effect_exports(str(path), {"valid": {}, "invalid": []})
+    assert path.read_bytes() == b"prior-complete-export"
+
+
+@pytest.mark.parametrize("hook", ["none", "reader", "builder"])
+def test_summary_worker_facade_selects_lazy_reader_only_for_owned_analysis(monkeypatch, hook):
+    captured = {}
+
+    def run(manifest, **kwargs):
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(p._pipeline_frontend_worker_execution, "run_summary_worker", run)
+    if hook == "reader":
+        monkeypatch.setattr(p, "_read_native_exports_wire", lambda path: ({}, {}))
+    if hook == "builder":
+        monkeypatch.setattr(p, "_build_closed_world_vthread_effect_summary", lambda *args: {})
+    assert p._run_python_multi_summary_worker({}) == 0
+    if hook == "none":
+        assert captured["read_native_exports_wire"] is p._vthread_effect_summary_wire.read_effect_exports
+    else:
+        assert captured["read_native_exports_wire"] is p._read_native_exports_wire

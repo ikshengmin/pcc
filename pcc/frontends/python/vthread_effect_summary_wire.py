@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 
 SCHEMA = "pcc.vthread.effect-summary.v1"
 
@@ -89,4 +91,81 @@ def read_summary(path: str) -> dict:
     }
 
 
-__all__ = ["SCHEMA", "read_summary", "write_summary"]
+EFFECT_EXPORT_SCHEMA = "pcc.vthread.effect-exports.indexed.v1"
+
+
+class _LazyEffectExportRow:
+    """A private, unmaterialized module row in one summary worker's map."""
+
+    def __init__(self, row: str) -> None:
+        self.row: str = row
+
+
+def _validated_effect_export_module(value: str) -> str:
+    value = _validated_text(value, "export module")
+    if value.find("\x00") >= 0:
+        raise ValueError("invalid vthread effect export module")
+    return value
+
+
+def write_effect_exports(path: str, native_exports) -> None:
+    """Publish independently decodable rows from the private effect surface."""
+    from pcc.frontends.python.pipeline_exports import _native_export_to_wire
+
+    # Render before opening the destination, as the legacy writer does.
+    lines = []
+    for module_name, table in native_exports.items():
+        name = _validated_effect_export_module(module_name)
+        if not isinstance(table, dict):
+            raise ValueError("invalid vthread effect export module table")
+        lines.append(name + "\t" + json.dumps(_native_export_to_wire(table)) + "\n")
+    with open(path, "w", encoding="utf-8") as stream:
+        stream.write(EFFECT_EXPORT_SCHEMA + "\n")
+        for line in lines:
+            stream.write(line)
+
+
+def read_effect_exports(path: str):
+    """Index complete module inventory, lazily materializing accessed rows.
+
+    Legacy inputs remain readable for replay and alternate writer callbacks.
+    New-format headers and duplicates are validated eagerly. As with indexed
+    codegen exports, JSON payload validation belongs to the selected row.
+    """
+    with open(path, "r", encoding="utf-8") as stream:
+        text = stream.read()
+    if not text.startswith(EFFECT_EXPORT_SCHEMA + "\n"):
+        from pcc.frontends.python.pipeline_exports import _decode_native_exports_wire
+        return _decode_native_exports_wire(text)
+    lines = text.splitlines()
+    exports = {}
+    for row in lines[1:]:
+        tab = row.find("\t")
+        if tab < 0:
+            raise ValueError("invalid vthread effect export row")
+        module_name = _validated_effect_export_module(row[:tab])
+        if module_name in exports:
+            raise ValueError("duplicate vthread effect export module")
+        exports[module_name] = _LazyEffectExportRow(row)
+    return exports, {}
+
+
+def effect_module_exports(native_exports: dict, module_name: str):
+    """Ordinary tables are unchanged; a private selected row decodes once."""
+    exports = native_exports.get(module_name, {})
+    if isinstance(exports, _LazyEffectExportRow):
+        from pcc.frontends.python.pipeline_exports import _native_export_from_owned_wire
+
+        row = exports.row
+        try:
+            exports = _native_export_from_owned_wire(json.loads(row[row.find("\t") + 1 :]))
+        except Exception as exc:
+            raise ValueError("invalid vthread effect export module payload") from exc
+        if not isinstance(exports, dict):
+            raise ValueError("invalid vthread effect export module payload")
+        native_exports[module_name] = exports
+    return exports
+
+
+__all__ = ["SCHEMA", "read_summary", "write_summary", "EFFECT_EXPORT_SCHEMA",
+           "read_effect_exports", "write_effect_exports", "effect_module_exports"]

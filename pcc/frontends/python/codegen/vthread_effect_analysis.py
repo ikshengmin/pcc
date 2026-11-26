@@ -22,7 +22,11 @@ from pcc.backend.self_backend_value_arena import CompilerIntArena
 
 from pcc.frontends.python.py_ast import Assign, Attr, AugAssign, BoolType, BytesType, Call, ClassDef, ClassType, DictType, FloatType, IntType, ListType, NoneType, SetType, StrType, TupleType, Delete, ExceptHandler, For, FuncDef, Global, Import, ImportFrom, Lambda, ListExpr, Module, Name, Nonlocal, TupleExpr, With
 from pcc.frontends.python.codegen.hoist_analysis import _dataclass_field_names, _dataclass_field_value
-from pcc.frontends.python.vthread_effect_summary_wire import read_summary as _read_vthread_effect_summary_wire, write_summary as _write_vthread_effect_summary_wire
+from pcc.frontends.python.vthread_effect_summary_wire import (
+    effect_module_exports as _effect_module_exports,
+    read_summary as _read_vthread_effect_summary_wire,
+    write_summary as _write_vthread_effect_summary_wire,
+)
 
 
 _SUSPENSION_EXPORTS = (
@@ -178,7 +182,7 @@ def _export_function_target(
 ) -> Optional[tuple[str, str]]:
     if native_exports is None:
         return None
-    info = native_exports.get(module_name, {}).get(export_name)
+    info = _effect_module_exports(native_exports, module_name).get(export_name)
     if not isinstance(info, dict) or info.get("kind") != "function":
         return None
     # A semantic decorator replaces the public binding with an arbitrary
@@ -242,7 +246,7 @@ def _cross_module_class_bindings(
         if not isinstance(stmt, ImportFrom):
             continue
         resolved = _resolve_import_from_module(module, stmt)
-        exports = native_exports.get(resolved, {})
+        exports = _effect_module_exports(native_exports, resolved)
         for imported_name, as_name in stmt.names:
             info = exports.get(imported_name)
             if isinstance(info, dict) and info.get("kind") == "class":
@@ -257,7 +261,7 @@ def _export_target_is_may_park(
     if native_exports is None:
         return False
     module_name, export_name = target
-    info = native_exports.get(module_name, {}).get(export_name)
+    info = _effect_module_exports(native_exports, module_name).get(export_name)
     return isinstance(info, dict) and bool(info.get("may_park", False))
 
 
@@ -1101,7 +1105,7 @@ def _vthread_proven_export_method_call_target(
                 module_name, class_name = leaf_target
     if not module_name:
         return None
-    class_info = native_exports.get(module_name, {}).get(class_name)
+    class_info = _effect_module_exports(native_exports, module_name).get(class_name)
     if not isinstance(class_info, dict) or class_info.get("kind") != "class":
         return None
     for method_info in class_info.get("methods", ()):
@@ -1199,7 +1203,7 @@ def _vthread_effect_function_key(
     function_name: str,
     native_exports: dict,
 ) -> str:
-    info = native_exports.get(module_name, {}).get(function_name)
+    info = _effect_module_exports(native_exports, module_name).get(function_name)
     if isinstance(info, dict) and info.get("kind") == "function":
         module_name = str(info.get("owning_module", module_name))
         function_name = str(info.get("export_name", function_name))
@@ -1212,7 +1216,7 @@ def _vthread_effect_method_key(
     method_name: str,
     native_exports: dict,
 ) -> str:
-    info = native_exports.get(module_name, {}).get(class_name)
+    info = _effect_module_exports(native_exports, module_name).get(class_name)
     if isinstance(info, dict) and info.get("kind") == "class":
         module_name = str(info.get("owning_module", module_name))
         class_name = str(info.get("export_name", class_name))

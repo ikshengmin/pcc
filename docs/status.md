@@ -2615,8 +2615,43 @@ in the relevant section or issue and removes the entry.
    graph accesses and remove repeated whole-graph decode where exact
    effect-summary bytes and resource guards agree.
 
-   Claims:
-   - Stage2 summary-worker effect export lazy module decode: Codex, Linux, 2026-11-26T16:17Z, area selfhost
+   Stage2 summary-worker private effect export transport (next owner):
+   actual 625-source pcc.__main__ recursive stdlib graph frozen under guard.
+   Legacy compact effect wire 2,547,062B, near hosted 2,545,590B; four
+   real 8-module shards (pipeline, class_gen, parser/backend, stdlib tail)
+   access 63/120/34/17 of 625 module tables, respectively 213,916/480,392/
+   135,005/51,895 of 2,522,096B row payload; no full-table scans during
+   actual worker summary. Replace eager repeated whole-graph decode with
+   versioned indexed effect export rows; complete inventory/header/duplicate
+   validation is eager, module payload decoded once on access and cached,
+   unused payload remains private raw string. Legacy wire and custom
+   coordinator/worker callbacks retain eager transport. Producer preflight
+   still completes metadata render before destination open. All 625 decoded
+   tables equal, and 32 summary files (four shards) match byte-for-byte.
+   Host 5 alternating pairs, exact analyzer worker and same AST/wire paths:
+   class_gen shard median CPU1.45076 ->1.24721s (-14.0%,4/5), RSS102,764
+   ->93,652 KiB (5/5); stdlib tail CPU.25205 ->.15917s (-36.8%,5/5),
+   RSS37,420 ->32,012 KiB (5/5). Eager candidate control CPU1.5159/.21739s
+   and RSS102,784/37,344 KiB; host competing build noise, no wall claim.
+   Producer wire size2,547,062 ->2,544,475B, host writer CPU.05272 ->.03982s,
+   RSS39,848 ->30,124 KiB (5/5 both), unchanged eager reader control
+   .04437s/40,548 KiB. 190 focused host tests pass, native integration
+   reuses its existing owned-binary summary regression for eager/indexed
+   output equality. No whole-stage or CI parity claim.
+   Exact new runtime: 93.99s, peak390,979,584B, guard COMPLETE;
+   192-member archive provenance validates with current codegen stamp.
+   Native pcc0+self+owned linker actual worker-body fixture, 58 source
+   modules/183,798,071B IR, built188.06s, peak1,352,876,032B, static ELF.
+   Native writer on full 625-table actual graph equals host indexed wire
+   SHA256 66c3ce467a83e5b71228b1bf1f13e5293348fb2dd2e3952552331a87e1be66f7.
+   Native lazy class_gen shard (24.74s, sampled240,164,864B) and stdlib tail
+   (2.59s, sampled48,394,240B) complete, exact CPython summary SHA256
+   32561a1b9c228f1a058e7d3a94875f74b3644d3bba02b119d812dadb204062b3 and
+   1ea4a6a319beff1aadeb2cfdd810718570094a3a5496d2718545e8eeacd6d16c.
+   Native timing pairs follow separately when host quiet; this source is
+   not in integrated CI checkpoint 6cbafc4a. Stage2 <= Stage1 remains unmet.
+   Next: investigate repeated unique-class preload reconstruction.
+
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its

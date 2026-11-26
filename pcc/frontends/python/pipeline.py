@@ -54,6 +54,7 @@ from pcc.frontends.python import pipeline_ir_split as _pipeline_ir_split
 from pcc.frontends.python import pipeline_ast_wire as _pipeline_ast_wire
 from pcc.frontends.python import pipeline_frontend_workers as _pipeline_frontend_workers
 from pcc.frontends.python import pipeline_frontend_worker_execution as _pipeline_frontend_worker_execution
+from pcc.frontends.python import vthread_effect_summary_wire as _vthread_effect_summary_wire
 from pcc.frontends.python import pipeline_frontend_parallel as _pipeline_frontend_parallel
 from pcc.frontends.python import pipeline_self_backend_host as _pipeline_self_backend_host
 from pcc.frontends.python import pipeline_self_backend_config as _pipeline_self_backend_config
@@ -624,6 +625,8 @@ _closed_world_vthread_effect_export_surface = (
 )
 _OWNED_VTHREAD_EFFECT_EXPORT_SURFACE = _closed_world_vthread_effect_export_surface
 _OWNED_VTHREAD_EFFECT_EXPORT_WRITER = _write_native_exports_wire
+_OWNED_VTHREAD_EFFECT_EXPORT_READER = _read_native_exports_wire
+_OWNED_VTHREAD_EFFECT_SUMMARY_BUILDER = _build_closed_world_vthread_effect_summary
 
 
 def _summary_worker_export_surface(native_exports):
@@ -3122,7 +3125,14 @@ def _run_python_multi_export_worker(manifest) -> int:
 def _run_python_multi_summary_worker(manifest) -> int:
     return _pipeline_frontend_worker_execution.run_summary_worker(
         manifest,
-        read_native_exports_wire=_read_native_exports_wire,
+        read_native_exports_wire=(
+            _vthread_effect_summary_wire.read_effect_exports
+            if (
+                _read_native_exports_wire is _OWNED_VTHREAD_EFFECT_EXPORT_READER
+                and _build_closed_world_vthread_effect_summary is _OWNED_VTHREAD_EFFECT_SUMMARY_BUILDER
+            )
+            else _read_native_exports_wire
+        ),
         read_ast_wire=_read_py_ast_wire,
         build_effect_summary=_build_closed_world_vthread_effect_summary,
         write_effect_summary=_write_closed_world_vthread_effect_summary,
@@ -3309,6 +3319,12 @@ def _build_python_frontend_shared_exports_parallel(
     profile: Optional[dict] = None,
     module_dependency_map=None,
 ) -> str:
+    owned_summary_wire = (
+        _closed_world_vthread_effect_export_surface is _OWNED_VTHREAD_EFFECT_EXPORT_SURFACE
+        and _write_native_exports_wire is _OWNED_VTHREAD_EFFECT_EXPORT_WRITER
+        and _read_native_exports_wire is _OWNED_VTHREAD_EFFECT_EXPORT_READER
+        and _build_closed_world_vthread_effect_summary is _OWNED_VTHREAD_EFFECT_SUMMARY_BUILDER
+    )
     return _pipeline_frontend_parallel.build_shared_exports(
         tmp,
         src_paths,
@@ -3357,12 +3373,12 @@ def _build_python_frontend_shared_exports_parallel(
         ),
         vthread_effect_export_surface=(
             _summary_worker_export_surface
-            if (
-                _closed_world_vthread_effect_export_surface
-                is _OWNED_VTHREAD_EFFECT_EXPORT_SURFACE
-                and _write_native_exports_wire is _OWNED_VTHREAD_EFFECT_EXPORT_WRITER
-            )
+            if owned_summary_wire
             else _closed_world_vthread_effect_export_surface
+        ),
+        write_effect_exports_wire=(
+            _vthread_effect_summary_wire.write_effect_exports
+            if owned_summary_wire else None
         ),
         derived_class_map=_closed_world_derived_class_map,
         write_native_exports_wire=_write_native_exports_wire,
