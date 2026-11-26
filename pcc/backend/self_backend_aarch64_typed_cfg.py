@@ -89,15 +89,22 @@ def _retarget(ctx, record_id, target, opcode=None):
 
 def thread_trampoline_branches_records(ctx, records, metadata_labels=()):
     trampolines = {}
+    label_index = {}
     for index, record_id in enumerate(records):
         label = _local(ctx, record_id)
-        if label is None or ctx.symbol(label).startswith("L_pcc_smap"):
+        if label is None:
+            continue
+        label_index[label] = index
+        if ctx.symbol(label).startswith("L_pcc_smap"):
             continue
         body = []
         following = index + 1
         while following < len(records) and not _boundary(ctx, records[following]):
             if not ctx.is_empty(records[following]):
                 body.append(records[following])
+                # Only a single nonempty instruction can be a trampoline.
+                if len(body) > 1:
+                    break
             following += 1
         if len(body) == 1:
             branch = _branch(ctx, body[0])
@@ -105,11 +112,6 @@ def thread_trampoline_branches_records(ctx, records, metadata_labels=()):
                 trampolines[label] = branch[1]
     if not trampolines:
         return records
-    label_index = {}
-    for index, record_id in enumerate(records):
-        label = _local(ctx, record_id)
-        if label is not None:
-            label_index[label] = index
     rewritten = []
     for index, record_id in enumerate(records):
         branch = _branch(ctx, record_id)

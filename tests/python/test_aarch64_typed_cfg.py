@@ -204,3 +204,20 @@ def test_conditional_threading_exact_two_hundred_thousand_event_guard(padding):
     records += [ctx.mark("L_target"), ctx.add("  ret", "ret"), ctx.mark("L_end")]
     expected = reference._thread_trampoline_branches(ctx.text(records))
     assert ctx.text(typed.thread_trampoline_branches_records(ctx, records)) == expected
+
+
+def test_trampoline_nontrivial_body_stops_after_second_instruction():
+    class CountingEvents(Events):
+        def __init__(self):
+            super().__init__()
+            self.empty_reads = 0
+
+        def is_empty(self, record):
+            self.empty_reads += 1
+            return super().is_empty(record)
+
+    ctx = CountingEvents()
+    records = [ctx.mark("L_body"), ctx.add("", empty=True)]
+    records += [ctx.add("  nop", "nop") for _ in range(1000)]
+    assert typed.thread_trampoline_branches_records(ctx, records) == records
+    assert ctx.empty_reads == 3

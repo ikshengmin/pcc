@@ -2079,12 +2079,22 @@ in the relevant section or issue and removes the entry.
    144 focused typed pair/CFG/pipeline nodes pass (host, six workers,
    standalone pytest); the new work-count test fails against the old pass.
    This is a cross-target pass-level measurement, not native ARM, Stage2,
-   or whole-language acceptance. CI qualification pending. Next: trampoline
-   threading and remaining frontend/backend owners, equal-ceiling Stage2/3 CI.
+   or whole-language acceptance. CI qualification pending. Next: the trampoline pass now stops scanning a local
+   block after the second nonempty event and collects the label index in
+   its first pass, preserving all branch-distance and metadata checks.
+   On the same frozen `worker_resource_plan.py` IR, actual indexed emitter
+   input 203,963 events: five alternating CPU pairs, median 0.244 -> 0.171 s
+   (-29.6%, 5/5; first baseline arm had a cold decode cache); unchanged
+   fallthrough control 0.0568 -> 0.0558 s. Exact output record fields,
+   opcodes, operands and encoded words agree, sections assemble. 145 host
+   focused typed pair/CFG/pipeline nodes passed on six workers. The new
+   count witness reduces nontrivial-block body probes 1001 -> 3; it fails
+   on the old pass. Cross-target pass-only evidence, not native ARM or
+   full Stage2; CI pending. Next: remaining repeated frontend/backend
+   owners and equal-ceiling Stage2/3 CI.
    [Phase investigation](investigations/stage2-worker-budget-parity-45643044565.md).
 
    Claims:
-   - Stage2 AArch64 trampoline threading compile-time optimization: Codex, Linux, 2026-11-26T11:02Z, area backend
    - Stage1 compile time on macOS (J2s): Claude, macOS, 2026-11-26T09:45Z, area backend (`self_backend_aarch64_typed_peepholes.py`, `self_backend_aarch64_typed_pass_context.py`, `self_backend_aarch64_fragments.py`, the AArch64 allocator `self_backend_aarch64_darwin_regalloc.py`, the Mach-O link files, `pcc/frontends/python/direct_object_cache.py` and their tests; not `self_backend_aarch64_typed_pair.py` or `self_backend_aarch64_typed_cfg.py`, which the Stage2 pairing/trampoline unit above holds)
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
