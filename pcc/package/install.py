@@ -24,7 +24,7 @@ import zipfile
 from pathlib import Path
 from typing import Iterable
 
-from pcc.package.schema import PACKAGE_MANIFEST_SCHEMA, PACKAGE_MANIFEST_SCHEMA_VERSION, capability_profile, distribution_filename_fields, source_build_policy, wheel_tag_fields, wheel_tags
+from pcc.package.schema import PACKAGE_MANIFEST_SCHEMA, PACKAGE_MANIFEST_SCHEMA_VERSION, capability_profile, distribution_filename_fields, source_build_policy, supported_package_abi_mode, wheel_tag_fields, wheel_tags
 from pcc.package.environment import default_package_cache, default_package_site
 from pcc.package.metadata_paths import package_metadata_member_paths, package_metadata_paths
 
@@ -1079,6 +1079,37 @@ def _already_satisfied(site: Path, name: str, digest: str | None, abi: str):
     return None
 
 
+def _unsupported_abi_install(spec: str, target_dir, abi: str) -> dict[str, object]:
+    # The legacy/unknown label cannot acquire, build, extract or reuse any
+    # receipt. Retain linkage diagnostics for an explicitly named local
+    # artifact only, in a separate failure receipt outside installed payloads.
+    source = Path(spec).expanduser()
+    local = bool(spec) and source.exists()
+    result = linkage_report(
+        artifacts=[str(source)] if local and source.is_file() else [],
+        roots=[str(source)] if local and source.is_dir() else [],
+        abi_mode=abi,
+    )
+    result.update({
+        "spec": spec,
+        "manifest_schema": PACKAGE_MANIFEST_SCHEMA,
+        "schema_version": PACKAGE_MANIFEST_SCHEMA_VERSION,
+        "install_success": False,
+        "import_attempted": False,
+        "import_success": None,
+        "install_native_package_claim": False,
+        "linkage_native_package_claim": False,
+    })
+    if local:
+        site = Path(target_dir).expanduser().resolve() if target_dir else _default_site_dir()
+        failure_root = site / ".pcc-invalid-abi"
+        failure_root.mkdir(parents=True, exist_ok=True)
+        receipt = failure_root / "pcc-package.json"
+        receipt.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
+        result["manifest_path"] = str(receipt)
+    return result
+
+
 def install_package(
     spec: str,
     *,
@@ -1093,6 +1124,8 @@ def install_package(
     build_mode: str = "owned",
     resolved_from_override: str | None = None,
 ) -> dict[str, object]:
+    if not supported_package_abi_mode(abi):
+        return _unsupported_abi_install(spec, target_dir, abi)
     cache = (
         Path(cache_dir).expanduser().resolve() if cache_dir else _default_cache_dir()
     )

@@ -15,7 +15,7 @@ import tarfile
 import zipfile
 from pathlib import Path
 
-from pcc.package.schema import capability_profile
+from pcc.package.schema import capability_profile, execution_mode as package_execution_mode, supported_package_abi_mode
 
 _LIBPYTHON_PATTERNS = (
     re.compile(r"(?:^|[\s/:=,-])libpython\d+(?:\.\d+)*", re.IGNORECASE),
@@ -290,6 +290,13 @@ def linkage_report(
     links_libpython = bool(edges)
     uses_cpython_extension_abi = bool(cpython_abi_paths)
     has_scans = bool(scans)
+    valid_mode = supported_package_abi_mode(abi_mode)
+    if not valid_mode:
+        diagnostics.append({
+            "code": "PCC-PKG-ABI-MODE-INVALID",
+            "message": "unsupported package ABI mode",
+            "abi_mode": abi_mode,
+        })
     no_libpython_runtime = (
         not links_libpython
         and not uses_cpython_extension_abi
@@ -307,7 +314,7 @@ def linkage_report(
     #   abi_mode == pcc-native -> execution_mode=pcc-native; native_package_claim
     #       is True only when the artifact actually passed the pcc-native gate
     #       with NO cpython-abi / libpython edge (i.e. no PCC-PKG-003/004 firing).
-    execution_mode = "cpython-compat" if abi_allows_cpython_extension else "pcc-native"
+    execution_mode = package_execution_mode(abi_mode)
     native_package_claim = (
         execution_mode == "pcc-native"
         and has_scans
@@ -328,7 +335,8 @@ def linkage_report(
         )
     return {
         "ok": (
-            not links_libpython
+            valid_mode
+            and not links_libpython
             and (not uses_cpython_extension_abi or abi_allows_cpython_extension)
         ),
         "abi_mode": abi_mode,

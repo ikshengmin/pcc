@@ -418,10 +418,15 @@ def declarative_python_source_build(text: str) -> bool:
         return False
 
 
+def supported_package_abi_mode(abi_mode: str) -> bool:
+    """Only explicit supported modes can admit an artifact or cache receipt."""
+    return abi_mode == "pcc-native" or abi_mode == "cpython-compat"
+
+
 def execution_mode(abi_mode: str) -> str:
-    if abi_mode == "cpython-compat":
-        return "cpython-compat"
-    return "pcc-native"
+    if supported_package_abi_mode(abi_mode):
+        return abi_mode
+    return "unsupported"
 
 
 def capability_profile(

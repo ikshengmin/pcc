@@ -5,7 +5,7 @@ import sys
 
 from pcc.driver.cli_contract import BACKEND_CHOICES, DEFAULT_PUBLIC_BACKEND, DEFAULT_EMIT_LL, DIAGNOSTIC_FORMAT_CHOICES, IR_SCAFFOLD_CHOICES, cli_input_path
 
-from pcc.package.schema import PACKAGE_MANIFEST_SCHEMA, PACKAGE_MANIFEST_SCHEMA_VERSION, PCC_CAPI_HEADERS, campaign_profile, capability_profile, directory_project_name, distribution_filename_fields, literal_project_metadata_fields, source_build_policy, pcc_native_extension_suffix, pcc_native_wheel_tag, wheel_tag_fields
+from pcc.package.schema import PACKAGE_MANIFEST_SCHEMA, PACKAGE_MANIFEST_SCHEMA_VERSION, PCC_CAPI_HEADERS, campaign_profile, capability_profile, execution_mode as package_execution_mode, supported_package_abi_mode, directory_project_name, distribution_filename_fields, literal_project_metadata_fields, source_build_policy, pcc_native_extension_suffix, pcc_native_wheel_tag, wheel_tag_fields
 from pcc.package.environment import DEFAULT_PYTHON_SEMANTIC_TARGET, apply_locked_environment_resource_defaults, default_package_cache as _pcc_default_package_cache, default_package_site as _pcc_default_package_site, environment_info_json, environment_info_text, package_site_roots
 from pcc.package.metadata_paths import package_metadata_paths
 
@@ -5332,7 +5332,7 @@ def _native_cpython_extension_abi_paths_for_root(root: str):
     return out
 
 
-def _native_linkage_diagnostics_json(edges, cpython_abi_paths=None) -> str:
+def _native_linkage_diagnostics_json(edges, cpython_abi_paths=None, abi_mode: str = "pcc-native") -> str:
     if cpython_abi_paths is None:
         cpython_abi_paths = []
     diagnostics = "["
@@ -5358,6 +5358,12 @@ def _native_linkage_diagnostics_json(edges, cpython_abi_paths=None) -> str:
         diagnostics += ', "path": ' + _json_str(cpython_abi_paths[i])
         diagnostics += "}"
         i += 1
+    if not supported_package_abi_mode(abi_mode):
+        if diagnostics != "[":
+            diagnostics += ", "
+        diagnostics += '{"code": "PCC-PKG-ABI-MODE-INVALID", '
+        diagnostics += '"message": "unsupported package ABI mode", "abi_mode": '
+        diagnostics += _json_str(abi_mode) + "}"
     diagnostics += "]"
     return diagnostics
 
@@ -5398,15 +5404,11 @@ def _native_linkage_json(artifacts, roots, commands, abi_mode: str) -> str:
         # PKG-P0-ABI-MODE-LABELS: mirror linkage_report's per-scan labels so a
         # pcc1 no-libpython linkage result carries the same explicit
         # execution-mode labels as the in-process report. Generic mapping from
-        # abi_mode only (no package-name special cases): cpython-compat ->
-        # cpython-compat, otherwise pcc-native. A single scan
+        # abi_mode only (no package-name special cases), with an explicit
+        # unsupported label for unknown modes. A single scan
         # earns native_package_claim only under pcc-native with no libpython
         # edge and no CPython-ABI usage.
-        scan_execution_mode = (
-            "cpython-compat"
-            if abi_mode == "cpython-compat"
-            else "pcc-native"
-        )
+        scan_execution_mode = package_execution_mode(abi_mode)
         scan_native_package_claim = (
             abi_mode == "pcc-native" and not edge and not uses_cpython_abi
         )
@@ -5473,7 +5475,7 @@ def _native_linkage_json(artifacts, roots, commands, abi_mode: str) -> str:
         i += 1
     scans += "]"
 
-    diagnostics = _native_linkage_diagnostics_json(edges, cpython_abi_paths)
+    diagnostics = _native_linkage_diagnostics_json(edges, cpython_abi_paths, abi_mode)
 
     links = len(edges) > 0
     uses_cpython_abi = len(cpython_abi_paths) > 0
@@ -5482,18 +5484,14 @@ def _native_linkage_json(artifacts, roots, commands, abi_mode: str) -> str:
     # abi_mode alone; native_package_claim is True only when a pcc-native scan
     # produced no libpython edge and no CPython-ABI usage (a PCC-PKG-003/004
     # finding keeps it False). No existing key is renamed or removed.
-    execution_mode = (
-        "cpython-compat"
-        if abi_mode == "cpython-compat"
-        else "pcc-native"
-    )
+    execution_mode = package_execution_mode(abi_mode)
     native_package_claim = (
         abi_mode == "pcc-native"
         and scan_count > 0
         and not links
         and not uses_cpython_abi
     )
-    ok = (not links) and (
+    ok = supported_package_abi_mode(abi_mode) and (not links) and (
         (not uses_cpython_abi) or abi_mode == "cpython-compat"
     )
     out = "{"
@@ -9003,6 +9001,37 @@ def _native_host_eager_meson_build_json(name: str, source: str) -> str:
     )
 
 
+def _native_unsupported_abi_install_json(spec: str, target_dir, abi: str) -> str:
+    # Same early rejection as the host installer. Only an explicitly named
+    # local artifact may be scanned; do not resolve, build, install or cache.
+    source = os.path.expanduser(spec)
+    local = spec != "" and os.path.exists(source)
+    artifacts = []
+    roots = []
+    if local:
+        if os.path.isfile(source):
+            artifacts.append(source)
+        elif os.path.isdir(source):
+            roots.append(source)
+    report = _native_linkage_json(artifacts, roots, [], abi)
+    report = report[:-1]
+    report += ', "spec": ' + _json_str(spec)
+    report += ', "manifest_schema": ' + _json_str(PACKAGE_MANIFEST_SCHEMA)
+    report += ', "schema_version": ' + str(PACKAGE_MANIFEST_SCHEMA_VERSION)
+    report += ', "install_success": false, "import_attempted": false'
+    report += ', "import_success": null, "install_native_package_claim": false'
+    report += ', "linkage_native_package_claim": false'
+    if local:
+        target = target_dir or _pcc_default_package_site()
+        failure_root = os.path.join(os.path.abspath(target), ".pcc-invalid-abi")
+        os.makedirs(failure_root, exist_ok=True)
+        receipt = os.path.join(failure_root, "pcc-package.json")
+        with open(receipt, "w", encoding="utf-8") as fh:
+            fh.write(report + "}")
+        report += ', "manifest_path": ' + _json_str(receipt)
+    return report + "}"
+
+
 def _native_install_manifest_json(
     spec: str,
     target_dir,
@@ -9014,6 +9043,8 @@ def _native_install_manifest_json(
     build_mode: str = "owned",
     force: bool = False,
 ) -> str:
+    if not supported_package_abi_mode(abi):
+        return _native_unsupported_abi_install_json(spec, target_dir, abi)
     if index_urls is None:
         index_urls = []
     resolved = _native_resolve_install_source_result(

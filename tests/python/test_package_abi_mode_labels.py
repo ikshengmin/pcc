@@ -70,7 +70,7 @@ def test_direct_libpython_cpython_abi_fixture_rejected_without_native_claim(tmp_
         assert report["link_libpython_edges"]
         assert report["uses_cpython_extension_abi"] is True
         assert "PCC-PKG-003" in {d["code"] for d in report["diagnostics"]}
-        mode = "cpython-compat" if abi_mode == "cpython-compat" else "pcc-native"
+        mode = "unsupported" if abi_mode == "libpython" else abi_mode
         _assert_no_native_claim(report, mode)
 
 
@@ -83,7 +83,7 @@ def test_cpython_abi_without_direct_libpython_only_compat_can_pass(tmp_path):
         assert report["link_libpython_edges"] == []
         assert report["uses_cpython_extension_abi"] is True
         assert "PCC-PKG-004" in {d["code"] for d in report["diagnostics"]}
-        mode = "cpython-compat" if abi_mode == "cpython-compat" else "pcc-native"
+        mode = "unsupported" if abi_mode == "libpython" else abi_mode
         _assert_no_native_claim(report, mode)
 
 
