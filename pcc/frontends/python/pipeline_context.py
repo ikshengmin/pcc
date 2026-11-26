@@ -388,17 +388,20 @@ def build_closed_world_context(
                     "kind": "function",
                     "owning_module": mod_name,
                     "export_name": stmt_name,
-                    "return_ty": _export_return_type(_export_return_ty_or_none(stmt), raw_pointer_names),
+                    "return_ty": _export_return_type(
+                        _export_return_ty_or_none(stmt), raw_pointer_names, exact_machine_int=True,
+                    ),
                     "returns_none": _export_returns_none(
                         _export_return_ty_or_none(stmt)
                     ),
-                    "param_types": _export_param_types(stmt_args, raw_pointer_names),
+                    "param_types": _export_param_types(stmt_args, raw_pointer_names, exact_machine_int=True),
                     "call_sig": _export_call_sig(
                         stmt_args,
                         mod_name,
                         top_level_func_names,
                         raw_pointer_names,
                         str_default_cells,
+                        exact_machine_int=True,
                     ),
                     "is_async": bool(_py_ast_field_value(stmt, "is_async", False)),
                     "has_return_annotation": bool(_py_ast_field_value(stmt, "has_return_annotation", False)),
