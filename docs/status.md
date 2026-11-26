@@ -1306,7 +1306,7 @@ in the relevant section or issue and removes the entry.
    Do not infer pass or increase cap.
 
    Claims:
-   - none
+   - Ordinary external void method live receiver guard and retained direct ABI: Codex, Linux, 2026-11-26T20:58Z, area external-void-live-method
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
