@@ -135,3 +135,53 @@ gate, and no promotion of the experimental v1 ABI. Review
 size/tag ownership and the exact caller-result/root handoff before coding.
 The next separate design decisions are the C++ destructor exception contract
 and the general returned-reference ownership contract for issue #7.
+
+## First geometry slice: checked fixed and repeated slots (not a tag admission)
+
+The 64-bit descriptor geometry is now represented by
+`pcc/runtime/include/pcc_described_layout.h` and implemented in
+`freestanding_gc_described_layout.py`. Header count@0/tag@8/flags@12 stays
+unchanged. Intended described-object payload: immutable descriptor pointer
+@16, immutable repeated element count (backing capacity, not view length)
+@24, ordinary fields @32. The descriptor is compiler-owned read-only aligned
+storage with at least the object's lifetime (initially process lifetime;
+unloadable module descriptors are not admitted). The five 64-bit words are
+version, fixed prefix extent including header/metadata, repeated element byte
+stride, fixed reference count, repeated reference count; sorted unique
+64-bit reference offsets follow. Fixed offsets are object-relative and
+repeated offsets element-relative. Fixed-only objects have stride/count 0.
+A byte backing is prefix=32, stride=1 and zero reference slots. Reference
+slots are natural 8-byte aligned within their extent and metadata is never
+an edge. The exact descriptor byte count is a trusted compile-time input;
+no arbitrary-pointer validation or foreign descriptor is implied. The raw
+geometry helpers return checked logical extent, slot count, or slot ordinal
+offset, and reject malformed, overlapping, unaligned or overflowing shapes
+before any payload access. Maximum logical i64 extent does not certify that
+an allocation of that size can succeed.
+
+The helpers intentionally **do not publish a tag or a managed object**. Do
+not connect a frontend until every following production dispatch and handoff
+is implemented and tested. The current source audit locates these owners:
+
+| Boundary | Existing owner to extend together with tag admission |
+| --- | --- |
+| Header/type tag constants and native ABI | `py_abi_constants.py`, `py_runtime.h`, generated `freestanding_abi_constants.py` |
+| Allocation/extent/publication | `py_obj.py:pcc_gc_alloc`, `pcc_allocator_alloc_object`, `pcc_allocator_object_publish_fresh`, `pcc_gc_free_object_memory`; descriptor logical extent must match allocation request, and allocator rounded span must never stand in for logical slot count |
+| Refcount valid-tag checks | `py_obj.py:_py_incref_prepare`, `_py_incref_checked_tail`, `_py_decref_prepare`, `_py_decref_checked_tail`; `_gc_graph_leaf_tag` must not treat a reference-bearing descriptor as a leaf |
+| Precise traversal and bounded cursor | `freestanding_gc_object_slots.py:pcc_gc_visit_object_slots_slice`, `pcc_gc_visit_object_slots`; incrementally scanned slots and whole referent APIs share one geometry and owned role; do not rescan the entire descriptor per slot |
+| Count retirement and graph clearing | `py_obj_dealloc.py:_dealloc_should_defer`, `_dealloc_dispatch`; `freestanding_gc_backend0_collector.py:_dealloc_unreachable`; `freestanding_gc_sweep_slots.py:pcc_gc_backend0_clear_referents` / `pcc_gc_clear_container_metadata` must not erase immutable geometry before disposal |
+| Collector consumers | `freestanding_gc_backend0_slots.py` trial subtraction/mark; `freestanding_gc_backend0_incremental.py:_scan` bounded full mark; `freestanding_gc_generational_promotion.py:pcc_gc_trace_referents_for_promotion_mode`; `py_obj_gc.py` referents; all must consume the same visited slots |
+| Young/full membership | `freestanding_gc_tracking.py:py_gc_track` / `py_gc_untrack`, its young log and materialized tracked view; publish only initialized, rooted object; count-bearing layout must track regardless of initially empty slots |
+| Owning stores/root handoff | `py_obj.py:pcc_gc_store_ptr` / `pcc_gc_store_root_take` and existing frame registry (not a new root registry); preserve null-initialized private slots, publish the new owner into a registered root before a park/collection can occur, use counted stores for subsequent managed writes |
+
+Native gate still owed: one pointer-free byte backing and one mixed/reference
+backing with no fake payload offsets; scalar bytes that look like pointers
+are not followed. In both cases exercise empty capacity, correct requested
+extent, root lifetime even at allocation-to-root register-only window,
+root/field ownership transfer, failed allocation without publication, child
+retention and release, self-/mutual cycle, young collection, full bounded
+collection, explicit collect, deferred destruction, exact tracked/allocator
+retirement and bounded cursor. Negative descriptors must not allocate or
+publish. Add a dispatch-completeness test before enabling the tag; an ABI
+unit or C-to-runtime geometry execution alone is not the gate or an existing
+Python QPS non-regression measurement.

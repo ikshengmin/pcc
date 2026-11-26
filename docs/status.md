@@ -2496,7 +2496,6 @@ in the relevant section or issue and removes the entry.
    on 2026-11-26.
 
    Claims:
-   - #13 described-layout first gate ABI/extent/slot owner contract and focused tests (no continuation/py_gen changes): Codex, Linux, 2026-11-26T17:31Z, area runtime-gc-described-layout
    - Native completed-continuation allocation attribution and create/take/release cost: Codex, Linux, 2026-11-26T17:25Z, area runtime-gc
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
@@ -2520,7 +2519,24 @@ in the relevant section or issue and removes the entry.
    envelope is not promoted (Claude's recommendation; the maintainer has not
    decided promotion): it is a tuple-shaped owner, so a later tuple-specific
    step of the collector, such as no longer tracking a tuple of immutable
-   items, would apply to mutable Go and Java objects. C++
+   items, would apply to mutable Go and Java objects. #13 first independent
+   runtime geometry slice: header/descriptor contract now fixes the future
+   object descriptor@16, repeat count@24, fields@32 with unchanged existing
+   header; immutable compiler descriptor records prefix extent, element
+   stride, and sorted reference slots (fixed and repeated). Checked raw
+   extent/count/ordinal helpers are in production module source, not an
+   allocation/tag or frontend admission. Native x86 C-to-owned runtime
+   ELF probe returned 42 with empty streams, zero external symbols; owned
+   AArch64 Linux, Darwin ARM64, Windows x64 object emissions passed.
+   40 scoped tests passed under unchanged 90s/1GiB guard (2.21s, 96,915,456
+   B peak). No whole archive/current native collector or QPS certification.
+   The [shared storage design](design/go-shared-managed-storage.md#first-geometry-slice-checked-fixed-and-repeated-slots-not-a-tag-admission)
+   records allocation/extent, four refcount tag checks, bounded visitor,
+   both dealloc dispatchers, sweep/clear, young/full tracking and owning
+   root handoff. Next: integrate descriptor-backed allocation + tag/slot
+   dispatch atomically, then real rooted pointer-free/reference-bearing
+   and cycle/young/full/explicit collect tests; no Go/Java frontend use
+   or production admission until complete. C++
    [#14](https://github.com/ikshengmin/pcc/issues/14):
    implicit/explicit destructor exception specifications and the non-throwing
    override rule now select ordinary versus effect-gated D1 destruction.
