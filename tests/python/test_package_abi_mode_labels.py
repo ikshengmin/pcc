@@ -1,14 +1,11 @@
 """PKG-P0-ABI-MODE-LABELS regression coverage.
 
-Every package import/linkage result produced by ``linkage_report`` must carry
-explicit execution-mode labels so an A-mode (libpython / cpython-compat)
-compatibility SUCCESS can never silently promote to a B-mode (no-libpython /
-pcc-native) package claim.
-
-Claim boundary under test: a libpython/auto compatibility success reports
-``execution_mode == "cpython-compat"`` with ``native_package_claim is False``;
-the identical CPython-ABI artifact is rejected with a PCC-PKG-004 diagnostic
-under pcc-native mode and still never earns ``native_package_claim``.
+Every package import/linkage result must carry explicit execution-mode labels.
+A supported cpython-compat extension without a direct libpython edge may pass
+compatibility but never earns a native package claim. Direct libpython edges
+are rejected in every mode; the retired legacy libpython label cannot grant
+CPython-ABI compatibility. Identical CPython-ABI artifacts remain rejected
+under pcc-native mode with PCC-PKG-004.
 """
 
 from __future__ import annotations
@@ -33,46 +30,61 @@ def _repo_root() -> Path:
 REPO_ROOT = _repo_root()
 
 
-def _make_cpython_abi_wheel(tmp_path: Path) -> Path:
+def _make_cpython_abi_wheel(tmp_path: Path, *, direct_libpython=True) -> Path:
     """Build a realistic CPython binary wheel fixture in-process.
 
     The wheel name and the bundled extension member both declare a CPython
-    extension ABI (``cp313`` / ``cpython-313``), and the extension member links
-    ``libpython3.13`` -- exactly what a real CPython binary wheel does. Built
-    purely with the in-process ``zipfile`` API; no subprocess / shell out.
+    extension ABI (``cp313`` / ``cpython-313``). The direct libpython edge is
+    independently controlled, so an extension ABI alone cannot be mistaken
+    for a forbidden direct edge. No subprocess / shell out.
     """
 
     wheel = tmp_path / "foo-1.0-cp313-cp313-macosx.whl"
     with zipfile.ZipFile(wheel, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("foo/__init__.py", "VALUE = 1\n")
-        # CPython-ABI extension member that links libpython (cpython-compat).
-        zf.writestr(
-            "foo/_foo.cpython-313-darwin.so",
-            "\x7fELF\x00...linked against /usr/local/lib/libpython3.13.dylib\x00",
-        )
+        native = "\x7fELF\x00extension fixture"
+        if direct_libpython:
+            native += "...linked against /usr/local/lib/libpython3.13.dylib\x00"
+        zf.writestr("foo/_foo.cpython-313-darwin.so", native)
         zf.writestr("foo-1.0.dist-info/METADATA", "Name: foo\nVersion: 1.0\n")
     return wheel
 
 
-def test_libpython_auto_cpython_abi_fixture_reports_cpython_compat(tmp_path):
-    wheel = _make_cpython_abi_wheel(tmp_path)
-
-    # libpython/auto abi: the compatibility runner accepts the CPython wheel.
-    report = linkage_report(artifacts=[str(wheel)], abi_mode="libpython")
-
-    # It is a compatibility SUCCESS...
-    assert report["ok"] is True
-    # ...labeled explicitly as cpython-compat, links libpython...
-    assert report["execution_mode"] == "cpython-compat"
-    assert report["links_libpython"] is True
-    # ...but it NEVER promotes to a native package claim.
+def _assert_no_native_claim(report, execution_mode):
+    assert report["execution_mode"] == execution_mode
     assert report["native_package_claim"] is False
-
-    # Per-artifact scan results carry the same non-promoting labels.
+    assert report["capability_profile"]["native_package_claim"] is False
+    assert report["capability_profile"]["execution_mode"] == execution_mode
     assert report["scans"], "expected at least one artifact scan"
     for scan in report["scans"]:
-        assert scan["execution_mode"] == "cpython-compat"
+        assert scan["execution_mode"] == execution_mode
         assert scan["native_package_claim"] is False
+
+
+def test_direct_libpython_cpython_abi_fixture_rejected_without_native_claim(tmp_path):
+    wheel = _make_cpython_abi_wheel(tmp_path)
+    for abi_mode in ("libpython", "cpython-compat", "pcc-native"):
+        report = linkage_report(artifacts=[str(wheel)], abi_mode=abi_mode)
+        assert report["ok"] is False
+        assert report["links_libpython"] is True
+        assert report["link_libpython_edges"]
+        assert report["uses_cpython_extension_abi"] is True
+        assert "PCC-PKG-003" in {d["code"] for d in report["diagnostics"]}
+        mode = "cpython-compat" if abi_mode == "cpython-compat" else "pcc-native"
+        _assert_no_native_claim(report, mode)
+
+
+def test_cpython_abi_without_direct_libpython_only_compat_can_pass(tmp_path):
+    wheel = _make_cpython_abi_wheel(tmp_path, direct_libpython=False)
+    for abi_mode in ("libpython", "cpython-compat", "pcc-native"):
+        report = linkage_report(artifacts=[str(wheel)], abi_mode=abi_mode)
+        assert report["ok"] is (abi_mode == "cpython-compat")
+        assert report["links_libpython"] is False
+        assert report["link_libpython_edges"] == []
+        assert report["uses_cpython_extension_abi"] is True
+        assert "PCC-PKG-004" in {d["code"] for d in report["diagnostics"]}
+        mode = "cpython-compat" if abi_mode == "cpython-compat" else "pcc-native"
+        _assert_no_native_claim(report, mode)
 
 
 def test_libpython_off_cpython_abi_fixture_rejects_with_pcc_pkg_004(tmp_path):
