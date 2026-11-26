@@ -467,10 +467,20 @@ def _initialize_checked_compact_view_inner(view, sections, undefined, weak_undef
     row_counts = [_row_storage.row_count(index) for index in range(len(sections))] if staged else [len(data) // 12 for data in rows]
     section_rows = native._final_section_rows(source_sections, payloads, addrs, row_counts)
     symbol_rows = native._final_symbol_rows(source_sections, undefined_names, weak_names, addrs)
+    # With no local renames every in-range symbol resolves to its row name;
+    # resolve each once instead of once per relocation (out-of-range indices
+    # still take _relocation_symbol_name and its error). Charged as in the
+    # staged payload view.
+    ledger.check(
+        ledger.sequence(len(symbol_rows)), label="Mach-O compact symbol-name cache",
+    )
+    symbol_names = tuple(symbol["name"] for symbol in symbol_rows)
+    ledger.retained += ledger.rounded(sys.getsizeof(symbol_names))
 
     def logical(index):
         return link._iter_folded_relocation_rows(
             _raw_row_dicts(rows[index]), section_rows, symbol_rows, {},
+            symbol_names=symbol_names,
         )
 
     if staged:
@@ -482,7 +492,9 @@ def _initialize_checked_compact_view_inner(view, sections, undefined, weak_undef
                 raw = folded = None
                 try:
                     raw = _raw_row_dicts(data)
-                    folded = link._iter_folded_relocation_rows(raw, section_rows, symbol_rows, {})
+                    folded = link._iter_folded_relocation_rows(
+                        raw, section_rows, symbol_rows, {}, symbol_names=symbol_names,
+                    )
                     yield from folded
                 finally:
                     if folded is not None:
@@ -491,16 +503,47 @@ def _initialize_checked_compact_view_inner(view, sections, undefined, weak_undef
                         raw.close()
                     folded = raw = data = None
 
+    def logical_count(index):
+        # The counting fold resolves and rejects exactly what the eager fold
+        # does, without building a Relocation per row.
+        if staged:
+            with _row_storage.window(index, check=lambda: budget.check_peak(
+                    scratch, label="Mach-O compact row validation replay")) as data:
+                try:
+                    return _count_logical_staged_rows(data, section_rows, symbol_rows, symbol_names)
+                finally:
+                    # The window rejects aliases that outlive it.
+                    data = None
+        return _count_logical_staged_rows(rows[index], section_rows, symbol_rows, symbol_names)
+
+    def section_targets(index):
+        # (offset, width, target key) of every section-target row: the
+        # non-extern rows other than ADDEND (whose symbol field carries the
+        # addend). They never pair with an ADDEND or SUBTRACTOR, and the
+        # validation pass already folded every row.
+        addend = spec.ARM64_RELOC_ADDEND
+        if staged:
+            with _row_storage.window(index, check=lambda: budget.check_peak(
+                    scratch, label="Mach-O compact row validation replay")) as data:
+                try:
+                    found = [(address, length, symbol) for address, symbol, _pcrel, length, external, kind
+                             in native._FINAL_LINK_RELOCATION.iter_unpack(data) if not external and kind != addend]
+                finally:
+                    data = None
+        else:
+            found = [(address, length, symbol) for address, symbol, _pcrel, length, external, kind
+                     in native._FINAL_LINK_RELOCATION.iter_unpack(rows[index]) if not external and kind != addend]
+        for address, length, symbol in found:
+            target = section_rows[symbol - 1]
+            yield address, 1 << length, (target["segname_str"], target["sectname_str"])
+
     logical_counts = []
     previous = budget.retained_bytes
     if staged:
         budget.retained_bytes = previous + ledger.retained
     try:
         for index in range(len(source_sections)):
-            count = 0
-            for relocation in logical(index):
-                count += 1
-            logical_counts.append(count)
+            logical_counts.append(logical_count(index))
         if not staged:
             budget.retained_bytes = previous + ledger.retained
         try:
@@ -512,18 +555,15 @@ def _initialize_checked_compact_view_inner(view, sections, undefined, weak_undef
             if not staged:
                 budget.retained_bytes = previous
         for index in range(len(source_sections)):
-            for relocation in logical(index):
-                if relocation.section is not None:
-                    target_index = next(i for i, sec in enumerate(source_sections) if (sec.segname, sec.sectname) == relocation.section)
-                    width = 1 << relocation.length
-                    start = relocation.offset
-                    stored = int.from_bytes(payloads[index][start:start + width], "little")
-                    normalized = link._normalized_section_target_value(
-                        stored, None, addrs[target_index], source_sections[target_index].vm_size,
-                        width, target_index + 1,
-                    )
-                    if normalized != stored:
-                        raise native.NativeObjectError("compact section target is not object-relative")
+            for start, width, target_key in section_targets(index):
+                target_index = next(i for i, sec in enumerate(source_sections) if (sec.segname, sec.sectname) == target_key)
+                stored = int.from_bytes(payloads[index][start:start + width], "little")
+                normalized = link._normalized_section_target_value(
+                    stored, None, addrs[target_index], source_sections[target_index].vm_size,
+                    width, target_index + 1,
+                )
+                if normalized != stored:
+                    raise native.NativeObjectError("compact section target is not object-relative")
         view._source_sections = ()
         view._payloads = payloads
         view._section_index = {(section.segname, section.sectname): index for index, section in enumerate(source_sections, 1)}
@@ -1182,11 +1222,31 @@ def _input_relocations(descriptor, packed, section_index, local_rename, base):
             descriptor.symbols, local_rename, offset_bias=base,
         )
         return
+    # Resolve each symbol name and section key once per section rather than
+    # once per relocation. In-range symbol indices never fail to resolve, so
+    # out-of-range ones alone keep the per-row resolver and its error, and
+    # section keys keep list indexing.
+    symbols = descriptor.symbols
+    names = [link._relocation_symbol_name(symbols, symbol_index, local_rename, context="packed native relocation")
+             for symbol_index in range(len(symbols))]
+    keys = [link._section_key(source_section) for source_section in descriptor.sections]
+    none_index = native._NONE_INDEX
+    symbol_count = len(names)
     for fields in packed.relocation_fields(section_index):
         offset, symbol, kind, pcrel, length, addend, target, minuend, target_offset = fields
-        section_key = None if target == native._NONE_INDEX else link._section_key(descriptor.sections[target - 1])
-        symbol_name = "" if symbol == native._NONE_INDEX else link._relocation_symbol_name(descriptor.symbols, symbol, local_rename, context="packed native relocation")
-        minuend_name = None if minuend == native._NONE_INDEX else link._relocation_symbol_name(descriptor.symbols, minuend, local_rename, context="packed native SUBTRACTOR minuend relocation")
+        section_key = None if target == none_index else keys[target - 1]
+        if symbol == none_index:
+            symbol_name = ""
+        elif 0 <= symbol < symbol_count:
+            symbol_name = names[symbol]
+        else:
+            symbol_name = link._relocation_symbol_name(symbols, symbol, local_rename, context="packed native relocation")
+        if minuend == none_index:
+            minuend_name = None
+        elif 0 <= minuend < symbol_count:
+            minuend_name = names[minuend]
+        else:
+            minuend_name = link._relocation_symbol_name(symbols, minuend, local_rename, context="packed native SUBTRACTOR minuend relocation")
         yield Relocation(offset + base, symbol_name, kind, bool(pcrel), length, addend,
                          section_key, minuend_name, None if target_offset == -1 else target_offset)
 

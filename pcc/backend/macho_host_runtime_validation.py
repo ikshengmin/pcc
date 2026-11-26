@@ -14,6 +14,9 @@ from . import precise_stackmap as wire
 _BLOCK_LOCATIONS = 256
 _SUMMARY = struct.Struct("<Q")
 _INVALID = 1 << 32
+# A location word's low byte decides divisibility: offset = word & ~1 is a
+# multiple of POINTER_SIZE (8) exactly when word & 6 == 0.
+_LOW_BYTE_BAD = bytes(1 if value & 6 else 0 for value in range(256))
 _BYTEARRAY_HEADER = sys.getsizeof(bytearray())
 _ORIGINAL_BUDGET_TYPE = wire.CompactStackMapBudget
 def _function_state(function):
@@ -150,13 +153,14 @@ class _Summaries:
                           + 2 * rare + records + functions)
         self.rows = bytearray(8 * sets)
         tree = bytearray(16 * leaves)
-        for index in range(locations):
-            self._visit()
-            value = self._word(payload, locations_base, index)
-            position = leaves + index // _BLOCK_LOCATIONS
-            previous = _SUMMARY.unpack_from(tree, 8 * position)[0]
-            if value > previous:
-                _SUMMARY.pack_into(tree, 8 * position, value)
+        if not self._fill_leaves_host(payload, locations_base, locations, leaves, tree):
+            for index in range(locations):
+                self._visit()
+                value = self._word(payload, locations_base, index)
+                position = leaves + index // _BLOCK_LOCATIONS
+                previous = _SUMMARY.unpack_from(tree, 8 * position)[0]
+                if value > previous:
+                    _SUMMARY.pack_into(tree, 8 * position, value)
         for position in range(leaves - 1, 0, -1):
             self._visit()
             _SUMMARY.pack_into(tree, 8 * position, max(
@@ -193,6 +197,46 @@ class _Summaries:
                 right //= 2
             _SUMMARY.pack_into(self.rows, 8 * index, value)
         # Tree is retired here, before any record visits.
+
+    def _fill_leaves_host(self, payload, base, locations, leaves, tree):
+        """Each leaf's maximum of _word over its block, or False to take the loop.
+
+        _word is _INVALID for a nonnegative or misaligned offset (word & ~1),
+        else -offset > 0; the leaf keeps the block's maximum. Per block: any
+        word >= 0 or any low byte with bit 1 or 2 set makes it _INVALID,
+        otherwise -(min(words) & ~1) (clearing bit 0 is monotonic). The work
+        charge is the same one visit per location, taken up front.
+        """
+        if (sys.byteorder != "little" or wire._RUNTIME_LOCATION.format != "<i"
+                or struct.calcsize("i") != 4 or wire.POINTER_SIZE != 8 or locations <= 0):
+            return False
+        try:
+            view = memoryview(payload)
+        except TypeError:
+            return False
+        try:
+            if view.format != "B" or view.ndim != 1 or base < 0 or base + 4 * locations > len(view):
+                return False
+            if locations > self.remaining:
+                self.remaining = 0
+                raise wire.PreciseStackMapError("runtime validation work budget exceeded")
+            self.remaining -= locations
+            with view[base:base + 4 * locations] as raw, raw.cast("i") as words:
+                low = bytes(raw[0::4])
+                block = 0
+                while block * _BLOCK_LOCATIONS < locations:
+                    start = block * _BLOCK_LOCATIONS
+                    end = min(start + _BLOCK_LOCATIONS, locations)
+                    with words[start:end] as chunk:
+                        if max(chunk) >= 0 or 1 in low[start:end].translate(_LOW_BYTE_BAD):
+                            value = _INVALID
+                        else:
+                            value = -(min(chunk) & ~1)
+                    _SUMMARY.pack_into(tree, 8 * (leaves + block), value)
+                    block += 1
+            return True
+        finally:
+            view.release()
 
     def _visit(self):
         if self.remaining <= 0:
