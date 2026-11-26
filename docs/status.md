@@ -495,6 +495,22 @@ in the relevant section or issue and removes the entry.
    new regression reproduced the old behavior before the fix; 216 Linux
    host-Python CI native-input/owner/coverage/workflow tests passed after
    it. No workflow lane or guard relaxed; hosted Darwin execution pending.
+   #20 remaining Source/frontier failures in 45844665220 are substantive,
+   not another harness regression. The C++ Linux reference artifact
+   15131428562 had 1417 passing and 9 failing nodes: independent G++
+   reference differences already kept strict by item 4 (the separate
+   Clang++ platform gate passed). Java reference 15132176381 had 204/4
+   passes/failures; integration 15130199036 had 1255/4, the existing JDK
+   disagreements and unimplemented nominal reference field storage (#13).
+   Go integration 15130029592 had 878/2, unchanged go-enry's unsafe
+   import frontier (errors/join.go) and whole math/bits dependency closure.
+   NumPy 15130207555 is missing actual generated `_numpyconfig.h` and
+   an owned C++ `<assert.h>` (C fake-libc assert is a no-op, not a C++
+   implementation); orjson 15131090955 retains real pyo3/cfg_attr/Cargo
+   source frontiers. No oracle substitution, fabricated generated input,
+   disabled assertion, deleted node or relaxed acceptance is appropriate.
+   Continue these actual frontend/runtime owners as item 4/5 units; the
+   present host has no javac or Clang++ to requalify their strict oracles.
    Next: re-run worker-prior/changed-module and remaining Source; the 216-node
    source shared batch still requires a hosted rerun, and the active
    checkpoint's independent wheel evidence is pending.
@@ -606,7 +622,7 @@ in the relevant section or issue and removes the entry.
    under the unchanged 90 s / 1 GiB guard. Hosted verification pending.
 
    Claims:
-   - Latest Source language lane first-failure attribution and focused CI fix: Codex, Linux, 2026-11-26T15:56Z, area checkpoint
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
