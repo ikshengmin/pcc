@@ -958,6 +958,27 @@ in the relevant section or issue and removes the entry.
    freestanding_sequence_snapshot, py_re_bridge_entry, py_tuple's
    `pcc_tuple_from_owned_roots_lease`) with their callers, and
    py_capi_buffer_runtime's uncalled GC3 exporter path with its tests.
+   (d) U8, 4c batch 2 (Claude, local Mac, runtime `19bdfacc5`, tests
+   `ab5d7fb1d`): the ABIs that handed a lease token to another module are
+   status-only, with their callers. py_obj adds
+   `pcc_gc_root_copy_prepare_locked` (the split copy without a lease,
+   128-byte plan finished by `pcc_gc_store_root_plan_finish`). The class
+   namespace acquire/install slots and `pcc_list_snapshot_commit_slots`
+   lose their token parameters; py_binary_repeat_runtime drops all its
+   leases; `pcc_tuple_from_owned_roots_lease` is folded into
+   `py_tuple_from_owned_roots` (its `py_runtime.h` declaration goes); the re
+   chain's publication and class factories are `pcc_re_publish_copy`,
+   `pcc_re_match_class_copy` and `pcc_re_pattern_class_copy`, and
+   py_re_match_runtime drops its tokens array; py_capi_buffer_runtime's
+   uncalled GC3 exporter path goes. Each module compiles alone; the fully
+   converted modules' IR calls no lease function. Models follow; the
+   lease-only and GC3-only tests are deleted or rewritten and listed in the
+   tests commit. Host pcc0, by node id against HEAD `7b7be3456`, the 162
+   files naming the changed ABIs, modules or models and the 18 edited files
+   have no new failing node (two renamed tests fail on HEAD under their old
+   names for the same reasons). Not run: integration, pcc1, Linux and
+   `test_py_multi_file_bootstrap_shim.py`. Left: the own lease protocols of
+   py_class, py_dict and the other larger modules (U9-U10).
    4b is complete: no runtime module pins on its own paths or takes
    through `pcc_gc_take_pinned_slot`; what still pins is the old take
    protocol's ABI itself (`pcc_gc_pin_slot_for_take` in py_obj and the
@@ -971,7 +992,7 @@ in the relevant section or issue and removes the entry.
    Next for (d): the plan Claude runs without asking between units
    (the user, 2026-11-26: "你这么继续继续的有点需要我参与。能plan一下吗").
    Done: steps 1, 2 (pins outside the take protocol), 4a, 4b batches 1-2,
-   U1-U5 (4b), U6 and U7. U8, the cross-module token ABIs, is next.
+   U1-U5 (4b), U6, U7 and U8. U9, the next 4c batch, is next.
    Units, in order, each one claim, commit and push (runtime first, then
    its test models, then the status result):
    (U1) 4b batch 3: py_obj, py_coroutine, py_obj_ops_compare, py_tempfile
@@ -1138,7 +1159,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (d) plan U1-U14 (the units under "Next for (d)", in order): Claude, macOS, 2026-11-26T04:32Z, area runtime-codegen
+   - (d) plan U1-U14 (the units under "Next for (d)", in order): Claude, macOS, 2026-11-26T07:30Z, area runtime-codegen
 
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
