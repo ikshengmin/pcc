@@ -5071,7 +5071,21 @@ in the relevant section or issue and removes the entry.
    retain exact source/current native phase evidence. No full Stage2
    bootstrap or limits change claimed.
 
+   Next actual nested method-generation owner (source-only plan):
+   _irbuilder_call_from_args_list155,077 calls, self2.001s/cum9.918s;
+   publish_call155,077/cum6.686s in previous actual host cProfile.
+   Exact direct/no-text Function signature currently materializes
+   expected_arg_types list and empty arg_type_parts list even when
+   FunctionType.args is an immutable tuple; publish_call read-only
+   indexes expected types. Measure actual exact Function/FunctionType/
+   tuple/no-text eligible counts and copied signature entries on
+   authentic old source/class_gen route with byte-exact output before
+   any candidate. No signature memoization (known denied), no broad
+   dynamic type assumptions; preserve text/duck/custom/mutable fallback,
+   source-matched native CPU/RSS and exact contextual/actual output gates.
+
    Claims:
+   - Stage2 direct IR call signature materialization: Codex, Linux, 2026-11-26T21:15Z, area selfhost
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
