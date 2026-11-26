@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import tempfile
 from typing import Optional
 
@@ -157,6 +158,111 @@ _BATCH_HOST_CODE = (
 )
 
 
+# The owned passes of a host (CPython) build, one module per pool task. The
+# coordinator used to run them module after module: 25 s of a 142 s compile
+# of the handler benchmark, all on the critical path.
+_OWNED_BATCH_HOST_CODE = (
+    "import multiprocessing as mp\n"
+    "import sys\n"
+    "sys.path.insert(0, sys.argv[1])\n"
+    "from pcc.frontends.python.compiled_owned_passes import run_owned_passes\n"
+    "jobs = int(sys.argv[2])\n"
+    "pass_names = [name for name in sys.argv[3].split(',') if name]\n"
+    "items = sys.argv[4:]\n"
+    "def _run_one(pair):\n"
+    "    with open(pair[0], 'r', encoding='utf-8') as f:\n"
+    "        text = f.read()\n"
+    "    out = run_owned_passes(text, pass_names)\n"
+    "    with open(pair[1], 'w', encoding='utf-8') as f:\n"
+    "        f.write(out)\n"
+    "    return 0\n"
+    "pairs = [(items[i], items[i + 1]) for i in range(0, len(items), 2)]\n"
+    "if jobs > 1 and len(pairs) > 1:\n"
+    "    mp.set_start_method('fork', force=True)\n"
+    "    with mp.Pool(processes=min(jobs, len(pairs))) as pool:\n"
+    "        pool.map(_run_one, pairs, chunksize=1)\n"
+    "else:\n"
+    "    for pair in pairs:\n"
+    "        _run_one(pair)\n"
+)
+
+# Below this much IR a fresh interpreter's start-up outweighs the pool.
+OWNED_PARALLEL_MIN_BYTES = 1000000
+
+
+def run_owned_passes_parallel(
+    module_ir_texts: list[tuple[str, str]],
+    pass_names: list[str],
+    host_python_command,
+    pcc_source_root,
+) -> Optional[list[tuple[str, str]]]:
+    """Run the owned passes of several modules in a host process pool.
+
+    Each module's passes depend only on that module's text, so the result is
+    the serial loop's, module for module. Returns None where the serial loop
+    applies: inside pcc1 (no host interpreter), for fewer than two modules
+    to optimize, below ``OWNED_PARALLEL_MIN_BYTES`` or with one job. A worker
+    failure raises; there is no fallback.
+    """
+    if sys.implementation.name == "pcc":
+        return None
+    texts: list[str] = []
+    order: list[tuple[int, int]] = []
+    total_bytes = 0
+    for module_name, ir_text in module_ir_texts:
+        text = str(ir_text)
+        texts.append(text)
+        if not python_ir_pass_should_skip_module(module_name):
+            # Largest first: the pool hands out one module at a time.
+            order.append((-len(text), len(texts) - 1))
+            total_bytes += len(text)
+    if len(order) < 2 or total_bytes < OWNED_PARALLEL_MIN_BYTES:
+        return None
+    jobs = python_ir_pass_jobs(len(order))
+    if jobs < 2:
+        return None
+    order.sort()
+    results = list(texts)
+    with tempfile.TemporaryDirectory(prefix="pcc_owned_passes_") as tmp:
+        command = [host_python_command(), "-c", _OWNED_BATCH_HOST_CODE]
+        command.append(pcc_source_root())
+        command.append(small_int_decimal(jobs))
+        command.append(join_strings(pass_names, ","))
+        out_paths: list[tuple[int, str]] = []
+        for _negative_size, index in order:
+            stem = os.path.join(tmp, "module_" + small_int_decimal(index))
+            in_path = stem + ".in.ll"
+            out_path = stem + ".out.ll"
+            with open(in_path, "w", encoding="utf-8") as stream:
+                stream.write(texts[index])
+            command.append(in_path)
+            command.append(out_path)
+            out_paths.append((index, out_path))
+        timeout_seconds = python_ir_pass_timeout_seconds()
+        try:
+            if timeout_seconds is None:
+                subprocess.run(command, check=True)
+            else:
+                subprocess.run(command, check=True, timeout=float(timeout_seconds))
+        except subprocess.TimeoutExpired as exc:
+            raise PassDriverError(
+                "owned pass pool timed out after " + seconds_debug_text(exc.timeout)
+                + "; modules=" + small_int_decimal(len(order))
+            ) from exc
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+            detail = f" (exit {exc.returncode})" if hasattr(exc, "returncode") else ""
+            raise PassDriverError("owned pass pool failed" + detail) from exc
+        for index, out_path in out_paths:
+            with open(out_path, "r", encoding="utf-8") as stream:
+                results[index] = stream.read()
+    out: list[tuple[str, str]] = []
+    position = 0
+    for module_name, _ir_text in module_ir_texts:
+        out.append((module_name, results[position]))
+        position += 1
+    return out
+
+
 def split_large_modules_for_passes(
     module_ir_texts: list[tuple[str, str]],
     pass_names: list[str],
@@ -286,18 +392,24 @@ def apply_passes_many(
     if not module_ir_texts:
         return []
     if _compiled_default_requested(pass_names, default_raw):
+        parallel = run_owned_passes_parallel(
+            module_ir_texts, pass_names, host_python_command, pcc_source_root,
+        )
         out: list[tuple[str, str]] = []
-        for module_name, ir_text in module_ir_texts:
-            text = str(ir_text)
-            if python_ir_pass_should_skip_module(module_name):
-                out.append((module_name, text))
-            else:
-                out.append(
-                    (
-                        module_name,
-                        run_owned_passes(text, pass_names),
+        if parallel is not None:
+            out = parallel
+        else:
+            for module_name, ir_text in module_ir_texts:
+                text = str(ir_text)
+                if python_ir_pass_should_skip_module(module_name):
+                    out.append((module_name, text))
+                else:
+                    out.append(
+                        (
+                            module_name,
+                            run_owned_passes(text, pass_names),
+                        )
                     )
-                )
         if verbose and logger is not None:
             logger(
                 "python IR passes batch["
@@ -311,6 +423,11 @@ def apply_passes_many(
             raise PassDriverError(
                 "self optimizer does not own requested passes: " + join_strings(pass_names, ", ")
             )
+        parallel_results = run_owned_passes_parallel(
+            module_ir_texts, pass_names, host_python_command, pcc_source_root,
+        )
+        if parallel_results is not None:
+            return parallel_results
         owned_results: list[tuple[str, str]] = []
         for module_name, ir_text in module_ir_texts:
             text = str(ir_text)
