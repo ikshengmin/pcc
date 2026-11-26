@@ -576,6 +576,32 @@ class MethodCallExpressionLoweringMixin:
             return True
         return method_name in getattr(owner, "may_park_methods", set())
 
+    def _external_class_annotation_receiver(self, receiver: Expr) -> bool:
+        # An ordinary cross-module formal annotation supplies a class schema,
+        # not a proof about the live receiver. A dynamic actual argument can
+        # be an unrelated implementation (or None). Do not turn its method
+        # lookup into an unguarded call of the annotated class's body.
+        if not isinstance(receiver, Name):
+            return False
+        ty = receiver.ty
+        if (not isinstance(ty, ClassType) or not ty.module
+                or ty.module == self.ast_module.name or ty.valueclass):
+            return False
+        fd = self.current_func_def
+        if fd is None:
+            return False
+        for formal in fd.args:
+            if formal.name != receiver.ident:
+                continue
+            annotation = formal.annotation
+            return (
+                isinstance(annotation, ClassType)
+                and annotation.module == ty.module
+                and annotation.name == ty.name
+                and not annotation.valueclass
+            )
+        return False
+
     def _emit_method_call(self, expr: Call) -> ir.Value:
         """Lower ``obj.method(args)`` using the class method registry.
 
@@ -766,10 +792,24 @@ class MethodCallExpressionLoweringMixin:
                             binding_owner, attr.name, expr,
                         ) is not None):
                     sink_requires_object = False
+                # An external class annotation alone does not admit a direct
+                # boxed result body call. Keep the separate void/scalar and
+                # may-park continuation lowering unchanged in this unit.
+                # The ordinary-ABI classifier still excludes raw, valueclass,
+                # freestanding and explicit C ABI boundaries.
+                binding_fn = binding_owner.methods.get(attr.name)
+                live_annotation = (
+                    not sink_requires_object
+                    and class_object is None
+                    and binding_fn is not None
+                    and isinstance(binding_fn.function_type.return_type, ir.PointerType)
+                    and self._external_class_annotation_receiver(attr.obj)
+                    and not self._resumable_may_park_method(binding_owner, attr.name)
+                )
                 if self._ordinary_call_needs_runtime_binding(
-                    expr, binding_fd, bound_receiver, sink_requires_object,
+                    expr, binding_fd, bound_receiver,
+                    sink_requires_object or live_annotation,
                 ):
-                    binding_fn = binding_owner.methods.get(attr.name)
                     if binding_fn is not None:
                         return self._emit_runtime_bound_user_call(
                             expr, binding_owner.name + "." + attr.name, binding_fn,

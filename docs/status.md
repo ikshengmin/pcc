@@ -1237,8 +1237,46 @@ in the relevant section or issue and removes the entry.
    guard COMPLETE 2.064s/72445952B under unchanged 90s/1GiB.
    No production or gate change; integrated hosted CI UNRUN.
 
+   External class boxed-result formal dispatch correctness
+   (2026-11-26 frozen fae0dcd2): old Stage2 host witness direct
+   user_owner_Parent_ping assertion fails, exact repeat reproduced.
+   Global unique preload retains owner.Parent type but indexed
+   dependency closure intentionally has no owner shard without an
+   import. Restoring it unguarded is WRONG: actual erased Duck/None
+   source compiles with imported/qualified formal Parent and calls
+   fixed Parent_ping even on Duck and None. Strict frozen archive
+   770606d6b0e3d653bc52b14295275dc47b74eb989eab9df69ee64aead101c775;
+   CPython and unique-unimported owned ELF b2bf6e35... output
+   7/42/attribute-error, imported owned ELF2011936d... outputs7/7/7,
+   guard9.946s/96694272B. Test-first actual imported and qualified
+   both IR/native fail, 4 FAIL/4 PASS, guard27.395s/116420608B.
+   No global preload closure expansion. Only an ordinary boxed
+   pointer result method on a cross-module class formal whose live
+   receiver annotation matches its declared class moves through
+   existing live binding classifier/result owner; concrete
+   constructor, raw/valueclass, explicit C ABI and may-park
+   routes unchanged. Broad void/scalar guard rejected due existing
+   optional arena ABI evidence. New narrow candidate exact strict
+   runtime COMPLETE111.271s/387551232B, archive bytes identical
+   770606d6... with updated codegen provenance; contextual625
+   fallback0 COMPLETE97.022s/710217728B. Final44/44 PASS under
+   unchanged90s/1GiB guard34.518s/126259200B: all four real owned
+   ELF integration cases preserve int7/42, boxed string parent/duck,
+   None AttributeError, exact ctor direct7, subclass19, property31
+   and class mutation27, no CPython fallback in the host IR models.
+   Duplicate unqualified owner remains unresolved, qualified and
+   unique inference keep exact owner identity, existing aggregate
+   ABI and optional Arena void direct contract retained. Separate
+   remaining genuine void Optional annotation bug: diagnostic
+   three-module erased Duck native ELF99131119150e98836e575acdec46bd942ffb0582560d1de525015faccb3de4ee
+   output parent/parent vs CPython parent/duck with None guard,
+   guard4.355s/74022912B; no fix/admission yet. Next owner must
+   preserve actual live dispatch or exact guarded internal ABI,
+   not assume annotation/non-null is a runtime type proof. No full
+   Stage1/2, Darwin native or integrated hosted acceptance claimed.
+
    Claims:
-   - External class annotations actual runtime method dispatch correctness: Codex, Linux, 2026-11-26T20:43Z, area external-class-dispatch
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
