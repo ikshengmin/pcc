@@ -1812,7 +1812,26 @@ in the relevant section or issue and removes the entry.
        the host from the header opcodes in one bytes scan and bulk-copy
        the IDs between them (peephole passes on array_core 1.81 -> 0.83 s;
        worker CPU array_core -14.1%, 297 -12.9%, five pairs, 5/5 wins,
-       objects byte-identical). Next: (1) attribute the warm tail (link); (2) passes that
+       objects byte-identical). Stage1 on that commit (d2089f80c, local Mac,
+       host busy with tests): cold 1269 s wall, 5248 s CPU (-24% against
+       06272c490), codegen done at about 1100 s, link 162.9 s single-threaded;
+       warm rerun 581 s wall, rc 0, and its pcc1 compiled and ran a class /
+       exception / dict probe with CPython's output. 9848d7812 copies each
+       direct instruction into the module as integers (array_core -6.1%,
+       297 -6.0%). Set aside, CPU inside the noise (array_core -2.3% 4/5,
+       base spread 10%): consecutive span appends growing one tail run.
+       The link (replayed in process from a stashed Stage1 input set, output
+       byte-identical to the Stage1 pcc1; replays need the process-tree
+       guard's budget environment or the stack-map merge refuses 8M+
+       records): about 15.6M relocations, each folded into a dict and a
+       Relocation object about three times; folding is 37% of the link,
+       symbol-name resolution 64M calls, source-relocation validation 18%,
+       stack maps about 15%. Open failing nodes on HEAD before today's
+       commits: test_llvm_capi_direct_indexed_kernel.py::
+       test_direct_publication_uses_exact_static_abi_in_stage1_context
+       (dynamic getattr in arm64_asm_driver._define_label); the GC4 copy
+       fixture tests (fixture files removed with GC4).
+       Next: (1) the link's per-relocation objects; (2) passes that
        did not rewrite publish nothing and build no output; (3) the
        allocation model toward LLVM's (the maintainer's answer to P0 (c):
        at least LLVM parity): values without stack slots unless spilled,
