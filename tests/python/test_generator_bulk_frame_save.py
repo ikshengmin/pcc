@@ -32,13 +32,25 @@ print(next(iterator))
         body = re.search(r"define[^\n]*suspended__gen_resume[^\n]*\{\n(.*?)\n\}", text, re.S)
         assert body is not None
         calls.append(len(re.findall(r"call[^\n]*@py_gen_frame_save\(", body.group(1))))
-        # Each yield retains all three live locals through the private-frame
-        # setter; terminal frame cleanup alone must not satisfy this control.
-        saved_slots = re.findall(
-            r"call[^\n]*@py_gen_frame_set\(ptr [^,]+, i64 ([0-9]+), ptr %gen\.save\.[^)]+\)",
+        # The current private-frame path moves the local owner into its
+        # matching frame slot at each yield. Terminal frame_set(None) calls
+        # are not save operations and cannot satisfy this control.
+        saved = re.findall(
+            r"call[^\n]*@py_gen_frame_move\(ptr [^,]+, i64 ([0-9]+), "
+            r"ptr %(seed|first|second)\.addr\.[^,]+, i64 (%gen\.save\.owned\.i64\.[^)]+)\)",
             body.group(1),
         )
-        assert saved_slots == ["0", "1", "2", "0", "1", "2"]
+        assert [(slot, local) for slot, local, _ in saved] == [
+            ("0", "seed"), ("1", "first"), ("2", "second"),
+        ] * 2
+        owners = [owner for _, _, owner in saved]
+        assert len(set(owners)) == 6
+        for owner in owners:
+            assert re.search(
+                r"^\s*" + re.escape(owner) + r" = zext i1 1 to i64$",
+                body.group(1), re.M,
+            ), "private frame must consume exactly the owned local"
+        assert len(re.findall(r"call[^\n]*@py_gen_frame_move\(", body.group(1))) == 6
     assert calls == [0, 0], "the rejected experiment must not alter application codegen"
 
 

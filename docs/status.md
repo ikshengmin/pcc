@@ -969,8 +969,18 @@ in the relevant section or issue and removes the entry.
    frame_move), guard COMPLETE22.064s/144093184 B. No production,
    native test or resource policy change; remaining model independent.
 
+   Generator rejected-bulk-save IR control (2026-11-26): prior
+   whole-file run showed the sole remaining stale frame_set save
+   expectation failing while the native probes passed. Current owner
+   moves are checked for both disabled/enabled rejected experiment
+   settings: zero bulk calls, exactly six private frame moves, each
+   yield ordered slot0 seed/1 first/2 second, distinct true owned SSA
+   inputs, excluding terminal frame_set(None). Focused 1/1 PASS on
+   unchanged production source, replacing the old stale model rather
+   than removing the assertion. Prior native 8 PASS unaffected.
+
    Claims:
-   - Generator rejected-bulk-save current frame_move IR ownership model: Codex, Linux, 2026-11-26T19:28Z, area ci-generator-bulk-save-model
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
