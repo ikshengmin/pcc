@@ -942,7 +942,7 @@ in the relevant section or issue and removes the entry.
    no hosted lane acceptance inferred.
 
    Claims:
-   - none
+   - Darwin TLS hidden-call branch protection explicit opt-in and plain default ABI model: Codex, Linux object tests, 2026-11-26T19:21Z, area ci-darwin-tls-protection
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
