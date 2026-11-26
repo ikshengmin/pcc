@@ -1483,6 +1483,9 @@ class OwnershipLoweringMixin:
         slot still owns its (identical) value.
         """
         flag = self._ensure_owned_local_flag(name, alloca)
+        if incoming is None:
+            self._emit_release_owned_slot_if_flagged(name, alloca, flag)
+            return None
         is_owned = self.builder.load(
             flag,
             name=self._fresh(f"{name}.owned.load"),
@@ -1491,24 +1494,20 @@ class OwnershipLoweringMixin:
         entry_bb = self.builder.block
         release_bb = fn.append_basic_block(name=self._fresh(f"{name}.owned.release"))
         cont_bb = fn.append_basic_block(name=self._fresh(f"{name}.owned.cont"))
-        keep_bb = None
-        if incoming is None:
-            self.builder.cbranch(is_owned, release_bb, cont_bb)
-        else:
-            alias_bb = fn.append_basic_block(name=self._fresh(f"{name}.owned.alias"))
-            keep_bb = fn.append_basic_block(name=self._fresh(f"{name}.owned.keep"))
-            self.builder.cbranch(is_owned, alias_bb, cont_bb)
-            self.builder.position_at_end(alias_bb)
-            current = self.builder.load(alloca, name=self._fresh(name + ".alias.current"))
-            same = self.builder.icmp_unsigned(
-                "==",
-                self._as_gc_ptr(current, name=self._fresh(name + ".alias.current.gc")),
-                self._as_gc_ptr(incoming, name=self._fresh(name + ".alias.incoming")),
-                name=self._fresh(name + ".alias.same"),
-            )
-            self.builder.cbranch(same, keep_bb, release_bb)
-            self.builder.position_at_end(keep_bb)
-            self.builder.branch(cont_bb)
+        alias_bb = fn.append_basic_block(name=self._fresh(f"{name}.owned.alias"))
+        keep_bb = fn.append_basic_block(name=self._fresh(f"{name}.owned.keep"))
+        self.builder.cbranch(is_owned, alias_bb, cont_bb)
+        self.builder.position_at_end(alias_bb)
+        current = self.builder.load(alloca, name=self._fresh(name + ".alias.current"))
+        same = self.builder.icmp_unsigned(
+            "==",
+            self._as_gc_ptr(current, name=self._fresh(name + ".alias.current.gc")),
+            self._as_gc_ptr(incoming, name=self._fresh(name + ".alias.incoming")),
+            name=self._fresh(name + ".alias.same"),
+        )
+        self.builder.cbranch(same, keep_bb, release_bb)
+        self.builder.position_at_end(keep_bb)
+        self.builder.branch(cont_bb)
         self.builder.position_at_end(release_bb)
         # Each owned local slot contains exactly one reference. Clear the
         # flag and slot before a terminal release can call back or collect;
@@ -1521,13 +1520,39 @@ class OwnershipLoweringMixin:
         )
         self.builder.branch(cont_bb)
         self.builder.position_at_end(cont_bb)
-        if keep_bb is None:
-            return None
         kept = self.builder.phi(_I1, name=self._fresh(name + ".owned.kept"))
         kept.add_incoming(ir.Constant(_I1, 0), entry_bb)
         kept.add_incoming(ir.Constant(_I1, 1), keep_bb)
         kept.add_incoming(ir.Constant(_I1, 0), release_bb)
         return kept
+
+    def _emit_release_owned_slot_if_flagged(
+        self,
+        name: str,
+        alloca: ir.Value,
+        flag: ir.Value,
+    ) -> None:
+        """Release ``alloca``'s owned value when ``flag`` says it holds one."""
+        is_owned = self.builder.load(
+            flag,
+            name=self._fresh(f"{name}.owned.load"),
+        )
+        fn = self.current_function
+        release_bb = fn.append_basic_block(name=self._fresh(f"{name}.owned.release"))
+        cont_bb = fn.append_basic_block(name=self._fresh(f"{name}.owned.cont"))
+        self.builder.cbranch(is_owned, release_bb, cont_bb)
+        self.builder.position_at_end(release_bb)
+        # Each owned local slot contains exactly one reference. Clear the
+        # flag and slot before a terminal release can call back or collect;
+        # the root-store primitive performs the one matching decref.
+        self.builder.store(ir.Constant(_I1, 0), flag)
+        self.builder.call(
+            self.runtime["pcc_gc_store_root"],
+            [self._as_gc_ptr(alloca, name=self._fresh(name + ".release.gc.slot")),
+             ir.Constant(_CSTR, None)],
+        )
+        self.builder.branch(cont_bb)
+        self.builder.position_at_end(cont_bb)
 
     def _unpack_target_value_is_owned(self, value_ty: Type) -> bool:
         # Dynamic unpack sites can carry either a real PyObject* or a native
@@ -1619,6 +1644,43 @@ class OwnershipLoweringMixin:
             for record in reversed(self._fn_gc_root_slot_registry.get(self.current_function.name, ())):
                 self._emit_gc_frame_leave_for_slot(record[1])
             return
+        collect_shared_pinned = shared_exit_leaves and shared_pinned_target is not None
+        plan = self._owned_local_cleanup_plan(skip_name, collect_shared_pinned)
+        owned_releases = plan[0]
+        root_clears = plan[1]
+        for owned_entry in owned_releases:
+            self._emit_release_owned_slot_if_flagged(
+                owned_entry[0], owned_entry[1], owned_entry[2],
+            )
+        shared_pinned_slots = []
+        for root_entry in root_clears:
+            if root_entry[2] == "shared":
+                shared_pinned_slots.append(root_entry[1])
+                continue
+            self._emit_cleanup_root_clear(root_entry[1], root_entry[2])
+        if shared_exit_leaves:
+            # Not an exit site: retro-patched leaves belong on the shared exit.
+            if shared_pinned_target is not None:
+                return self._shared_return_pinned_cleanup(
+                    shared_pinned_slots, shared_pinned_target,
+                )
+            return
+        self._emit_exit_frame_leaves(skip_payload)
+
+    def _owned_local_cleanup_plan(
+        self, skip_name: Optional[str] = None, collect_shared_pinned: bool = False,
+    ):
+        """The releases one activation exit performs, chosen before emission.
+
+        Returns ``(owned, rooted)``: ``owned`` lists ``(name, slot, flag)``,
+        each released when its owned flag is set; ``rooted`` lists the pinned
+        root slots ``(name, slot, kind)`` to clear, ``kind`` "fresh" (a
+        fresh container's temporary root), "shared" (left to a shared
+        return's pinned suffix, with ``collect_shared_pinned``) or "clear".
+        A generator's parks and returns merge the plans of all their exits
+        into one shared exit (``generator_lowering``).
+        """
+        owned: list = []
         # In raw-int-scaffold mode, object-local ownership handling is
         # conservative for C-ABI-exporting/runtime modules, but user
         # scripts can still accumulate tracked locals from object-producing
@@ -1641,13 +1703,14 @@ class OwnershipLoweringMixin:
             if not self._ir_type_matches(ir_ty, _CSTR):
                 continue
             if name in self._owned_local_has_value and name != skip_name:
-                self._emit_release_owned_local_if_flagged(name, alloca)
+                flag = self._ensure_owned_local_flag(name, alloca)
+                owned.append((name, alloca, flag))
+        rooted: list = []
         rooted_names = getattr(self, "_gc_rooted_local_names", set())
         root_order = list(getattr(self, "_gc_rooted_local_order", []))
         for name in sorted(rooted_names.difference(set(root_order))):
             root_order.append(name)
         emitted_root_unpins: set[str] = set()
-        shared_pinned_slots = []
         for name in reversed(root_order):
             if name in emitted_root_unpins:
                 continue
@@ -1666,44 +1729,42 @@ class OwnershipLoweringMixin:
                 continue
             if not self._ir_type_matches(ir_ty, _CSTR):
                 continue
-            if name in getattr(self, "_pinned_gc_rooted_local_names", set()):
-                if shared_exit_leaves and shared_pinned_target is not None:
-                    # Preserve this return's exact sequence, including physical
-                    # slot aliases. Only the emitted suffix is shared; selection
-                    # still uses this return's names, environment and ownership.
-                    shared_pinned_slots.append(alloca)
-                    continue
-                if id(alloca) in self._fresh_container_root_slots:
-                    # A literal's fresh-container root clears as it was set.
-                    self.builder.call(
-                        self.runtime["pcc_gc_temp_root_leave_fresh"],
-                        [self._as_gc_ptr(
-                            alloca, name=self._fresh("gc.root.cleanup.ptr"),
-                        )],
-                    )
-                    continue
-                self.builder.call(
-                    self.runtime["pcc_gc_store_root"],
-                    [
-                        self._as_gc_ptr(
-                            alloca,
-                            name=self._fresh("gc.root.cleanup.ptr"),
-                        ),
-                        ir.Constant(_CSTR, None),
-                    ],
-                )
-        if shared_exit_leaves:
-            # Not an exit site: retro-patched leaves belong on the shared exit.
-            if shared_pinned_target is not None:
-                return self._shared_return_pinned_cleanup(
-                    shared_pinned_slots, shared_pinned_target,
-                )
+            # Only a pinned root owns its slot's reference; an exit leaves
+            # every other rooted local's slot as it is.
+            if name not in getattr(self, "_pinned_gc_rooted_local_names", set()):
+                continue
+            kind = "clear"
+            if collect_shared_pinned:
+                # Preserve this return's exact sequence, including physical
+                # slot aliases. Only the emitted suffix is shared; selection
+                # still uses this return's names, environment and ownership.
+                kind = "shared"
+            elif id(alloca) in self._fresh_container_root_slots:
+                # A literal's fresh-container root clears as it was set.
+                kind = "fresh"
+            rooted.append((name, alloca, kind))
+        return owned, rooted
+
+    def _emit_cleanup_root_clear(self, alloca: ir.Value, kind: str) -> None:
+        """Clear one rooted local at an exit, as ``_owned_local_cleanup_plan`` chose."""
+        root_ptr = self._as_gc_ptr(alloca, name=self._fresh("gc.root.cleanup.ptr"))
+        if kind == "fresh":
+            self.builder.call(self.runtime["pcc_gc_temp_root_leave_fresh"], [root_ptr])
             return
-        # Leave every slot this function ever frame-registered, newest
-        # first, exactly once per slot. Leaves are driven by the per-slot
-        # registry (not by name-keyed sets resolved through env) so a name
-        # re-bound to a fresh alloca leaves BOTH slots and the enter/leave
-        # ledger stays balanced on every exit path.
+        self.builder.call(
+            self.runtime["pcc_gc_store_root"],
+            [root_ptr, ir.Constant(_CSTR, None)],
+        )
+
+    def _emit_exit_frame_leaves(self, skip_payload=None) -> None:
+        """Leave every root frame at an exit and record the exit for patching.
+
+        Leave every slot this function ever frame-registered, newest
+        first, exactly once per slot. Leaves are driven by the per-slot
+        registry (not by name-keyed sets resolved through env) so a name
+        re-bound to a fresh alloca leaves BOTH slots and the enter/leave
+        ledger stays balanced on every exit path.
+        """
         fn = self.current_function
         registry: list = []
         if fn is not None and hasattr(self, "_fn_gc_root_slot_registry"):

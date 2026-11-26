@@ -2906,6 +2906,7 @@ class GeneratorLoweringMixin:
             )
         if not self._builder_block_is_terminated():
             self._emit_generator_finish()
+        self._emit_generator_shared_exits(self._generator_ctx_stack[-1])
 
         emit_generator_operand_restores(self)
         emit_generator_borrowed_owner_retirement(self)
@@ -2934,6 +2935,105 @@ class GeneratorLoweringMixin:
         self.current_class = saved_class
         self.current_method_kind = saved_method_kind
         return fn
+
+    def _generator_shared_exit(self, ctx, kind: str):
+        """The resume function's one shared exit of KIND ("park" or "finish").
+
+        Every park and every return ends the activation, and each used to
+        release every owned local inline, so a resume function's cleanup grew
+        with parks times owned locals (a 263-line gateway function lowered to
+        21935 release sequences). Each exit now does its own part and
+        branches here; the exit releases the union of the exits' owned locals
+        once, each by its runtime flag, after the body is complete. A park
+        exit carries its state, the slot of the yielded owner to take (or
+        null) and otherwise the value to return. Returns None where an exit
+        keeps its inline cleanup: a function with owned valueclass payload
+        roots, or ``PCC_GENERATOR_SHARED_EXIT=0``.
+        """
+        if str(os.environ.get("PCC_GENERATOR_SHARED_EXIT", "1") or "1").strip() == "0":
+            return None
+        fn = self.current_function
+        records = self._fn_valueclass_payload_root_slots.get(fn.name, ())
+        for record in records:
+            if not record[3]:
+                return None
+        exits = ctx.setdefault("shared_exits", {})
+        shared = exits.get(kind)
+        if shared is not None:
+            return shared
+        label = "gen.shared.finish"
+        if kind == "park":
+            label = "gen.shared.exit"
+        block = fn.append_basic_block(name=self._fresh(label))
+        saved_block = self.builder._block
+        self.builder.position_at_end(block)
+        shared = {
+            "kind": kind,
+            "block": block,
+            "value": self.builder.phi(_CSTR, name=self._fresh("gen.exit.value")),
+            "owned": {},
+            "rooted": {},
+        }
+        if kind == "park":
+            shared["state"] = self.builder.phi(_I64, name=self._fresh("gen.exit.state"))
+            shared["take"] = self.builder.phi(_CSTR, name=self._fresh("gen.exit.take"))
+        self.builder.position_at_end(saved_block)
+        exits[kind] = shared
+        return shared
+
+    def _generator_shared_exit_merge(self, shared, skip_name) -> None:
+        """Add this exit's cleanup plan (its exact slots and flags) to SHARED."""
+        plan = self._owned_local_cleanup_plan(skip_name)
+        for owned_entry in plan[0]:
+            key = (id(owned_entry[1]), id(owned_entry[2]))
+            if key not in shared["owned"]:
+                shared["owned"][key] = owned_entry
+        for root_entry in plan[1]:
+            key = id(root_entry[1])
+            if key not in shared["rooted"]:
+                shared["rooted"][key] = root_entry
+
+    def _emit_generator_shared_exits(self, ctx) -> None:
+        """Fill the shared exits once the body has registered every slot."""
+        exits = ctx.get("shared_exits", {})
+        for kind in ("park", "finish"):
+            shared = exits.get(kind)
+            if shared is None:
+                continue
+            self.builder.position_at_end(shared["block"])
+            for owned_entry in shared["owned"].values():
+                self._emit_release_owned_slot_if_flagged(
+                    owned_entry[0], owned_entry[1], owned_entry[2],
+                )
+            for root_entry in shared["rooted"].values():
+                self._emit_cleanup_root_clear(root_entry[1], root_entry[2])
+            self._emit_exit_frame_leaves()
+            if kind == "finish":
+                self.builder.ret(shared["value"])
+                continue
+            self.builder.call(
+                self.runtime["py_gen_set_state"],
+                [self._generator_current_object(ctx), shared["state"]],
+            )
+            # A null slot takes nothing (pcc_gc_take_slot returns null): that
+            # park returns its value instead.
+            taken = self.builder.call(
+                self.runtime["pcc_gc_take_slot"],
+                [shared["take"]],
+                name=self._fresh("gen.yield.owner"),
+            )
+            self._return_handoff_sites.append((
+                self.current_function, self.builder._block,
+                self.builder._block._instrs[-1],
+            ))
+            no_take = self.builder.icmp_unsigned(
+                "==", shared["take"], ir.Constant(_CSTR, None),
+                name=self._fresh("gen.exit.no.take"),
+            )
+            result = self.builder.select(
+                no_take, shared["value"], taken, name=self._fresh("gen.exit.result"),
+            )
+            self.builder.ret(result)
 
     def _emit_generator_add_case(
         self,
@@ -3068,8 +3168,14 @@ class GeneratorLoweringMixin:
         # StopIteration now owns the return value, including an alias of a
         # saved cell. Keep that result while retiring frame/activation refs.
         emit_generator_terminal_frame_clear(self)
-        self._emit_owned_local_cleanup()
-        self.builder.ret(result)
+        shared = self._generator_shared_exit(ctx, "finish")
+        if shared is None:
+            self._emit_owned_local_cleanup()
+            self.builder.ret(result)
+            return
+        self._generator_shared_exit_merge(shared, None)
+        shared["value"].add_incoming(result, self.builder._block)
+        self.builder.branch(shared["block"])
 
     def _emit_generator_return(self, stmt: Return) -> None:
         if stmt.value is None:
@@ -3169,30 +3275,55 @@ class GeneratorLoweringMixin:
             sys.stderr.write("pcc frontend generator yield save-frame done\n")
             sys.stderr.write("pcc frontend generator yield cleanup start\n")
         self._emit_suspend_handled_exception_scopes()
-        self._emit_owned_local_cleanup(skip_name=result_name)
-        if worker_timing:
-            sys.stderr.write("pcc frontend generator yield cleanup done\n")
-        self.builder.call(
-            self.runtime["py_gen_set_state"],
-            [self._generator_current_object(ctx), ir.Constant(_I64, state_id)],
-        )
-        if worker_timing:
-            sys.stderr.write("pcc frontend generator yield add-case start\n")
-        self._emit_generator_add_case(state_id, cont_bb)
-        if worker_timing:
-            sys.stderr.write("pcc frontend generator yield add-case done\n")
-        if result_slot is not None:
-            value = self.builder.call(
-                self.runtime["pcc_gc_take_slot"],
-                [self._as_gc_ptr(result_slot)],
-                name=self._fresh("gen.yield.owner"),
+        shared = self._generator_shared_exit(ctx, "park")
+        if shared is not None:
+            # The shared park exit releases the union of every park's owned
+            # locals, each by its flag; clear the yielded owner's flag so it
+            # stays in its slot for the take after the cleanup.
+            self._generator_shared_exit_merge(shared, result_name)
+            if result_name is not None:
+                result_flag = self._owned_local_flag_for(result_name, result_slot)
+                if result_flag is not None:
+                    self.builder.store(ir.Constant(_I1, 0), result_flag)
+            self._emit_generator_add_case(state_id, cont_bb)
+            take_slot = None
+            if result_slot is not None:
+                take_slot = self._as_gc_ptr(result_slot)
+            park_block = self.builder._block
+            shared["state"].add_incoming(ir.Constant(_I64, state_id), park_block)
+            if take_slot is not None:
+                shared["take"].add_incoming(take_slot, park_block)
+                shared["value"].add_incoming(ir.Constant(_CSTR, None), park_block)
+            else:
+                shared["take"].add_incoming(ir.Constant(_CSTR, None), park_block)
+                shared["value"].add_incoming(value, park_block)
+            self.builder.branch(shared["block"])
+            self.builder.position_at_end(cont_bb)
+        else:
+            self._emit_owned_local_cleanup(skip_name=result_name)
+            if worker_timing:
+                sys.stderr.write("pcc frontend generator yield cleanup done\n")
+            self.builder.call(
+                self.runtime["py_gen_set_state"],
+                [self._generator_current_object(ctx), ir.Constant(_I64, state_id)],
             )
-            self._return_handoff_sites.append((
-                self.current_function, self.builder._block,
-                self.builder._block._instrs[-1],
-            ))
-        self.builder.ret(value)
-        self.builder.position_at_end(cont_bb)
+            if worker_timing:
+                sys.stderr.write("pcc frontend generator yield add-case start\n")
+            self._emit_generator_add_case(state_id, cont_bb)
+            if worker_timing:
+                sys.stderr.write("pcc frontend generator yield add-case done\n")
+            if result_slot is not None:
+                value = self.builder.call(
+                    self.runtime["pcc_gc_take_slot"],
+                    [self._as_gc_ptr(result_slot)],
+                    name=self._fresh("gen.yield.owner"),
+                )
+                self._return_handoff_sites.append((
+                    self.current_function, self.builder._block,
+                    self.builder._block._instrs[-1],
+                ))
+            self.builder.ret(value)
+            self.builder.position_at_end(cont_bb)
         if resume_args_target is not None:
             # Original throw arguments are ordinary managed values, never a
             # fake pending exception. Consume them before restoring handled

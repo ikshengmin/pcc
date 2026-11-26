@@ -1656,8 +1656,29 @@ in the relevant section or issue and removes the entry.
        inline) and 5296 from `_emit_generator_finish` (every generator
        return does the same). Ordinary returns already share one exit
        (`shared_exit_leaves`); generator parks and returns do not.
-       Next: (a) generator parks and returns share one owned-local cleanup
-       per function; (b) a park saves only the slots live across it.
+       (a) done (Claude, 2026-11-26): each park and each return now
+       branches to one shared exit per resume function (one for parks,
+       one for returns) that releases the union of the exits' owned
+       locals once, each by its runtime flag, after the body has
+       registered every slot; the yielded owner's flag is cleared
+       before the branch and the slot is taken after the cleanup, as
+       before. `_owned_local_cleanup_plan` is the one selection both
+       ordinary exits and the shared exits use. A 16-park generator went
+       from 693 to 108 release sequences and now grows linearly
+       (`tests/python/test_generator_shared_suspend_cleanup.py`, which
+       also runs parks, returns, close and throw natively against
+       CPython's finalizer output). The runtime's 8264 functions are
+       byte-identical (no runtime generator), and the handler arms' smoke
+       cases pass. Found while testing, not changed: where several
+       locals die at one exit pcc releases them in name order, not
+       CPython's; CPython's traceback keeps a thrown-into generator's
+       frame alive until its except block ends, pcc releases earlier.
+       Next: (b) a park saves only the slots live across it (73 parks
+       x 90-142 `py_gen_frame_move` in the gateway function, also per
+       park at run time); a park's fresh hidden selection slots
+       (`handled.resume.pending.owner`, `except.class.*`) could reuse
+       one per function; then a systematic review of the frontend for
+       the same exits-times-locals shape.
    J3. TaskScope (5x CPython), `time.perf_counter` (7x), `str.encode` (5x).
    A1. Darwin thread-local access inline (TSD slot through `tpidrro_el0`,
        startup check, fallback to the call): the resolver is 0.65 us per
@@ -1713,7 +1734,7 @@ in the relevant section or issue and removes the entry.
    on 2026-11-26.
 
    Claims:
-   - J2 (a) generator parks and returns share one owned-local cleanup: Claude, macOS, 2026-11-26T04:40Z, area runtime-codegen (`pcc/frontends/python/codegen/generator_lowering.py`, `ownership_lowering.py` and their tests only; no file in common with item 2 (d) U7-U14)
+   - none
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
