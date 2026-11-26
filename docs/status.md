@@ -1275,8 +1275,38 @@ in the relevant section or issue and removes the entry.
    not assume annotation/non-null is a runtime type proof. No full
    Stage1/2, Darwin native or integrated hosted acceptance claimed.
 
+   Pressure Stage1 compact source lease (2026-11-26, frozen
+   a91caaaf): actual hosted c20c2c01 Mac integration artifact
+   15151930783 pressure admission FAIL before build/tests/ordinary,
+   guard COMPLETE2.020s/65716224B, residual1178s after owner621.39s.
+   Full source receipt has commit/hash/clean/count/scope, admitted
+   compact bundle has commit/hash/clean only; actual source commit
+   and hash, producer and Mac platform match. Whole-dict comparison
+   in execute and final summarize therefore rejects valid same-run
+   input. Common strict projection requires both clean True, exact
+   valid 40-char commit and 64-char hash, never missing values.
+   Full source receipt count/scope and before/after equality remain;
+   same producer/platform/manifest hash/artifact checks unchanged,
+   summary also rechecks actual current manifest bytes against
+   admitted checksum. Test-first real schema 6 FAIL/25 PASS guard
+   0.780s/45359104B (valid execute and summary rejected, actual
+   lock/build/provenance/test/mutate phases never reached).
+   Candidate focused31/31 PASS guard0.529s/36503552B with stale
+   commit/hash/missing/dirty/lease/platform/manifest bytes/full-count
+   mutation and exact subsequent phase/lock/inventory controls.
+   Full marker/pressure/bundle suites123 PASS/2 FAIL under local
+   installed pytest9.2.0/xdist3.8 (hosted pinned pytest9.0.3);
+   two existing real six-worker loadgroup nodeid suffix checks
+   fail unchanged source too (actual2FAIL guard2.841s/241172480B).
+   No worker/group/test inventory or resource relaxation. Mac
+   pressure build/execution still UNRUN; current hosted CI UNRUN.
+   Separate actual Mac not-integration artifact15151916012 reached
+   collection only, MEMORY_LIMIT124.954s/2885287936B vs cap
+   2880356352B, six workers, largest472285184B, no test outcomes.
+   Do not infer pass or increase cap.
+
    Claims:
-   - Pressure Stage1 compact source lease identity and strict phase binding: Codex, Linux, 2026-11-26T20:48Z, area pressure-lease-source
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and

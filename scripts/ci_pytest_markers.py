@@ -23,7 +23,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.ci_stage1_bundle import (
-    PLATFORMS, host_platform, import_bundle, admit_in_place, workflow_lease,
+    PLATFORMS, host_platform, import_bundle, admit_in_place, workflow_lease, valid_digest,
 )
 
 from scripts.ci_bootstrap_partition import (
@@ -40,6 +40,18 @@ RUNTIME_PROOF_PREFIX = "PCC_RUNTIME_PHASE_PROOF_SHA256="
 def require(condition, message):
     if not condition:
         raise ValueError(message)
+
+
+def _stage1_source_matches(source, bound):
+    """The bundle transports a strict projection of the full source receipt."""
+    return (
+        isinstance(source, dict) and isinstance(bound, dict)
+        and source.get("clean_commit") is True and bound.get("clean_commit") is True
+        and valid_digest(source.get("commit"), 40)
+        and valid_digest(source.get("source_sha256"))
+        and source["commit"] == bound.get("commit")
+        and source["source_sha256"] == bound.get("source_sha256")
+    )
 
 
 def digest(path):
@@ -157,9 +169,7 @@ def admitted_stage1(root, manifest_path, runtime_archive):
     require(manifest["producer"] == workflow_lease(), "Stage1 workflow lease differs")
     require(manifest["platform"] == host_platform(), "Stage1 host platform differs")
     source = source_identity()
-    require(all(source.get(key) == manifest["source"].get(key)
-                for key in ("commit", "source_sha256", "clean_commit"))
-            and source["clean_commit"] is True, "Stage1 source differs")
+    require(_stage1_source_matches(source, manifest["source"]), "Stage1 source differs")
     compiler = root / manifest["paths"]["compiler"]
     runtime = root / manifest["paths"]["runtime"]
     require(compiler.resolve().is_relative_to(root) and runtime.resolve().is_relative_to(root),
@@ -350,7 +360,8 @@ def execute_pressure_phase(directory):
                "interval": 3, "build": "UNRUN", "tests": "UNRUN"}
     save(directory / "receipt.json", receipt)
     try:
-        require(source == manifest["source"] and manifest["producer"] == workflow_lease()
+        require(_stage1_source_matches(source, manifest["source"])
+                and manifest["producer"] == workflow_lease()
                 and manifest["platform"] == host_platform(), "pressure lease/source/platform differs")
         require(receipt["manifest_sha256"] == os.environ["PCC_CI_STAGE1_MANIFEST_SHA256"],
                 "pressure admission manifest changed")
@@ -412,14 +423,17 @@ def summarize_runtime_phases(directory):
     ordinary = summarize(directory / "ordinary", "integration", "remainder", "ordinary")
     require(pressure["status"] == ordinary["status"] == "PASS", "runtime phases have gaps")
     receipt = json.loads((directory / "pressure/receipt.json").read_text())
-    manifest = json.loads(Path(os.environ["PCC_CI_STAGE1_MANIFEST"]).read_text())
+    manifest_path = Path(os.environ["PCC_CI_STAGE1_MANIFEST"])
+    manifest = json.loads(manifest_path.read_text())
+    source = source_identity()
     runtime = directory / "pressure/runtime/libpy_runtime_pcc_py.a"
     compiler = ROOT / manifest["paths"]["compiler"]
     require(receipt["status"] == receipt["build"] == receipt["tests"] == "PASS"
             and receipt["summary"] == pressure, "pressure prerequisite receipt did not pass")
-    require(receipt["manifest_sha256"] == os.environ["PCC_CI_STAGE1_MANIFEST_SHA256"]
+    require(receipt["manifest_sha256"] == os.environ["PCC_CI_STAGE1_MANIFEST_SHA256"] == digest(manifest_path)
             and receipt["producer"] == workflow_lease() == manifest["producer"]
-            and receipt["source"] == source_identity() == manifest["source"]
+            and receipt["source"] == source
+            and _stage1_source_matches(source, manifest["source"])
             and receipt["platform"] == host_platform() == manifest["platform"],
             "pressure receipt belongs to another input/run")
     paths = (runtime, Path(str(runtime) + ".provenance.json"), Path(str(runtime) + ".capi_syms"))

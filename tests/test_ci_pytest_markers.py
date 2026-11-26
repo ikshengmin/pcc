@@ -575,14 +575,16 @@ def test_macos_full_gc_fixture_uses_explicit_admitted_input(tmp_path, monkeypatc
 def test_admitted_fixture_rechecks_lease_source_and_runtime_bytes(tmp_path, monkeypatch):
     from scripts import bootstrap_platform
     from tests import runtime_fixture_provenance
-    source = {'commit': 'a' * 40, 'source_sha256': 'b' * 64, 'clean_commit': True}
+    manifest_source = {'commit': 'a' * 40, 'source_sha256': 'b' * 64, 'clean_commit': True}
+    source = dict(manifest_source, source_file_count=1588,
+                  source_scope='compiler-runtime-headers-build-harness-v1')
     lease = {'repository': 'ikshengmin/pcc', 'run_id': 123, 'run_attempt': 1}
     compiler_rel, runtime_rel = 'build/bootstrap/pcc1', 'build/runtime.a'
     compiler, runtime = tmp_path / compiler_rel, tmp_path / runtime_rel
     compiler.parent.mkdir(parents=True)
     compiler.write_bytes(b'explicit compiler fixture, not executed')
     runtime.write_bytes(b'explicit runtime fixture, not executed')
-    manifest = {'producer': lease, 'platform': 'macos-arm64', 'source': source,
+    manifest = {'producer': lease, 'platform': 'macos-arm64', 'source': manifest_source,
                 'paths': {'compiler': compiler_rel, 'runtime': runtime_rel},
                 'files': {name: {'sha256': gate.digest(tmp_path / name)}
                           for name in (compiler_rel, runtime_rel)}}
@@ -597,15 +599,20 @@ def test_admitted_fixture_rechecks_lease_source_and_runtime_bytes(tmp_path, monk
                         lambda archive, threads: admissions.append((archive, threads)))
     assert gate.admitted_stage1(tmp_path, path, runtime) == compiler
     assert admissions == [(runtime, True)]
-    for key, value in (('producer', dict(lease, run_attempt=2)),
-                       ('platform', 'linux-aarch64'),
-                       ('source', dict(source, commit='c' * 40))):
+    for key, value, error in (('producer', dict(lease, run_attempt=2), 'workflow lease differs'),
+                              ('platform', 'linux-aarch64', 'host platform differs'),
+                              ('source', dict(manifest_source, commit='c' * 40), 'source differs'),
+                              ('source', dict(manifest_source, source_sha256='c' * 64), 'source differs'),
+                              ('source', dict(manifest_source, clean_commit=False), 'source differs'),
+                              ('source', {'commit': source['commit'], 'clean_commit': True}, 'source differs')):
         bad = deepcopy(manifest)
         bad[key] = value
         path.write_text(json.dumps(bad))
-        with pytest.raises(ValueError):
+        monkeypatch.setenv('PCC_CI_STAGE1_MANIFEST_SHA256', gate.digest(path))
+        with pytest.raises(ValueError, match=error):
             gate.admitted_stage1(tmp_path, path, runtime)
     path.write_text(json.dumps(manifest))
+    monkeypatch.setenv('PCC_CI_STAGE1_MANIFEST_SHA256', gate.digest(path))
     compiler.write_bytes(b'tampered')
     with pytest.raises(ValueError, match='bytes differ'):
         gate.admitted_stage1(tmp_path, path, runtime)

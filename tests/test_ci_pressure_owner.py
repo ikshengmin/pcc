@@ -246,7 +246,9 @@ def test_optional_native_input_identity_does_not_reject_missing_negative_input(t
     assert row["objects"] == [row["source"]]
 
 
-@pytest.mark.parametrize("mutation", [None, "source", "platform", "attempt", "archive-path", "archive-bytes",
+@pytest.mark.parametrize("mutation", [None, "source", "source-count", "manifest-commit",
+                                    "manifest-hash", "manifest-dirty", "manifest-missing",
+                                    "manifest-digest", "platform", "attempt", "archive-path", "archive-bytes",
                                     "provenance", "interval", "routing", "missing-receipt", "config"])
 def test_final_pressure_summary_readmits_exact_artifacts_and_restores_ordinary_config(tmp_path, monkeypatch, mutation):
     """Receipt mutation controls; the provenance verifier is an explicit seam."""
@@ -264,9 +266,11 @@ def test_final_pressure_summary_readmits_exact_artifacts_and_restores_ordinary_c
     routing_path.write_text("".join(json.dumps(row) + "\n" for row in rows))
     provenance = {"target_triple": "host-target", "contract_fixture": True}
     manifest_path = tmp_path / "manifest.json"
-    source = {"commit": "a" * 40}
+    manifest_source = {"commit": "a" * 40, "source_sha256": "b" * 64, "clean_commit": True}
+    source = dict(manifest_source, source_file_count=1588,
+                  source_scope="compiler-runtime-headers-build-harness-v1")
     lease = {"run_id": 123, "run_attempt": 1}
-    manifest = {"paths": {"compiler": "pcc1"}, "source": source, "producer": lease,
+    manifest = {"paths": {"compiler": "pcc1"}, "source": manifest_source, "producer": lease,
                 "platform": "linux-x86_64", "target": "host-target"}
     manifest_path.write_text(json.dumps(manifest))
     paths = (runtime, Path(str(runtime) + ".provenance.json"), Path(str(runtime) + ".capi_syms"))
@@ -298,6 +302,27 @@ def test_final_pressure_summary_readmits_exact_artifacts_and_restores_ordinary_c
     monkeypatch.setattr(runtime_fixture_provenance, "_verified_test_runtime_archive", verify)
     if mutation == "source":
         receipt["source"] = {"commit": "stale"}
+    elif mutation == "source-count":
+        receipt["source"] = dict(source, source_file_count=1589)
+    elif mutation and mutation.startswith("manifest-"):
+        if mutation == "manifest-commit":
+            manifest_source["commit"] = "c" * 40
+        elif mutation == "manifest-hash":
+            manifest_source["source_sha256"] = "c" * 64
+        elif mutation == "manifest-dirty":
+            manifest_source["clean_commit"] = False
+        elif mutation == "manifest-missing":
+            del manifest_source["source_sha256"]
+        elif mutation == "manifest-digest":
+            manifest["claim"] = "changed bytes, same identity"
+        else:
+            raise AssertionError(mutation)
+        manifest_path.write_text(json.dumps(manifest))
+        if mutation != "manifest-digest":
+            # Identity mutations must fail beyond the manifest digest check.
+            checksum = gate.digest(manifest_path)
+            receipt["manifest_sha256"] = checksum
+            monkeypatch.setenv("PCC_CI_STAGE1_MANIFEST_SHA256", checksum)
     elif mutation == "platform":
         receipt["platform"] = "linux-aarch64"
     elif mutation == "attempt":
@@ -439,7 +464,9 @@ def test_guarded_stdout_proof_streams_and_requires_one_complete_terminal_marker(
     gate.require_runtime_stdout_proof(path, expected)
 
 
-@pytest.mark.parametrize("failure", [None, "lock", "build", "provenance", "tests", "mutate"])
+@pytest.mark.parametrize("failure", [None, "source-commit", "source-hash", "source-missing",
+                                    "source-dirty", "lease", "platform", "manifest-digest",
+                                    "lock", "build", "provenance", "tests", "mutate"])
 def test_pressure_owner_keeps_build_and_tests_inside_existing_lock(tmp_path, monkeypatch, failure):
     """Only inert files and subprocess seams; no PCC compilation in this contract."""
     from scripts import bootstrap_platform, file_lock
@@ -452,11 +479,25 @@ def test_pressure_owner_keeps_build_and_tests_inside_existing_lock(tmp_path, mon
     compiler.write_bytes(b"inert compiler")
     original_runtime.write_bytes(b"ordinary runtime must survive")
     original_bytes = original_runtime.read_bytes()
-    source = {"commit": "a" * 40, "source_sha256": "b" * 64, "clean_commit": True}
+    manifest_source = {"commit": "a" * 40, "source_sha256": "b" * 64, "clean_commit": True}
+    source = dict(manifest_source, source_file_count=1588,
+                  source_scope="compiler-runtime-headers-build-harness-v1")
     lease = {"repository": "ikshengmin/pcc", "run_id": 123, "run_attempt": 1}
-    manifest = {"source": source, "producer": lease, "platform": "linux-x86_64", "target": "host-target",
+    manifest = {"source": manifest_source, "producer": lease, "platform": "linux-x86_64", "target": "host-target",
                 "paths": {"compiler": "pcc1", "runtime": "ordinary.a"},
                 "files": {p.name: {"sha256": gate.digest(p)} for p in (compiler, original_runtime)}}
+    if failure == "source-commit":
+        manifest_source["commit"] = "c" * 40
+    elif failure == "source-hash":
+        manifest_source["source_sha256"] = "c" * 64
+    elif failure == "source-missing":
+        del manifest_source["source_sha256"]
+    elif failure == "source-dirty":
+        source["clean_commit"] = False
+    elif failure == "lease":
+        manifest["producer"] = dict(lease, run_attempt=2)
+    elif failure == "platform":
+        manifest["platform"] = "linux-aarch64"
     path = tmp_path / "manifest.json"
     path.write_text(json.dumps(manifest))
     runtime = directory / "runtime/libpy_runtime_pcc_py.a"
@@ -466,6 +507,8 @@ def test_pressure_owner_keeps_build_and_tests_inside_existing_lock(tmp_path, mon
            "PCC_GC_PRESSURE_NATIVE": "1", "PCC_TEST_NO_NATIVE_PROVISIONING": "1",
            "PCC_RUNTIME_BUILD_JOBS": "2", "PCC_WORKER_TREE_BUDGET_BYTES": "2147483648"}
     monkeypatch.setattr(os, "environ", env)
+    if failure == "manifest-digest":
+        path.write_text(json.dumps(dict(manifest, claim="changed bytes, same identity")))
     monkeypatch.setattr(gate, "ROOT", root)
     monkeypatch.setattr(bootstrap_platform, "source_identity", lambda: source)
     monkeypatch.setattr(gate, "host_platform", lambda: "linux-x86_64")
@@ -523,8 +566,20 @@ def test_pressure_owner_keeps_build_and_tests_inside_existing_lock(tmp_path, mon
     receipt = json.loads((directory / "receipt.json").read_text())
     assert receipt["status"] == ("FAIL" if failure else "PASS")
     assert original_runtime.read_bytes() == original_bytes and not held
-    if failure in ("lock", "build", "provenance"):
-        assert receipt["tests"] == "UNRUN" and len(calls) <= 1
+    assert receipt["source"] == source  # The full receipt is never projected away.
+    if failure in ("source-commit", "source-hash", "source-missing", "source-dirty",
+                   "lease", "platform", "manifest-digest"):
+        assert receipt["build"] == receipt["tests"] == "UNRUN"
+        assert not calls and not checks and not runtime.parent.exists()
+    if failure == "lock":
+        assert receipt["build"] == receipt["tests"] == "UNRUN"
+        assert not calls and not checks
+    elif failure in ("build", "provenance"):
+        assert receipt["build"] == "FAIL" and receipt["tests"] == "UNRUN"
+        assert len(calls) == 1
+    elif failure in ("tests", "mutate"):
+        assert receipt["build"] == "PASS" and receipt["tests"] == "FAIL"
+        assert len(calls) == 2
     if failure is None:
         assert len(calls) == len(checks) == 2
         assert receipt["build"] == receipt["tests"] == "PASS"
