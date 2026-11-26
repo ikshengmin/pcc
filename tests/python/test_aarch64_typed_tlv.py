@@ -149,3 +149,18 @@ def test_symbol_token_reads_and_lr_spelling_are_not_architectural_aliases():
     assert typed._mask(ctx, [(TOKEN_SYMBOL, 5, SYMBOL_PLAIN, 0)]) == typed._X16
     assert typed._mask(ctx, [typed._reg(REGISTER_LR)]) == typed._X30
     assert typed._mask(ctx, [typed._reg(132)]) == 0
+
+
+def test_resolver_probe_reuses_invariant_operand_shape(monkeypatch):
+    ctx = Events()
+    records = [ctx.add("nop") for _ in range(1000)]
+    original = typed._reg
+    calls = []
+
+    def count(register):
+        calls.append(register)
+        return original(register)
+
+    monkeypatch.setattr(typed, "_reg", count)
+    assert typed.elide_dead_tlv_resolver_saves_records(ctx, records) == records
+    assert calls == [16]

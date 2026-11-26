@@ -251,8 +251,9 @@ def _branch(ctx, record):
 def _rewrite_function(ctx, records, start, end):
     calls: dict[int, tuple[int, int, int]] = {}
     index = start
+    frame_operands = [_reg(REGISTER_SP), _reg(REGISTER_SP), _imm(_EMITTED_FRAME)]
     while index < end:
-        if _matches(ctx, records[index], "sub", [_reg(REGISTER_SP), _reg(REGISTER_SP), _imm(_EMITTED_FRAME)]):
+        if _matches(ctx, records[index], "sub", frame_operands):
             match = _match_resolver_call(ctx, records, index, end)
             if match is not None:
                 calls[match[0]] = (index, match[1], match[2])
@@ -360,7 +361,8 @@ def _rewrite_function(ctx, records, start, end):
 
 
 def elide_dead_tlv_resolver_saves_records(ctx, records):
-    if not any(_matches(ctx, record, "blr", [_reg(16)]) for record in records):
+    resolver_operands = [_reg(16)]
+    if not any(_matches(ctx, record, "blr", resolver_operands) for record in records):
         return records
     out = []
     index = 0

@@ -2128,12 +2128,23 @@ in the relevant section or issue and removes the entry.
    compiler module): candidate compacting label-only ranges was 0.06685 ->
    0.07321 s (0/5); a cached-record variant 0.06947 -> 0.06696 s (2/5),
    controls stable and exact output equal. Neither candidate is admitted;
-   no production change. Next: profile TLV resolver-save elimination and
-   other repeated frontend/backend owners, equal-ceiling Stage2/3 CI.
+   no production change. TLV resolver-save screening now constructs invariant operand lists once
+   per module probe/function scan, not per record; exact match and liveness
+   semantics unchanged. Linux host CPython 3.13, real indexed
+   `worker_resource_plan.py` AArch64 Linux input 202,882 events: five
+   alternating pairs CPU median 0.04734 -> 0.03214 s (-32.1%, 5/5), control
+   0.05641 -> 0.05684 s. Same source Darwin-target IR SHA256
+   `3988b84c88373bcb45b47b9e344277aa0a3169ad3e1e6561cc9df2aca2959cfa`,
+   295,768 events: 0.06752 -> 0.05574 s (4/5; control 0.09129 -> 0.10218 s,
+   noisy, no native Mac claim). Both exact output records match and assemble;
+   615 focused typed tests pass, changed module emits x86 Linux IR. Work-count
+   witness reduces 1000 invariant operand constructions to 1. Pass-only
+   host cross-target gains, whole-stage CI pending. Next: re-profile the
+   remaining frontend/backend owners on a current module and equal-ceiling
+   Stage2/3 CI.
    [Phase investigation](investigations/stage2-worker-budget-parity-45643044565.md).
 
    Claims:
-   - Stage2 AArch64 TLV resolver-save compile-time optimization: Codex, Linux, 2026-11-26T13:02Z, area backend
    - Stage1 compile time on macOS (J2s): Claude, macOS, 2026-11-26T09:45Z, area backend (`self_backend_aarch64_typed_peepholes.py`, `self_backend_aarch64_typed_pass_context.py`, `self_backend_aarch64_fragments.py`, the AArch64 allocator `self_backend_aarch64_darwin_regalloc.py`, the Mach-O link files, `pcc/frontends/python/direct_object_cache.py` and their tests; not `self_backend_aarch64_typed_pair.py` or `self_backend_aarch64_typed_cfg.py`, which the Stage2 pairing/trampoline unit above holds)
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
