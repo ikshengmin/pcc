@@ -4655,8 +4655,65 @@ in the relevant section or issue and removes the entry.
    semantics. Require test-first, actual same-route exact output,
    source-matched native measurement and no fallback before production.
 
+   Lazy local MRO walk allocation (structural, no negative cache).
+   Remove two per-query nested publication/miss closures; publish positive
+   cache inline, re-read cache after external declaration, no miss caching.
+   Initial class inspection precedes graph-walk allocation; visited/queue
+   created only on actual non-object base edge, preserve breadth-first
+   order, qualified import lookup, local/remote priority and live changes.
+   Test-first leaf allocation guard red then 13 class-model tests green
+   (mutable miss, BFS/cycle, external cache publication). Exact contextual
+   625-source graph native capture41.894 s / 270,667,776 B, changed
+   class_model_lowering 67 functions/31,962 instructions, fallback0.
+   Fresh exact source-owned runtime99.949 s / 394,907,648 B.
+   Actual old-source host projection replay COMPLETE66.265 s /
+   790,360,064 B, exact original 57,304,557-byte assembly. Projection
+   SHA256 ee24cb03ad499a1c6b8b536207472bebf06e2524e69e019a1a5c2c744defa91f:
+   151,998 ordered actual leaf queries,107 descriptors/103 classes, all
+   base tuples empty, exact method names1–155/field names0–230, actual
+   positive-key union220 no leaf overlap (cache grew4–220; 452 export
+   modules). Focused native projection uses these actual descriptor/key
+   facts and exact baseline/candidate method bodies (only method names
+   changed), not the full native compiler. Function SHA256 baseline
+   c8c80347639f791f3b8ef62b949793b3f0babacea9dcb07c37ffa6b35231353c,
+   candidate79273a9238b853394ced1278c73f8684b266c2822035ea9b9aaf6ce69c72c465.
+   23-module native build50.224 s / 575,664,128 B, static no libpython,
+   binary SHA256 e62bed7c0fdea2df1f000affee373cc5ed76b70f2c5f92f738a9c5ff3f5f661e;
+   contract exact miss/then-live registration rc0. Additional same-body
+   native BFS/cycle contract rebuild49.234 s / 534,970,368 B,
+   SHA256 498bc58adfed6900284e086e1e6889da7060a2be955603cdafa5d74c3210f3a1,
+   NATIVE_MRO_PROJECTION_AND_BFS_OK, rc0.
+   Old6cbafc4a plus exact candidate production file blob (identical
+   preimage) actual host singleton same-route COMPLETE112.922 s /
+   775,352,320 B; byte-identical assembly SHA256
+   7165f5ed623388294453b9a74154db3e9562185daf3d9f446b03c35811777e16,
+   exact all245,699 MRO counts/results/151,998 leaf and CFG. Host
+   concurrently measured diagnostic only, no timing A/B.
+   Exclusive native projected actual leaf query sequence 151,998 x
+   five alternating baseline/candidate/control triples, pinned CPU,
+   same static binary, all15 exact negative results/107 descriptors/
+   220 positive keys. Inner median1.206446041 -> 0.758256592 s
+   (-37.150%,5/5, control+6.263%); full process CPU1.824287 ->
+   1.383180 s (-24.180%,5/5, control+3.909%); wall1.828317 ->
+   1.414990 s (-22.607%,5/5, control+5.353%); RSS20,664 ->
+   20,600 KiB (-0.310%,3/5, control0). Harness COMPLETE26.214 s,
+   peak31,174,656 B; stdout SHA256
+   894ca64c6384cf62add0c1998497f286a6b7c5a9f88b9694145ae79fd3924120.
+   Broad class/subclass/cross-module suite98 passed,1 xfailed,1 failed:
+   test_native_cross_module_class_annotation_dispatch.py::
+   test_unique_external_class_annotation_dispatches_method_natively also
+   fails exact untouched HEAD100c29d8 preimage, same direct-dispatch
+   assertion; separate candidate rerun baseline/candidate user_user_run
+   body4233 bytes byte-identical SHA256
+   b29bb2e32ff99a9fabd8850c0634737aefe3e3c871015c7a921f9113d4b67caf.
+   Known baseline failure untouched, not masked; no new regression.
+   Narrow projected native leaf benefit, not full native owner or
+   completed Stage2 speed. No relaxed guards/full bootstrap.
+   Next measured repeated method-generation owner: source binding
+   traversal/call argument and IR call publication costs.
+
    Claims:
-   - Stage2 allocation-free local MRO misses: Codex, Linux, 2026-11-26T19:59Z, area selfhost
+   - none
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its

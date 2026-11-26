@@ -205,3 +205,52 @@ def test_resolve_method_mro_does_not_cache_misses():
     assert probe._resolve_method_mro("Child", "missing") is None
 
     assert not getattr(probe, "_method_mro_cache", {})
+
+
+def test_leaf_mro_miss_does_not_allocate_walk_set_and_stays_live(monkeypatch):
+    from pcc.frontends.python.codegen import class_model_lowering as lowering
+    from pcc.frontends.python.py_ast import DynType, Name
+    probe = _ClassExportProbe()
+    leaf = SimpleNamespace(methods={}, field_names=[], bases_ast=(
+        Name(span=None, ty=DynType('dyn'), ident='object'),
+    ))
+    probe.class_lowering.classes['Leaf'] = leaf
+    def forbidden_set():
+        pytest.fail('leaf miss allocated graph walk set')
+    monkeypatch.setattr(lowering, 'set', forbidden_set, raising=False)
+    assert probe._resolve_method_mro('Leaf', 'hook') is None
+    assert not getattr(probe, '_method_mro_cache', {})
+    # Registration is mutable; a prior miss must not suppress a later method.
+    leaf.methods['hook'] = object()
+    assert probe._resolve_method_mro('Leaf', 'hook') is leaf
+
+
+def test_lazy_mro_walk_keeps_breadth_first_order_and_cycles():
+    from pcc.frontends.python.py_ast import DynType, Name
+    probe = _ClassExportProbe()
+    probe.ast_module = SimpleNamespace(body=())
+    def info(*bases, method=False):
+        return SimpleNamespace(methods={'hook': object()} if method else {}, field_names=[],
+            bases_ast=tuple(Name(span=None, ty=DynType('dyn'), ident=base) for base in bases))
+    first = info('Grand')
+    second = info(method=True)
+    grand = info('Child', method=True)
+    child = info('First', 'Second')
+    probe.class_lowering.classes.update({'Child': child, 'First': first, 'Second': second, 'Grand': grand})
+    assert probe._resolve_method_mro('Child', 'hook') is second
+    assert probe._resolve_method_mro('Child', 'never') is None
+    assert ('Child', 'never') not in getattr(probe, '_method_mro_cache', {})
+
+
+def test_remote_positive_publication_rereads_cache_after_declaration():
+    probe = _ClassExportProbe()
+    original = probe.class_lowering.declare_extern_class
+    marker = object()
+    def declare(**kwargs):
+        # External class declaration can recursively resolve another method.
+        probe._method_mro_cache = {('Other', 'hook'): marker}
+        return original(**kwargs)
+    probe.class_lowering.declare_extern_class = declare
+    result = probe._resolve_method_mro('Child', 'build')
+    assert result is not None
+    assert probe._method_mro_cache == {('Other', 'hook'): marker, ('Child', 'build'): result}

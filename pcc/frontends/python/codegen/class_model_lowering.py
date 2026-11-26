@@ -646,112 +646,101 @@ class ClassModelLoweringMixin:
         if cache is not None:
             if cache_key in cache:
                 return cache[cache_key]
-        visited: set[str] = set()
-        queue = [class_name]
+        # Most hook queries start at a known local leaf. Do not allocate a
+        # graph walk (or closure to publish a positive result) until an
+        # actual base edge is encountered. Misses remain uncached because
+        # declaration may add a class, method or field during lowering.
+        visited: Optional[set[str]] = None
+        queue: Optional[list[str]] = None
+        cname = class_name
         native_table = self._native_module_exports or {}
 
-        def remember(info):
-            cache = getattr(self, "_method_mro_cache", None)
-            if cache is None:
-                cache = {}
-                self._method_mro_cache = cache
-            cache[cache_key] = info
-            return info
+        while True:
+            if visited is None or cname not in visited:
+                if visited is not None:
+                    visited.add(cname)
 
-        def remember_missing():
-            # Do not cache misses: a method may be absent only because not all
-            # classes are registered yet (cross-module MRO), so a cached miss
-            # could become stale.  Only positive results are memoized.
-            return None
-
-        while queue:
-            cname = queue.pop(0)
-            if cname in visited:
-                continue
-            visited.add(cname)
-
-            # 1. Try local registry first.
-            info = self.class_lowering.classes.get(cname)
-            if info is not None:
-                if method_name in info.methods or method_name in info.field_names:
-                    return remember(info)
-                for base_expr in info.bases_ast:
-                    if isinstance(base_expr, Name) and base_expr.ident != "object":
-                        # A base written as a bare name refers to THIS module's
-                        # binding for it, so qualify it with the module it was
-                        # imported from.  Bare-name lookup scans the whole
-                        # export table and takes the first hit, and
-                        # ``pcc/frontends/c/ast/c_ast.py`` alone defines ``Enum``, ``If``,
-                        # ``For``, ``Union``, ``Struct``, ``Return``,
-                        # ``While``, ``ID``, ``Constant``, ``Cast``, ``Decl``,
-                        # ``Label``, ``Case``, ``Default``, ``Break``,
-                        # ``Continue``, ``Switch``, ``Typename`` and
-                        # ``Assignment``: once the C frontend joined the
-                        # self-host closure, ``class DiagnosticSeverity(str,
-                        # Enum)`` resolved its base to the C AST's ``Enum`` and
-                        # every ``DiagnosticSeverity(value)`` was checked
-                        # against ``__init__(self, name, values, coord=None)``.
-                        #
-                        # Only syntactic bases are qualified.  An inferred
-                        # class hint carries a bare name with no import to
-                        # attribute it to, so those keep the wide scan.
-                        bound = self._import_from_module_for_local_name(
-                            base_expr.ident
-                        )
-                        if bound is not None:
-                            queue.append(bound + "." + base_expr.ident)
-                        else:
-                            queue.append(base_expr.ident)
-                continue
-
-            # 2. Try cross-module lookup if local fails.
-            # Handle both short names and qualified names (mod.Class).
-            for mod_name, mod_exports in native_table.items():
-                # Check for direct match or mod.ClassName match.
-                c_info = mod_exports.get(cname)
-                if not c_info and "." in cname:
-                    # Find last "." manually — str.rfind has no native
-                    # closed-world dispatch; use a typed-int reverse scan.
-                    idx = -1
-                    i = len(cname) - 1
-                    while i >= 0:
-                        if cname[i] == ".":
-                            idx = i
-                            break
-                        i -= 1
-                    if idx >= 0:
-                        prefix = cname[:idx]
-                        short = cname[idx + 1 :]
-                        if prefix == mod_name:
-                            c_info = mod_exports.get(short)
-
-                if isinstance(c_info, dict) and c_info.get("kind") == "class":
-                    # We found the metadata. Does it define the method/field?
-                    m_names = [m["name"] for m in c_info.get("methods", ())]
-                    if method_name in m_names or method_name in c_info.get(
-                        "field_names", ()
-                    ):
-                        # Synthetic ClassInfo for the remote class.
-                        owning_module = c_info.get("owning_module", mod_name)
-                        return remember(
-                            self.class_lowering.declare_extern_class(
-                                owning_module=owning_module,
-                                class_name=c_info.get(
-                                    "class_name",
-                                    cname.split(".")[-1],
-                                ),
-                                field_names=c_info.get("field_names", ()),
-                                methods=c_info.get("methods", ()),
-                                local_name=cname,
-                                field_types=c_info.get("field_types", ()),
+                # 1. Try local registry first.
+                info = self.class_lowering.classes.get(cname)
+                if info is not None:
+                    if method_name in info.methods or method_name in info.field_names:
+                        cache = getattr(self, "_method_mro_cache", None)
+                        if cache is None:
+                            cache = {}
+                            self._method_mro_cache = cache
+                        cache[cache_key] = info
+                        return info
+                    for base_expr in info.bases_ast:
+                        if isinstance(base_expr, Name) and base_expr.ident != "object":
+                            # A syntactic bare base refers to this module's
+                            # import binding. Qualify it so a same-named
+                            # export from another module cannot win the scan.
+                            # Inferred bare hints still keep the wide scan.
+                            bound = self._import_from_module_for_local_name(
+                                base_expr.ident
                             )
-                        )
-                    # Not defined here, queue its bases for further MRO search.
-                    for base_name in c_info.get("base_names", ()):
-                        if base_name != "object":
-                            queue.append(base_name)
-                    break
-        return remember_missing()
+                            if queue is None:
+                                queue = []
+                                visited = {cname}
+                            if bound is not None:
+                                queue.append(bound + "." + base_expr.ident)
+                            else:
+                                queue.append(base_expr.ident)
+                else:
+                    # 2. Try cross-module lookup if local fails. Handle both
+                    # short names and qualified names (mod.Class).
+                    for mod_name, mod_exports in native_table.items():
+                        c_info = mod_exports.get(cname)
+                        if not c_info and "." in cname:
+                            # Find last "." manually — str.rfind has no
+                            # native closed-world dispatch.
+                            idx = -1
+                            i = len(cname) - 1
+                            while i >= 0:
+                                if cname[i] == ".":
+                                    idx = i
+                                    break
+                                i -= 1
+                            if idx >= 0:
+                                prefix = cname[:idx]
+                                short = cname[idx + 1 :]
+                                if prefix == mod_name:
+                                    c_info = mod_exports.get(short)
+
+                        if isinstance(c_info, dict) and c_info.get("kind") == "class":
+                            m_names = [m["name"] for m in c_info.get("methods", ())]
+                            if method_name in m_names or method_name in c_info.get(
+                                "field_names", ()
+                            ):
+                                owning_module = c_info.get("owning_module", mod_name)
+                                info = self.class_lowering.declare_extern_class(
+                                    owning_module=owning_module,
+                                    class_name=c_info.get(
+                                        "class_name", cname.split(".")[-1],
+                                    ),
+                                    field_names=c_info.get("field_names", ()),
+                                    methods=c_info.get("methods", ()),
+                                    local_name=cname,
+                                    field_types=c_info.get("field_types", ()),
+                                )
+                                # Declaration can resolve another method and
+                                # publish the cache itself. Re-read after it.
+                                cache = getattr(self, "_method_mro_cache", None)
+                                if cache is None:
+                                    cache = {}
+                                    self._method_mro_cache = cache
+                                cache[cache_key] = info
+                                return info
+                            for base_name in c_info.get("base_names", ()):
+                                if base_name != "object":
+                                    if queue is None:
+                                        queue = []
+                                        visited = {cname}
+                                    queue.append(base_name)
+                            break
+            if not queue:
+                return None
+            cname = queue.pop(0)
 
     _STR_METHOD_NATIVE = frozenset(
         {
