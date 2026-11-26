@@ -979,6 +979,21 @@ in the relevant section or issue and removes the entry.
    names for the same reasons). Not run: integration, pcc1, Linux and
    `test_py_multi_file_bootstrap_shim.py`. Left: the own lease protocols of
    py_class, py_dict and the other larger modules (U9-U10).
+   (d) U9, 4c batch 3 (Claude, local Mac, runtime `4702039fe`, tests
+   `31aeaf185`): py_file, py_os_path, py_obj_stubs (buffer conversion),
+   py_iter (tuple iterator), py_format_runtime, py_capi_method_call_runtime
+   (its view loses the token array), py_module_attrs_runtime with its
+   callers py_compiled_module_runtime and py_extension_loader_runtime
+   (`py_sys_modules_owner_adopt` goes; `_owner_drop` is (slots, index),
+   `_owner_finish` is (slots)) and py_list take no lease. Each module
+   compiles alone and its IR calls no lease function. Models follow;
+   lease-only cases are deleted or rewritten and listed in the tests
+   commit. Host pcc0, by node id against HEAD `b75187cf1`, the 225 files
+   naming the modules, exports or models and their importers have no new
+   failing node. Not run: integration, pcc1, Linux and
+   `test_py_multi_file_bootstrap_shim.py`. Left for U10: py_class,
+   py_obj_ops_dispatch, py_set, py_protocol_runtime, py_dict and py_func
+   (127 lease calls).
    4b is complete: no runtime module pins on its own paths or takes
    through `pcc_gc_take_pinned_slot`; what still pins is the old take
    protocol's ABI itself (`pcc_gc_pin_slot_for_take` in py_obj and the
@@ -992,7 +1007,7 @@ in the relevant section or issue and removes the entry.
    Next for (d): the plan Claude runs without asking between units
    (the user, 2026-11-26: "你这么继续继续的有点需要我参与。能plan一下吗").
    Done: steps 1, 2 (pins outside the take protocol), 4a, 4b batches 1-2,
-   U1-U5 (4b), U6, U7 and U8. U9, the next 4c batch, is next.
+   U1-U5 (4b), U6, U7, U8 and U9. U10, the last 4c batch, is next.
    Units, in order, each one claim, commit and push (runtime first, then
    its test models, then the status result):
    (U1) 4b batch 3: py_obj, py_coroutine, py_obj_ops_compare, py_tempfile
@@ -1159,7 +1174,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (d) plan U1-U14 (the units under "Next for (d)", in order): Claude, macOS, 2026-11-26T07:30Z, area runtime-codegen
+   - (d) plan U1-U14 (the units under "Next for (d)", in order): Claude, macOS, 2026-11-26T12:39Z, area runtime-codegen
 
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
