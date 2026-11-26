@@ -808,6 +808,8 @@ def _runtime_signatures_part_20():
     "py_obj_issubclass": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_obj_is_slice": (_I64, [_PYOBJ], False),
     "py_obj_iter": (_PYOBJ, [_PYOBJ], False),
+    "py_obj_private_for_begin": (_PYOBJ, [_PYOBJ, _PTR], False),
+    "py_obj_private_for_next": (_PYOBJ, [_PTR, _PTR], False),
     "py_obj_next": (_PYOBJ, [_PYOBJ], False),
     "py_obj_iter_next": (_PYOBJ, [_PYOBJ], False),
     "py_iter_callable_new": (_PYOBJ, [_PYOBJ, _PYOBJ], False),

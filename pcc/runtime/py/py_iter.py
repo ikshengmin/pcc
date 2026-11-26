@@ -57,6 +57,7 @@ pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_root_copy_borrowed = extern("pcc_gc_root_copy_borrowed", (c_ptr, c_ptr), c_int64)
 pcc_gc_root_copy = extern("pcc_gc_root_copy", (c_ptr, c_ptr), c_int64)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
+pcc_gc_store_root_take = extern("pcc_gc_store_root_take", (c_ptr, c_ptr), c_void)
 pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
 
@@ -227,6 +228,60 @@ def _raise_typed_object_error(o, suffix) -> None:
 @c_abi_export("py_obj_iter")
 def py_obj_iter(o):
     return _obj_iter_body(o, 0)
+
+
+@c_abi_export("py_obj_private_for_begin")
+def py_obj_private_for_begin(o, cursor):
+    """A compiler-private, nonsuspending for loop owns one list or iterator.
+
+    Cursor is a raw activation-local i64, never a Python-visible object.
+    Nonnegative values are exact list indices; -1 means a regular iterator.
+    Public iter(o) and generator frames never enter this ABI.
+    """
+    store_i64(cursor, 0, -1)
+    if (ptr_is_null(o) == 0 and is_tagged_int(o) == 0
+            and load_i32(global_addr("pcc_gc_list_container_mode"), 0) != 0
+            and _type_of(o) == PY_TYPE_LIST):
+        py_incref(o)
+        store_i64(cursor, 0, 0)
+        return o
+    return py_obj_iter(o)
+
+
+@c_abi_export("py_obj_private_for_next")
+def py_obj_private_for_next(owner_slot, cursor):
+    """Next owned object, using the same live list length and error order."""
+    index: int = load_i64(cursor, 0)
+    current = pcc_gc_load_ptr(null(), owner_slot)
+    if index < 0:
+        return py_obj_iter_next(current)
+    if ptr_is_null(current) != 0:
+        return _require_result(null(), cstr("for private cursor"), cstr("lost iterable owner"))
+    if (_type_of(current) != PY_TYPE_LIST
+            or load_i32(global_addr("pcc_gc_list_container_mode"), 0) == 0):
+        # A C extension may retype a value, or a runtime configuration may
+        # disable the raw lane. Materialize the original sequence iterator
+        # at the SAME index, not a fresh call to its dynamic __iter__.
+        iterator = _iter_new(current)
+        if ptr_is_null(iterator) != 0:
+            return _require_result(null(), cstr("py_iter_new"), cstr("sequence iterator allocation failed"))
+        store_i64(iterator, 24, index)
+        pcc_gc_store_root_take(owner_slot, iterator)
+        store_i64(cursor, 0, -1)
+        return py_obj_iter_next(pcc_gc_load_ptr(null(), owner_slot))
+    length: int = py_list_len(current)
+    if index >= length:
+        _iter_exhausted(1)
+        return null()
+    # The private activation root, not a cached raw pointer, still owns the
+    # sequence across the list helper's lock/poll boundary.
+    current = pcc_gc_load_ptr(null(), owner_slot)
+    item = py_list_get(current, index)
+    if ptr_is_null(item) != 0:
+        return _require_result(null(), cstr("py_obj_next"),
+                               cstr("iterator element lookup returned NULL without setting an exception"))
+    store_i64(cursor, 0, index + 1)
+    return item
 
 
 @c_abi_export("py_obj_unpack_iter")

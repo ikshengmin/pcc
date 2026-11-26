@@ -1762,11 +1762,24 @@ class ForLoopLoweringMixin:
             source_root = self._enter_container_temp_root(
                 iter_val, self._fresh("for.obj.source")
             )
-        iterator = self.builder.call(
-            self.runtime["py_obj_iter"],
-            [iter_val],
-            name=self._fresh("for.obj.iter"),
-        )
+        private_cursor = None
+        if len(self._generator_ctx_stack) == 0:
+            # This activation-local scalar can never escape or cross a
+            # generator resume. The existing iterator owner becomes the
+            # independently retained exact-list root or ordinary iterator.
+            private_cursor = self._alloca_in_entry(
+                _I64, name=self._fresh("for.obj.private.cursor"))
+            iterator = self.builder.call(
+                self.runtime["py_obj_private_for_begin"],
+                [iter_val, self._as_gc_ptr(private_cursor)],
+                name=self._fresh("for.obj.iter"),
+            )
+        else:
+            iterator = self.builder.call(
+                self.runtime["py_obj_iter"],
+                [iter_val],
+                name=self._fresh("for.obj.iter"),
+            )
         iter_slot = None
         owned_iter_name = None
         if len(self._generator_ctx_stack) > 0:
@@ -1838,18 +1851,25 @@ class ForLoopLoweringMixin:
 
         self.builder.branch(header_bb)
         self.builder.position_at_end(header_bb)
-        iterator_cur = iterator
-        if iter_slot is not None:
-            iterator_cur = self.builder.call(
-                self.runtime["pcc_gc_load_ptr"],
-                [ir.Constant(_CSTR, None), iter_slot],
-                name=self._fresh("for.obj.iter.cur"),
+        if private_cursor is not None:
+            item = self.builder.call(
+                self.runtime["py_obj_private_for_next"],
+                [self._as_gc_ptr(iter_slot), self._as_gc_ptr(private_cursor)],
+                name=self._fresh("for.obj.item"),
             )
-        item = self.builder.call(
-            self.runtime["py_obj_iter_next"],
-            [iterator_cur],
-            name=self._fresh("for.obj.item"),
-        )
+        else:
+            iterator_cur = iterator
+            if iter_slot is not None:
+                iterator_cur = self.builder.call(
+                    self.runtime["pcc_gc_load_ptr"],
+                    [ir.Constant(_CSTR, None), iter_slot],
+                    name=self._fresh("for.obj.iter.cur"),
+                )
+            item = self.builder.call(
+                self.runtime["py_obj_iter_next"],
+                [iterator_cur],
+                name=self._fresh("for.obj.item"),
+            )
         is_null = self.builder.icmp_unsigned(
             "==",
             item,

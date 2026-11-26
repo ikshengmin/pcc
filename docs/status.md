@@ -289,6 +289,15 @@ collector resource-case receipt cardinality `3014994e` (92 focused
 pass; real native prerequisites remain unrun), and no resource,
 worker-count or deadline relaxation. This non-skip status-only commit
 queues this newly distinct snapshot; existing runs stay intact.
+Verified exact run [45882128844](https://github.com/ikshengmin/pcc/actions/runs/45882128844)
+head `15f6332dd3a1629efc4699cb8f3aa0b201a0179c`, observed pending.
+Current c20c2c01 actual Stage1 artifacts15147497153 (Linux x64)
+and15148417046 (Linux ARM64), exact manifests/hashes verified:
+4 workers,625 modules, x64 1190.927323s/2,851,999,744B
+(vs1206.445611s/2,877,579,264B), ARM64 1614.150228s/
+4,911,534,080B (vs1644.478621s/4,676,341,760B; RSS +5.03%).
+Both precede later AST v2/frame/integer route etc; six-worker
+300s target unmet and no comparable completed Stage2.
 Do not claim any hosted lane green from focused tests. The latest completed
 [checkpoint comparison](investigations/checkpoint-validation-45427972345.md)
 keeps that baseline: candidate `7ec14d388` has exact test regressions
@@ -3190,9 +3199,58 @@ in the relevant section or issue and removes the entry.
    loop cursor preserving live lengths, mutation, dynamic dispatch,
    finalizer and suspension semantics. No benchmark-specific bypass.
 
+   Ordinary private for-loop cursor, exact Linux source `3fb598ed`:
+   actual 5 matched 10/50 round count pairs each worker account for all
+   3.05 list iterators/request: ordinary JSON _encode_object2.0,
+   _encode_array1.0, generator0.05, other runtime/compiled consumers0.
+   Actual next attempts9.05, exhaustion3.05, successful items6.0.
+   5 alternating 1M-iteration primitive triples (each len1/2/4)
+   measure public iterator excess over direct owned list loop
+   363.734/375.792/452.515ns, weighted ordinary ceiling ~1.12us/request.
+   Production compiler-private nonsuspending loop: raw activation index
+   with independent exact-list owning root; all ordinary other values
+   retain actual public iterator; live len/get and exception order;
+   if type/mode changes materialize original sequence iterator at SAME
+   index and transfer registered owner, not a fresh __iter__ dispatch.
+   Public iter/next, generator frame and dynamic override ABI unchanged.
+   Exact native primitive candidate len1 CPU473.956->136.747ns,
+   norm -69.773% (max control12.566%); len2 537.286->210.818ns,
+   norm -61.031% (max control3.274%), all 10/10 wins, exact item
+   checksum and one iterator allocation eliminated. Actual handler
+   38.45->35.45 allocations/request w1/w4, five counts, known/provenance
+   audits both pass. Native baseline/new actual program parity and 60
+   focused tests incl shared four-carrier list/dict/append, park/resume,
+   dynamic override, rebind, errors, finalizers; pcc1 native nodes
+   unrun. 11 focused host/nullable tests incl rare type-change handoff,
+   quiet exhaustion with zero exception alloc; other14 unchanged
+   baseline stale root IR models independently reproduced. Contextual
+   closed-world actual 625-source changed two modules fallback0.
+   Actual candidate ELF SHA9ba3013c4efff15266977a7a9eaaa47dcf3de8965ec10a2a23925088fd2be128,
+   base SHA9475a9c4af4d84abac9a2fcb46fe8099f80e5ae055c4b82abe3c4aea6c32d305,
+   RX+1296 bytes, same mapped RW start/size/TLS.
+   Main C100*2000 five alternating triples, identical controls:
+   w1 QPS18334.40->19169.59 (4/5), CPU53.5471->52.4825us (4/5),
+   paired normalized+5.147%/-4.000% exceed max control3.112%/2.609%;
+   RSS36,794,368->36,728,832B, norm -0.189%. w4 QPS40675.83->
+   40847.38 (4/5), CPU91.3861->90.7458us (4/5), normalized
+   +3.334%/-3.347% vs max control4.504%/2.457%; QPS neutral,
+   paired CPU improvement, RSS41,558,016->41,414,656B within
+   control. Independent w4 C100*2000 five further triples QPS
+   34580.83->36931.86 (4/5), CPU108.9752->100.8364 (4/5)
+   normalized+4.836%/-5.338% within high max control17.179%/
+   15.534% (inconclusive, not a second gain claim); RSS neutral.
+   Separate C100*500 p99 receipts five triples w1 5.141->5.159ms,
+   w4 1.443->1.466ms; paired normalized -1.677%/+11.568% within
+   control32.652%/14.140%, no measured p99 regression. Max STW
+   paired within controls, no reproducible RSS or pause regression.
+   Admit actual w1 handler improvement and exact native owner
+   reduction; w4 throughput remains neutral/inconclusive, do not
+   claim whole Stage1/Stage2 gain. Next: actual provenance check
+   and container lock count/cost by hot owned path before proposing
+   proof of any lock/check removal, preserve shared-thread semantics.
+
    Claims:
    - Stage1 indexed verifier repeated definition facts and success-only scalar projection: Codex, Linux, 2026-11-26T19:35Z, area backend-verifier
-   - Ordinary list iterator consumer attribution and private loop cursor proof: Codex, Linux, 2026-11-26T19:06Z, area runtime-codegen-iterator
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets

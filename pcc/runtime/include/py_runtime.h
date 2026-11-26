@@ -1438,6 +1438,9 @@ PyObject *py_obj_str(PyObject *o);
 int64_t   py_obj_isinstance(PyObject *o, PyObject *cls);
 int64_t   py_obj_issubclass(PyObject *derived, PyObject *cls);
 PyObject *py_obj_iter(PyObject *o);
+/* Compiler-private nonsuspending loop, cursor is a raw i64 local. */
+PyObject *py_obj_private_for_begin(PyObject *o, int64_t *cursor);
+PyObject *py_obj_private_for_next(PyObject **owner_slot, int64_t *cursor);
 PyObject *py_obj_next(PyObject *it);
 /* Consumer entry: NULL may be ordinary exhaustion without an exception.
  * StopIteration from a user/generator/wrapper path must still be consumed. */

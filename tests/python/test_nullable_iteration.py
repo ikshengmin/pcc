@@ -17,9 +17,49 @@ from pcc.runtime.py import py_abi_constants as abi
 ))
 def test_consuming_exhaustion_uses_nullable_next(statement):
     body = _function(_emit('def probe(items, fallback):\n    ' + statement + '\n'))
-    assert '@py_obj_iter_next(' in body
+    if statement.startswith('for item in items:'):
+        # A nonsuspending for loop now carries the exact-list cursor in its
+        # activation. The helper owns the same nullable exhaustion contract
+        # and falls back to the public consumer for every other iterator.
+        assert '@py_obj_private_for_begin(' in body
+        assert '@py_obj_private_for_next(' in body
+        assert '@py_obj_next(' not in body
+    else:
+        assert '@py_obj_iter_next(' in body
     assert '@py_exc_matches(' in body
     assert 'strict.nolib.stub' not in body
+
+
+def test_private_for_list_cursor_exhaustion_does_not_allocate_exception():
+    owner, cursor, sequence = 1000, 2000, 3000
+    memory = {(owner, 0): sequence, (cursor, 0): 2}
+    pending = [('cleanup error',)]
+    allocations = []
+    def new_exception(kind, message):
+        allocations.append(kind)
+        return ('exception', kind)
+    ns = {
+        'i64': int, 'null': lambda: None,
+        'ptr_is_null': lambda value: value is None,
+        'load_i64': lambda base, offset: memory[base, offset],
+        'pcc_gc_load_ptr': lambda _base, slot: memory[slot, 0],
+        '_type_of': lambda _value: abi.PY_TYPE_LIST,
+        'PY_TYPE_LIST': abi.PY_TYPE_LIST,
+        'global_addr': lambda name: name,
+        'load_i32': lambda _slot, _offset: 1,
+        'py_list_len': lambda value: 2 if value == sequence else -1,
+        'py_clear_exception': lambda: pending.__setitem__(0, None),
+        'py_raise_owned': lambda value: pending.__setitem__(0, value),
+        'py_exc_new': new_exception,
+        'py_obj_iter_next': lambda *_args: pytest.fail('unexpected generic iterator'),
+        '_iter_new': lambda *_args: pytest.fail('unexpected allocation'),
+        'py_list_get': lambda *_args: pytest.fail('out of bounds read'),
+    }
+    _functions(Path(__file__).resolve().parents[2] / 'pcc/runtime/py/py_iter.py',
+               {'py_obj_private_for_next', '_iter_exhausted'}, ns)
+    assert ns['py_obj_private_for_next'](owner, cursor) is None
+    assert pending[0] is None and allocations == []
+    assert memory[(owner, 0)] == sequence and memory[(cursor, 0)] == 2
 
 
 def test_explicit_next_keeps_the_raising_entry():
