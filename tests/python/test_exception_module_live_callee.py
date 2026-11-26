@@ -128,7 +128,7 @@ def _live_callee_contract(module, tag):
     assert tls_branch.kind == "br_cond" and tls_branch.data[0] == tls_comparisons[0].data[1]
     tls_error, tls_clear = (tls_branch.data[1], 0), (tls_branch.data[2], 0)
     assert _reaches(roots, tls_clear, builtin_point)
-    copies = [row for row in _calls(roots, "pcc_gc_root_copy_lease")
+    copies = [row for row in _calls(roots, "pcc_gc_root_copy")
               if roots.slot(roots.args(row[2])[0]) == callee
               and roots.args(row[2])[1] == caches[0][2].data[0]]
     assert len(copies) == 1, "fallback must copy the canonical cache's physical owner"
@@ -149,8 +149,8 @@ def _live_callee_contract(module, tag):
             continue
         if ins.kind == "store":
             assert roots.slot(ins.data[3]) != callee, "captured callable overwritten before invocation"
-        writers = ("pcc_gc_store_root", "pcc_gc_root_copy_lease",
-                   "pcc_gc_root_copy_borrowed_lease", "pcc_gc_root_copy_local",
+        writers = ("pcc_gc_store_root", "pcc_gc_root_copy",
+                   "pcc_gc_root_copy_borrowed", "pcc_gc_root_copy_local",
                    "py_cleanup_one_root_preserving_exception", "pcc_gc_frame_leave",
                    "pcc_gc_frame_leave_lifo")
         if any(roots.called(ins, name) for name in writers):

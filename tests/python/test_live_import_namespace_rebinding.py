@@ -545,7 +545,7 @@ def test_import_scope_keeps_local_slots_distinct_from_live_globals(tmp_path, mon
     else:
         assert 'name.dynamic.values' not in probe
         assert '@pcc_gc_root_move' in probe
-        assert re.search(r'call [^\n]*@pcc_gc_root_copy_lease\(', probe)
+        assert re.search(r'call [^\n]*@pcc_gc_root_copy\(', probe)
 
 
 def test_owned_namespace_return_transfers_its_result(tmp_path, monkeypatch):
@@ -643,7 +643,7 @@ def test_imported_set_augassign_preserves_inplace_dispatch(tmp_path, monkeypatch
                      'from provider import value as members\ndef probe():\n    global members\n    members ' +
                      operator + ' {2, 3}\n'), 'user_consumer_probe')
     assert '@' + helper + '(' in probe
-    assert '@pcc_gc_root_copy_lease(' in probe, 'in-place result must retain the original set identity'
+    assert '@pcc_gc_root_copy(' in probe, 'in-place result must retain the original set identity'
 
 
 def test_definition_rebinding_retires_import_staging_owner(tmp_path, monkeypatch):

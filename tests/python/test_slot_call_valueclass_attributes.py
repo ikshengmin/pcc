@@ -90,7 +90,7 @@ def test_module_payload_field_uses_its_mapped_global_slot(tmp_path):
     source = PREFIX.replace('FIELD', 'list') + 'record = Record([1])\ndef probe():\n    return take(value=record.value)\n'
     text = _emit(source); (tmp_path/'program.ll').write_text(text)
     assert 'value.attribute.module.source' in text
-    assert re.search(r'\bcall [^\n]*@pcc_gc_root_copy_lease\(', text)
+    assert re.search(r'\bcall [^\n]*@pcc_gc_root_copy\(', text)
 
 
 def test_scalar_only_temporary_payload_is_evaluated_once(tmp_path):

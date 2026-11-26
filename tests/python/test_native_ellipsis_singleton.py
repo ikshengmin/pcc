@@ -132,7 +132,7 @@ def test_type_argument_copies_from_authoritative_singleton_slot(expression):
     body = next(body for name, body in function_bodies(text) if name == "user_binding_probe")
     aliases = pointer_bitcast_aliases(body)
     aliases.update(re.findall(r'^\s*(%[\w.$]+) = bitcast ptr (@py_Ellipsis) to ptr\s*$', body, re.M))
-    copies = re.findall(r'\bcall [^\n]*@pcc_gc_root_copy_lease\(ptr (%[\w.$]+), ptr ([%@][\w.$]+)\)', body)
+    copies = re.findall(r'\bcall [^\n]*@pcc_gc_root_copy\(ptr (%[\w.$]+), ptr ([%@][\w.$]+)\)', body)
     assert any(canonical_pointer(source, aliases) == "@py_Ellipsis" for _target, source in copies), body
     assert "@py_type_builtin(" in body
 

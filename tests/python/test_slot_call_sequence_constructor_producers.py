@@ -52,7 +52,7 @@ def test_tuple_exact_alias_copies_owner_before_source_release():
     assert "@py_obj_type_tag(" in body
     alias = re.search(r"^tuple\.builtin\.alias[^:]*:\n(.*?)^call\.slot", body, re.M | re.S)
     assert alias is not None
-    assert "@pcc_gc_root_copy_lease(" in alias.group(1)
+    assert "@pcc_gc_root_copy(" in alias.group(1)
     # Neither alias nor ordinary conversion routes through splat's copy ABI.
     assert "@py_tuple_from_splat(" not in body
     assert "@pcc_gc_take_pinned_slot(" in body

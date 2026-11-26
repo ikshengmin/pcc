@@ -41,7 +41,7 @@ bases = {alias: base for base, aliases in pool.items()
     assert {name for name, _slot in registry} >= {"base", "aliases", "alias"}
     assert len({id(slot) for _name, slot in registry}) == len(registry)
     assert "@pcc_gc_root_move(" in text
-    assert "@pcc_gc_root_copy_lease(" in text
+    assert "@pcc_gc_root_copy(" in text
     prepared = prepare_module_for_target(
         'target triple = "' + triple + '"\n' + text,
         aggregate_returned_indirect=indirect,

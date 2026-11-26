@@ -20,20 +20,24 @@ class RootCopyCall:
 
 
 def root_copy_calls(text, *, local=None, borrowed=None):
-    """Parse real calls, retaining the distinction between owners and leases."""
+    """Parse real calls, retaining the owned, borrowed and local kinds.
+
+    Code generation emits the one collector's status-only copies
+    (pcc_gc_root_copy, pcc_gc_root_copy_borrowed, pcc_gc_root_copy_local);
+    runtime IR may still carry the lease forms until item 2 (d) 4c ends."""
     scopes = [body for _name, body in function_bodies(text)] or [text]
     copies = []
     for body in scopes:
         aliases = pointer_bitcast_aliases(body)
         for line in body.splitlines():
             match = re.search(
-                r"\bcall\b[^\n]*@pcc_gc_root_copy_(lease|borrowed_lease|local)"
-                r"\(([^)]*)\)",
+                r"\bcall\b[^\n]*@pcc_gc_root_copy"
+                r"(|_lease|_borrowed_lease|_borrowed|_local)\(([^)]*)\)",
                 line,
             )
             if match is None:
                 continue
-            kind = match[1]
+            kind = match[1].lstrip("_")
             arguments = [argument.strip() for argument in match[2].split(",")]
             is_local = kind == "local"
             assert len(arguments) == (3 if is_local else 2), line
@@ -44,7 +48,7 @@ def root_copy_calls(text, *, local=None, borrowed=None):
                 assert arguments[2] in ("i64 0", "i64 1"), line
                 is_borrowed = arguments[2] == "i64 1"
             else:
-                is_borrowed = kind == "borrowed_lease"
+                is_borrowed = kind in ("borrowed", "borrowed_lease")
             if local is not None and is_local != local:
                 continue
             if borrowed is not None and is_borrowed != borrowed:

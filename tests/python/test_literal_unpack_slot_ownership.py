@@ -29,7 +29,7 @@ def test_subscript_results_are_retained_until_both_rhs_evaluations_finish(prefix
     assert len(target_moves) == 2
     assert result_calls[-1].start() < target_moves[0].start() < target_moves[1].start()
     assert 'left.owned' in text and 'right.owned' in text
-    assert '@pcc_gc_root_copy_lease' in text
+    assert '@pcc_gc_root_copy(' in text
 
 
 @pytest.mark.parametrize('statement', ['left, right = right, left', 'left, left = right, left'])
@@ -39,7 +39,7 @@ def test_aliases_are_copied_before_target_replacement(statement):
     return slot_args_probe(left, right)
 '''))
     first_move = text.index('%unpack.literal.move')
-    assert len(re.findall(r'@pcc_gc_root_copy_(?:borrowed_)?lease\(', text[:first_move])) >= 2
+    assert len(re.findall(r'@pcc_gc_root_copy(?:_borrowed|_local)?\(', text[:first_move])) >= 2
     assert text[first_move:].count('@pcc_gc_root_move(') >= 2
 
 

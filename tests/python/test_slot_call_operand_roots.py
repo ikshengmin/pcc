@@ -131,7 +131,7 @@ def test_attribute_receiver_reuses_parameter_with_live_lookup_without_leases():
     copies = root_copy_calls(before, local=True, borrowed=True)
     assert len(copies) == 1 and copies[0].source.startswith("%value.addr")
     assert not root_copy_calls(after, local=True, borrowed=True)
-    assert not _calls(after, "pcc_gc_root_copy_borrowed_lease")
+    assert not _calls(after, "pcc_gc_root_copy_borrowed")
     assert not _calls(after, "pcc_gc_foreign_lease_release")
     _assert_attribute_parameter_not_cleared(after)
     from pcc.backend.self_backend_kernel import get_indexed_function_kernel
@@ -154,7 +154,7 @@ def test_attribute_unstable_receivers_keep_the_original_owning_policy(source):
     after, after_module = _attribute_emit(source)
     assert _calls(after, "py_obj_getattr")
     assert not _calls(after, "pcc_gc_borrowed_lease_acquire")
-    for helper in ("pcc_gc_root_copy_lease", "pcc_gc_root_copy_borrowed_lease", "py_obj_getattr"):
+    for helper in ("pcc_gc_root_copy", "pcc_gc_root_copy_borrowed", "py_obj_getattr"):
         assert len(_calls(before, helper)) == len(_calls(after, helper)), helper
     before_frames = _attribute_frame_counts(before_module)
     assert before_frames[0] + before_frames[2] > 0
@@ -369,8 +369,8 @@ def test_parameter_operand_copies_authoritative_borrowed_root():
     assert len(copies) == 1
     assert copies[0].source.startswith("%value.addr")
     assert "probe.operand" in copies[0].destination
-    assert not _calls(text, "pcc_gc_root_copy_lease")
-    assert not _calls(text, "pcc_gc_root_copy_borrowed_lease")
+    assert not _calls(text, "pcc_gc_root_copy")
+    assert not _calls(text, "pcc_gc_root_copy_borrowed")
     # This probe returns the copied owner directly; it has no raw-argument
     # consumer and therefore no address transaction to acquire or retire.
     assert not _calls(text, "pcc_gc_foreign_lease_acquire")
@@ -383,7 +383,7 @@ def test_parameter_operand_copies_authoritative_borrowed_root():
     assert any(copy.source.startswith(("%value.addr", "%value.for.obj.addr")) for copy in
                root_copy_calls(rebound, local=True, borrowed=False))
     assert not root_copy_calls(rebound, local=True, borrowed=True)
-    assert not _calls(rebound, "pcc_gc_root_copy_borrowed_lease")
+    assert not _calls(rebound, "pcc_gc_root_copy_borrowed")
 
 
 def test_global_and_class_operands_copy_existing_slots():
@@ -395,7 +395,7 @@ def probe():
     return slot_operand_probe(Box)
 """)
     text = _probe_function(text)
-    copies = _calls(text, "pcc_gc_root_copy_lease")
+    copies = _calls(text, "pcc_gc_root_copy")
     assert len(copies) == 2
     assert any("shared" in _with_slot_origins(text, call) for call in copies)
     assert any("Box" in _with_slot_origins(text, call) for call in copies)

@@ -85,7 +85,7 @@ def test_module_payload_name_uses_the_mapped_global(global_statement, tmp_path):
     (tmp_path / "program.ll").write_text(text)
     function = _function(text)
     assert "value.attribute.module.source" in function
-    assert "@pcc_gc_root_copy_lease(" in function
+    assert "@pcc_gc_root_copy(" in function
 
 
 def test_payload_name_with_raw_pointer_field_remains_rejected():

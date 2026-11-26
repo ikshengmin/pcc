@@ -376,11 +376,11 @@ def _assert_dynamic_callback_continuation_ir(ir_text: str) -> None:
     assert direct is not None, "direct callback result block is missing"
     # The non-continuation branch copies the authoritative child cell into a
     # consumer owner. A raw reload/retain is no longer this contract. The
-    # copy is a lease copy, or pcc_gc_root_copy_local when the source is
-    # this frame's private root (no lease to take and retire at once); its
-    # status is checked either way.
+    # copy is the one collector's status-only pcc_gc_root_copy (or its
+    # borrowed form), or pcc_gc_root_copy_local when the source is this
+    # frame's private root; its status is checked either way.
     copy = re.search(
-        r"(%[-\w.]+) = call[^\n]*@pcc_gc_root_copy_(?:lease|local)\(", direct.group(1)
+        r"(%[-\w.]+) = call[^\n]*@pcc_gc_root_copy(?:_borrowed|_local)?\(", direct.group(1)
     )
     assert copy is not None, "direct result owner copy is missing"
     assert re.search(r"icmp slt i64 " + re.escape(copy.group(1)) + r", 0", direct.group(1)), \
@@ -413,8 +413,10 @@ def test_dynamic_callback_ir_uses_distinct_may_park_generator_marker(
     changed = resume.replace("@py_gen_is_continuation(", "@py_gen_is_may_park(")
     with pytest.raises(AssertionError, match="continuation predicate"):
         _assert_dynamic_callback_continuation_ir(ir_text.replace(resume, changed))
-    changed = resume.replace("@pcc_gc_root_copy_lease(", "@pcc_gc_root_copy(")
-    changed = changed.replace("@pcc_gc_root_copy_local(", "@pcc_gc_root_copy(")
+    changed = resume
+    for spelling in ("@pcc_gc_root_copy_borrowed(", "@pcc_gc_root_copy_local(",
+                     "@pcc_gc_root_copy("):
+        changed = changed.replace(spelling, "@pcc_gc_root_copy_absent(")
     with pytest.raises(AssertionError, match="direct result owner copy"):
         _assert_dynamic_callback_continuation_ir(ir_text.replace(resume, changed))
 

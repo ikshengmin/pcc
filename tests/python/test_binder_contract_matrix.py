@@ -261,7 +261,10 @@ def test_binder_contract_owned_ir(tmp_path, monkeypatch, cell_id):
             assert (binder_calls, direct_calls) == (0, 1), cell_id
         else:
             assert (binder_calls, direct_calls) == (1, 0), cell_id
-            assert "@pcc_gc_root_copy_lease(" in body.group(0) or "@pcc_gc_foreign_lease_acquire(" in body.group(0)
+            # The binder's operands are copied into owned roots; the one
+            # collector's copies take no address lease.
+            assert re.search(r"\bcall [^\n]*@pcc_gc_root_copy(_borrowed|_local)?\(",
+                             body.group(0)), cell_id
 
 
 @pytest.mark.integration

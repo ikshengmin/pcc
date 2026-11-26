@@ -60,7 +60,7 @@ def test_module_handler_uses_predeclared_global_and_checked_function_reads():
     # The handler deletes the module attribute, then clears the global root.
     deletion = text.index('@py_module_attr_del(')
     assert '@pcc_gc_store_root(ptr @.modvar.module_binding.error, ptr null)' in text[deletion:]
-    assert '@pcc_gc_root_copy_lease(' in text
+    assert '@pcc_gc_root_copy(' in text
     assert len(emit_owned_object(text, 'x86_64-unknown-linux-gnu')) > 0
 
 

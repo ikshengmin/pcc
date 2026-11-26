@@ -18,7 +18,7 @@ def test_module_loop_object_reads_have_a_real_global_root(loop,tmp_path):
     (tmp_path/'program.ll').write_text(text)
     assert bool(re.search(r'^@\.modvar\.binding\.item = global ptr null$', text, re.M)), 'missing module target object slot'
     assert '@.modvar.binding.item_initialized' in text
-    assert re.search(r'\bcall [^\n]*@pcc_gc_root_copy_lease\([^\n]*',text)
+    assert re.search(r'\bcall [^\n]*@pcc_gc_root_copy\([^\n]*',text)
     assert 'item.for.obj.addr' not in text
     assert '.pcc.for.binding.module' in text
 

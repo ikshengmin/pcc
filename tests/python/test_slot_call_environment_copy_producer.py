@@ -33,7 +33,7 @@ def test_environment_snapshot_has_an_authoritative_native_owner(producer, site):
     assert "strict.nolib.stub" not in text
     assert "@py_cpy_" not in body
     if site == "named":
-        assert "@pcc_gc_root_copy_lease(" in body
+        assert "@pcc_gc_root_copy(" in body
 
 
 def test_environment_copy_keeps_shadowed_receiver_dispatch():

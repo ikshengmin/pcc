@@ -165,7 +165,7 @@ def test_owned_urljoin_provider_and_result_handoff_ir(tmp_path, monkeypatch):
     invoke = re.search(r"^define [^\n]*@user_[^\n(]*_invoke\([^\n]*\).*?^}",
                        text, re.M | re.S)
     assert invoke is not None
-    assert "@pcc_gc_root_copy_lease" in invoke.group(0)
+    assert "@pcc_gc_root_copy(" in invoke.group(0)
     assert "@py_obj_call_slots" in invoke.group(0)
 
 

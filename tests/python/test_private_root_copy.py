@@ -29,7 +29,7 @@ def probe():
               if "call " in line and "@pcc_gc_root_copy" in line
               and "value.copy.global" in line]
     assert copies
-    assert all("@pcc_gc_root_copy_lease(" in line for line in copies)
+    assert all("@pcc_gc_root_copy(" in line for line in copies)
 
 
 @pytest.mark.parametrize("backend", (3, 4))
@@ -103,10 +103,14 @@ def global_source(key, consume):
     shared = re.search(r"^define [^\n]*@user_root_sources_global_source\([^\n]*\{.*?^}", text, re.M | re.S)
     assert local is not None and shared is not None
     assert "@pcc_gc_root_copy_local(" in local.group()
-    assert "@pcc_gc_root_copy_borrowed_lease(" not in local.group()
-    assert "@pcc_gc_root_copy_lease(" in shared.group()
-    # The actual raw-address consumer still protects its operands.
-    assert "@pcc_gc_foreign_lease_acquire(" in local.group()
+    assert "@pcc_gc_root_copy_borrowed(" not in local.group()
+    assert "@pcc_gc_root_copy(" in shared.group()
+    # The one collector's copies are status-only: neither function leases an
+    # address for the raw-address consumer (item 2 (d) 4c).
+    for body in (local.group(), shared.group()):
+        assert "@pcc_gc_root_copy_lease(" not in body
+        assert "@pcc_gc_root_copy_borrowed_lease(" not in body
+        assert "@pcc_gc_foreign_lease_acquire(" not in body
 
 
 @pytest.mark.parametrize("backend", (0,))

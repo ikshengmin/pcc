@@ -59,7 +59,7 @@ def test_dataclass_factory_original_shape(name):
 def test_notimplemented_copies_exact_runtime_singleton_source():
     body = _body(_emit("def probe():\n    return type(NotImplemented)\n"))
     assert "@py_NotImplemented" in body
-    assert re.search(r"call [^\n]*@pcc_gc_root_copy_lease\(", body)
+    assert re.search(r"call [^\n]*@pcc_gc_root_copy\(", body)
     assert not re.search(r"call [^\n]*@py_module_attr_get\(", body)
 
 
@@ -159,7 +159,7 @@ def test_local_shadow_rebinding_and_unbound_paths_are_not_namespace_projections(
 def test_builtin_attribute_override_copies_registered_module_slot():
     body = _body(_emit("import os\nos.sep = 'replacement'\ndef probe():\n    return str(os.sep)\n"))
     assert "@.modattr.os.sep" in body
-    assert re.search(r"call [^\n]*@pcc_gc_root_copy_lease\(", body)
+    assert re.search(r"call [^\n]*@pcc_gc_root_copy\(", body)
     assert "namespace.attribute.current" in body
 
 

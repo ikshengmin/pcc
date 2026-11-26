@@ -45,7 +45,7 @@ def test_prior_method_foreign_local_does_not_taint_native_parameter(decorator):
     foreign = _body(text, "read_foreign")
     assert "@py_cpy_call" in foreign
     assert "@py_cpy_" not in native
-    assert "@pcc_gc_root_copy_borrowed_lease(" in native
+    assert "@pcc_gc_root_copy_borrowed(" in native
     verify_ir_text(text)
 
 
@@ -70,7 +70,7 @@ def test_method_foreign_capture_keeps_bridge_and_native_cell_owner():
     # that managed cell through its own authoritative slot.
     assert re.search(r"@py_cpy_decref\(ptr " + re.escape(source) + r"\)", body)
     assert "lambda.native.capture.operand" in body
-    assert "@pcc_gc_root_copy_lease(" in body
+    assert "@pcc_gc_root_copy(" in body
     verify_ir_text(text)
 
 

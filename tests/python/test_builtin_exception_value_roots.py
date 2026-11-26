@@ -25,7 +25,7 @@ def test_exception_value_is_copied_from_its_real_cache_slot(body):
     for _name, function in function_bodies(text):
         aliases = pointer_bitcast_aliases(function)
         cache_slots = re.findall(r'(%[\w.$]+) = call [^\n]*@py_subs_exc_cache_slot\(i64 \d+\)', function)
-        copies = re.findall(r'\bcall [^\n]*@pcc_gc_root_copy_lease\(ptr (%[\w.$]+), ptr (%[\w.$]+)\)', function)
+        copies = re.findall(r'\bcall [^\n]*@pcc_gc_root_copy\(ptr (%[\w.$]+), ptr (%[\w.$]+)\)', function)
         sources = {canonical_pointer(source, aliases) for _target, source in copies}
         for source in cache_slots:
             assert source in sources
@@ -41,7 +41,9 @@ def test_shadowed_exception_spelling_uses_its_actual_binding(source):
     text = _emit('def take(*, value, **extras):\n    return value\n' + source)
     body = next(body for name, body in function_bodies(text) if name == 'user_binding_probe')
     assert not re.search(r'\bcall [^\n]*@py_subs_exc_cache_slot\(', body)
-    assert re.search(r'\bcall [^\n]*@pcc_gc_root_copy(?:_borrowed)?_lease\(', body)
+    # A parameter is a private root (pcc_gc_root_copy_local); a module global
+    # is copied from its registered slot (pcc_gc_root_copy).
+    assert re.search(r'\bcall [^\n]*@pcc_gc_root_copy(?:_borrowed|_local)?\(', body)
 
 
 @pytest.mark.integration

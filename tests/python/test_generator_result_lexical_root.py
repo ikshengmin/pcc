@@ -161,7 +161,7 @@ def _assert_exact_slot_protocol(text, slot):
         return False
 
     transfer_sites = [call for call in calls if call[0] in (
-        "pcc_gc_root_copy_local",
+        "pcc_gc_root_copy_local", "pcc_gc_root_copy", "pcc_gc_root_copy_borrowed",
         "pcc_gc_root_copy_lease", "pcc_gc_root_copy_borrowed_lease",
         "pcc_gc_foreign_lease_acquire", "pcc_gc_foreign_lease_release")]
     local_copies = [call for call in transfer_sites if call[0] == "pcc_gc_root_copy_local"]

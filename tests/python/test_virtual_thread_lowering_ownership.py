@@ -467,7 +467,7 @@ def _prepare_callback_slot_contract(module, mutate_cleanup=None):
     constructors = [ins for _, _, ins in rows if called(ins, "py_obj_call_slots")]
     assert [slot(args(ins)[3]) for ins in constructors] == [callable_slot, item_slots[0]]
     for constructor, class_name in zip(constructors, ("Combine", "Token")):
-        captures = [ins for _, _, ins in rows if called(ins, "pcc_gc_root_copy_lease")
+        captures = [ins for _, _, ins in rows if called(ins, "pcc_gc_root_copy")
                     and slot(args(ins)[0]) == slot(args(constructor)[0])]
         assert len(captures) == 1
         assert args(captures[0])[1] == "@.class.slot_operand." + class_name

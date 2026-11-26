@@ -373,7 +373,7 @@ def test_class_defaults_ir_captures_factories_only_in_definition_order(tmp_path,
         ), operands[3]
     # Only NewOnly(value=...) still binds keywords at run time.
     assert len(re.findall(r"call ptr[^\n]*@py_call_merge_kwargs_for_call\(", probe)) == 1
-    assert "@pcc_gc_root_copy_lease" in probe
+    assert "@pcc_gc_root_copy(" in probe
     assert "@py_obj_call_method(" in probe
 
 

@@ -40,7 +40,9 @@ def test_shadowed_namespace_uses_authoritative_slot(name, scope):
     parameter = name if scope == 'local' else ''
     body = _probe(_emit(prefix + 'def take(*, value, **extras):\n    return value\n'
                         'def probe(' + parameter + '):\n    return take(value=' + name + ')\n'))
-    assert re.search(r'@pcc_gc_root_copy_(?:borrowed_)?lease\(', body)
+    # A parameter is a private root (local copy); a global is copied from
+    # its registered slot. Neither copy takes a lease.
+    assert re.search(r'@pcc_gc_root_copy(?:_borrowed|_local)?\(', body)
 
 
 PROGRAM = textwrap.dedent('''\

@@ -96,7 +96,7 @@ def test_indexed_comprehension_elements_use_owned_loop_slots(annotation):
     assert "@py_obj_getitem(" in body
     assert "@pcc_gc_store_root_take(" in body
     assert "value.for.obj.addr" in body
-    assert "@pcc_gc_root_copy_lease(" in body
+    assert "@pcc_gc_root_copy(" in body
     assert "@py_cpy_" not in body
 
 def test_boxed_len_sink_rejects_the_resolved_raw_method_abi():
