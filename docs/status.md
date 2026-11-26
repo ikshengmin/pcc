@@ -887,9 +887,30 @@ in the relevant section or issue and removes the entry.
    and `test_detached_str_search_methods.py::test_string_descriptor_runtime_strict_ir`
    fail on HEAD as well). Not run: `test_py_multi_file_bootstrap_shim.py`
    (over the 2.5 GiB cap), integration, pcc1 and Linux.
-   Remaining 4b: `py_class` (U5). (c) J1 merged and released it and
+   (d) U5, `py_class` (Claude, local Mac, `d5667304c`, tests `04c9501d5`):
+   the metaclass call, the class, str-subtype and tuple-subtype
+   constructors, the instance lookup family, bound-method function loads
+   and the getattr fallbacks take through `pcc_gc_take_slot`, with no pin,
+   prior-pin record, pin reassertion or graph-locked reload; the lookup
+   family keeps its per-slot owned markers. It compiles alone (303 calls to
+   `pcc_gc_take_slot`, none to `pcc_gc_take_pinned_slot`, `pcc_gc_pin`,
+   `pcc_gc_unpin` or `pcc_gc_reassert_pin`; its 23 remaining graph-lock
+   calls belong to leases and root copies, 4c). The getter roots model
+   binds `pcc_gc_take_slot` (seven of its nodes that failed on HEAD pass
+   now). Host pcc0, by node id against HEAD `48e97a442`, the 64 files
+   naming `py_class` or its models and their importers have no new failing
+   node. `test_class_lookup_error_cleanup.py` still asserts the old pin
+   bit, but on HEAD as here it stops earlier, in its loader, because
+   `pcc_gc_mode_leases_freeze` went with collectors 1-4 (`2498f19ff`); its
+   model is rewritten when that loader is. Not run:
+   `test_py_multi_file_bootstrap_shim.py` (over the 2.5 GiB cap),
+   integration, pcc1 and Linux.
+   4b is complete: no runtime module pins on its own paths or takes
+   through `pcc_gc_take_pinned_slot`; what still pins is the old take
+   protocol's ABI itself (`pcc_gc_pin_slot_for_take` in py_obj and the
+   root operations), which U11 deletes. (c) J1 merged and released `py_class` and
    `py_obj_ops_dispatch` (no J1 claim line on 2026-11-26T01:46Z), which
-   settles the waiting-list question about the overlap.
+   settled the waiting-list question about the overlap.
    Correction: `pcc_gc_backend4_auto_step_pending` is the one collector's
    live automatic-collection request (young and full collections are
    scheduled through it), not a leftover; it may only be renamed, before
@@ -897,7 +918,7 @@ in the relevant section or issue and removes the entry.
    Next for (d): the plan Claude runs without asking between units
    (the user, 2026-11-26: "你这么继续继续的有点需要我参与。能plan一下吗").
    Done: steps 1, 2 (pins outside the take protocol), 4a, 4b batches 1-2,
-   U1, U2, U3 and U4. U5 is next.
+   U1-U5 (4b). U6, the 4c design, is next.
    Units, in order, each one claim, commit and push (runtime first, then
    its test models, then the status result):
    (U1) 4b batch 3: py_obj, py_coroutine, py_obj_ops_compare, py_tempfile
@@ -1065,7 +1086,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (d) plan U1-U14 (the units under "Next for (d)", in order): Claude, macOS, 2026-11-26T02:12Z, area runtime-codegen
+   - (d) plan U1-U14 (the units under "Next for (d)", in order): Claude, macOS, 2026-11-26T02:43Z, area runtime-codegen
 
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
