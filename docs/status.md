@@ -905,6 +905,29 @@ in the relevant section or issue and removes the entry.
    model is rewritten when that loader is. Not run:
    `test_py_multi_file_bootstrap_shim.py` (over the 2.5 GiB cap),
    integration, pcc1 and Linux.
+   (d) U6, the 4c design (Claude, local Mac, runtime `24ae31a11`, code
+   generation `1f03d26a3`, tests `c87877bc2`): the one collector's root
+   copies are `pcc_gc_root_copy(destination, source)` and
+   `pcc_gc_root_copy_borrowed(destination, source)` (py_obj, declared in
+   `py_runtime.h` and `runtime_abi.py`). They retain the source's value
+   into an empty registered destination and return a status only (0; -1
+   invalid slots or a terminal object; -4 a nonempty destination or a
+   failed store, owners unchanged); no lease token exists, so nothing is
+   released afterwards. Their fast paths are the lease forms' without the
+   address-lease acquisition; every other case takes the token-free graph
+   transaction of `pcc_gc_root_copy_local`. Code generation's last lease
+   form, the shared-source operand copy of a slot call
+   (`_slot_call_copy_source`), emits them; every other code-generation
+   lease was already the constant token 0. The lease forms stay for the
+   runtime's own callers, which U7-U10 convert. New test:
+   `test_root_copy_status.py` runs both copies natively against the
+   single-thread and threaded archives (status codes, reference counts, no
+   lease). The root-copy IR parser and 24 code-generation IR tests name the
+   new copies. Host pcc0, by node id against HEAD `1214ce627`, the 75 files
+   naming a root copy, the parser's importers and the edited files have no
+   new failing node, and seven nodes that failed on HEAD pass; the native
+   callback/finalizer program of `test_private_root_copy.py`, whose global
+   source takes the new copy, passes. Not run: integration, pcc1 and Linux.
    4b is complete: no runtime module pins on its own paths or takes
    through `pcc_gc_take_pinned_slot`; what still pins is the old take
    protocol's ABI itself (`pcc_gc_pin_slot_for_take` in py_obj and the
@@ -918,7 +941,7 @@ in the relevant section or issue and removes the entry.
    Next for (d): the plan Claude runs without asking between units
    (the user, 2026-11-26: "你这么继续继续的有点需要我参与。能plan一下吗").
    Done: steps 1, 2 (pins outside the take protocol), 4a, 4b batches 1-2,
-   U1-U5 (4b). U6, the 4c design, is next.
+   U1-U5 (4b) and U6. U7, the first 4c batch, is next.
    Units, in order, each one claim, commit and push (runtime first, then
    its test models, then the status result):
    (U1) 4b batch 3: py_obj, py_coroutine, py_obj_ops_compare, py_tempfile
@@ -1086,7 +1109,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (d) plan U1-U14 (the units under "Next for (d)", in order): Claude, macOS, 2026-11-26T02:43Z, area runtime-codegen
+   - (d) plan U1-U14 (the units under "Next for (d)", in order): Claude, macOS, 2026-11-26T03:28Z, area runtime-codegen
 
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
