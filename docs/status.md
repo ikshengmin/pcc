@@ -3473,6 +3473,30 @@ in the relevant section or issue and removes the entry.
    any thread-state caching design. Preserve virtual thread exception,
    root, worker/carrier migration and external thread semantics.
 
+   Actual runtime TLS source-position attribution (Codex/Linux,
+   exact source decef72c, diagnostic only). All 27 actually linked runtime
+   modules with TLS references, 289 literal global_addr/load/store sites,
+   native per-site relaxed counters, disable after carrier shutdown before
+   report. Every five alternating C20 10/50 round difference (800 requests)
+   has exact payload and nonnegative raw counts. Full guarded native ELF
+   3e7bc75b983fe9d7d1901735ac4dba697c6626c92a10510a044a0365c6cc93d0
+   compile235.731s peak780730368B. w1 all five totals945.24375
+   evaluated source positions/request; w4 median1004.41875 (990.90375-
+   1072.9; instrumentation may perturb scheduling). w1 thread-state352.365,
+   allocator magazine104.90125, recursion88.9, thread-id88.60125,
+   tracked delta48.8, dealloc depth34.45, exception storage33.95,
+   generator direct32.95, current vthread29.15, handled context28.35,
+   young-log24.42375, trash head24.4. Thread kernel aggregate440.96625.
+   Lock and unlock96.955 each independently match provenance diagnostic;
+   no-park enter/exit39.80125 each, safepoint35.45, scheduler markers
+   21.65125 each, paired lock .05 each. w4 thread-state384.435,
+   magazine104.91375, thread-id101.9675, recursion90.65. These are
+   evaluated source-level accesses, not emitted machine TLS resolver
+   count, and Linux does not model Darwin _tlv_get_addr cost.
+   Probe sources restored; no production change. Next quiet exact
+   clean-source owner-level primitive cost (not TLS-only cost) and
+   only an independently validated safe reuse design if worthwhile.
+
    Claims:
    - Stage1 ARM typed final publication and contiguous word runs: Codex, Linux, 2026-11-26T19:56Z, area backend-aarch64-publish
    - Actual runtime thread-local access count and owner cost: Codex, Linux, 2026-11-26T20:01Z, area runtime-gc-tls
