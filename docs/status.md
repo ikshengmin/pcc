@@ -1707,7 +1707,7 @@ in the relevant section or issue and removes the entry.
    on 2026-11-26.
 
    Claims:
-   - J2 (a) generator parks and returns share one owned-local cleanup: Claude, macOS, 2026-11-26T04:20Z, area runtime-codegen (`pcc/frontends/python/codegen/generator_lowering.py`, `ownership_lowering.py` and their tests only; no file in common with item 2 (d) U7-U14, which change the runtime, `runtime_abi.py`, the fused-protocol pass and `scripts/pcc_perf.py`)
+   - P0 unit 2: self AArch64 stack-slot traffic and small memset/memmove against clang on the same runtime IR: Claude, macOS, 2026-11-26T04:35Z, area backend (AArch64 selection, register allocation and their tests)
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
