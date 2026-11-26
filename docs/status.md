@@ -2361,6 +2361,46 @@ in the relevant section or issue and removes the entry.
        pipeline_frontend_parallel has exact 9,175,128-byte Mach-O object
        parity (sha256 5f41f79443f533132770104d2390e3370177b5e8e697d76dafd4da71574ec054);
        this one loaded pair is correctness only.
+       Staged relocation replay proof candidate (Codex, Linux 2026-11-26,
+       base 81af95e8): retain the complete canonical raw-row count fold
+       (flags/companions/names before payload or proof admission). Bind
+       exact immutable bytes and private canonical table identities; the
+       two validation replays then materialize one Relocation at a time
+       directly from six scalar fields, without dictionaries or a folded
+       256-row batch. Public/injected proof or validator owners retain
+       the old route, and original scratch plus 512 bytes is admitted.
+       Three actual compiler PCO artifacts from the 625-source Darwin
+       compiler closure (pipeline_exports 6,977,832 bytes,
+       pipeline_frontend_parallel 11,114,559, worker_resource_plan 3,727,075)
+       provide 163,178 merged expanded rows, 4,788 symbols, five sections
+       and 5,556,936 bytes of merged payload. Actual staged preparation
+       under the existing 2.5 GiB tree guard: identical complete metadata,
+       payload and row digest 96969a7563115e60a1ce0bb236d104856e9a9e2d39e537e394fa580d52125863,
+       zero retained budget at return. 264 focused tests vs base228 pass;
+       263 additional pass on both, same four Mac-only execution failures
+       (Linux exec-format); exact cross-target executable parity covered.
+       First five quiet CPU-pinned pairs: source-view owner CPU
+       0.5665 -> 0.5208 s (-8.07%, 5/5), wall -8.71%, but full
+       preparation CPU 1.992 -> 2.024 s (+1.62%, 2/5), wall +3.55%,
+       RSS 41,264 -> 43,572 KiB (+5.59%, 1/5). Unchanged input-scan
+       control diverged +15.07% (15.63% median paired absolute drift),
+       normalized source-view CPU -18.38% (4/5), full -12.73% (3/5);
+       insufficient to admit a full preparation gain.
+       Prewarmed exact-input quiet A/B/A retest (five alternating triples,
+       same-base full-prepare control): full CPU 2.153 -> 2.061 s, control
+       2.052; normalized median -1.61% (3/5), control drift 4.06%.
+       Wall normalized -1.97% (3/5), drift 4.87%. Peak RSS 41,404 ->
+       43,596 KiB, control 41,256, normalized +5.49% (1/5), control drift
+       0.02%. Highwater already diverges during unchanged stack-map merge
+       before source-view replay; no basis to credit it back. Source-view
+       CPU 0.595 -> 0.563, control 0.593, normalized -7.41% (3/5).
+       Exact output and budget-retirement parity remain, but global CPU
+       benefit not reproduced beyond control and memory not noninferior.
+       Rejected: no production code published. Next investigate direct
+       validated PCO symbol-row projection/packing in input-detach, avoiding
+       per-relocation object and repeated symbol-name resolution while
+       preserving the exact final row wire and source error order; measure
+       its own actual phase and full preparation against fresh base.
        Next: (1) per-object link preparation in the codegen workers;
        (2) remeasure remaining dense loop NOP/pair scans and no-rewrite
        pass publication (preserving public snapshot contracts); (3) the
@@ -2458,7 +2498,6 @@ in the relevant section or issue and removes the entry.
    Claims:
    - #13 described-layout first gate ABI/extent/slot owner contract and focused tests (no continuation/py_gen changes): Codex, Linux, 2026-11-26T17:31Z, area runtime-gc-described-layout
    - Native completed-continuation allocation attribution and create/take/release cost: Codex, Linux, 2026-11-26T17:25Z, area runtime-gc
-   - J2s staged Mach-O relocation replay after canonical immutable-row count proof (macho_host_prepare only, disjoint from stackmaps, worker gates and codegen): Codex, Linux, 2026-11-26T17:24Z, area stage1-link
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
