@@ -1725,6 +1725,33 @@ in the relevant section or issue and removes the entry.
    constant `memset`/`memmove` inline. Compile-time budget: the dataflow is
    linear in blocks times live words; Stage1 worker replays (array_core,
    hoist_predicates) must not slow down beyond their run spread.
+   P0 allocation model results (Claude, 2026-11-26, local Mac; base
+   11c88fb4e; arms alloc-base, alloc-base2 = two builds of the base,
+   alloc-precise, alloc-split..alloc-split4, alloc-pack; nothing merged,
+   code on the local branch `exp/aarch64-call-spills` d371cc81c with its
+   tests). (1) Liveness with holes (`_precise_call_crossers`): -0.70% to
+   -1.51% instructions per request in four `instr` runs (w1), but
+   `ab alloc-base2 alloc-precise --control-arm alloc-base` gave 61441 ->
+   61418 QPS (-0.0%, 2/5 pairs, floor 0.7%): fewer callee-saved saves do not
+   show in throughput. (3) Cold-call spills: with equal branch
+   probabilities (the IR carries no branch weights or `expect`) a helper's
+   main path behind a few early-return guards looked cold
+   (`py_decref_finish` 180 -> 243 instructions); first build +1.98%
+   instructions and 28.8 -> 31.9 MB, mostly byte slots made physical whose
+   padding the prologue clears one byte at a time. A second build crashed
+   (alias members sharing a register spilled through different slots;
+   fixed per register, with a native test). Restricted to structurally
+   cold blocks (reached only through inline error edges, or no return
+   reachable) it changes no function of the benchmark binary. Packing the
+   physical frame by alignment cut prologue zero stores 29155 -> 26648 but
+   no measurable instructions per request. Reassessment (rule: three
+   candidates under 5%): A1 TLV (~2% ceiling), the immortal-object and
+   class-refcount items and these allocation steps all measured at or
+   below the noise floor, so callee-saved and stack traffic is not the owner
+   of the +45% clang gap on this core; next is task "locate the cycle gap":
+   per-function sampled cycles of the self build against the clang build
+   of the same runtime IR, idle host, then the mechanism of the top
+   excess function in both, before any further backend change.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2
