@@ -254,7 +254,10 @@ and `534b4e9e` (frontends remain frozen; ordinary QPS inconclusive),
 and truthful Windows own CPU-time observation `d62115a0`. No guard or
 deadline loosened; actual full Stage2 and six-worker Stage1 targets remain
 unmet. This status-only non-skip commit queues the new immutable snapshot
-without cancelling or rerunning earlier runs. Do not claim any hosted lane
+without cancelling or rerunning earlier runs. Verified exact head
+`4efcdda1473df9f234640751ed3d65bc42d1d4fd` queued
+[run 45876460150](https://github.com/ikshengmin/pcc/actions/runs/45876460150),
+observed pending. Do not claim any hosted lane
 green from focused tests. The latest completed
 [checkpoint comparison](investigations/checkpoint-validation-45427972345.md)
 keeps that baseline: candidate `7ec14d388` has exact test regressions
@@ -2729,6 +2732,7 @@ in the relevant section or issue and removes the entry.
    before attempting removal. No benchmark-specific shortcuts.
 
    Claims:
+   - Ordinary list/tuple/iterator ownership allocation attribution and generic non-escape proof: Codex, Linux, 2026-11-26T18:31Z, area runtime-codegen-allocation
    - Stage1 x64 sparse block ownership and frame event projections: Codex, Linux, 2026-11-26T18:26Z, area backend-x64-frame
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
