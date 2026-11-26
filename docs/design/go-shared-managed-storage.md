@@ -361,3 +361,40 @@ SHA-256 `067d6f3d1aaa2aadf8fc5ff7671fb7f3f058cb1907397ffd80b2f99effc27d41`.
 No gate release or language admission follows; repeat on a stable host and
 complete the required macOS/platform validation before calling the collector
 interface stable.
+
+### Independent ordinary allocation/control and longer four-worker replay
+
+Both frozen sources independently admitted their complete 193-member runtime
+archives (baseline SHA-256 `3d8d721366e1fc163aeabd47a356508f91c3bdbe16317eafcc3303f816549887`,
+candidate `aa6b007bacf55b5b6b269034aed7dd06a2b05a0d5007adf989c9457147b2d431`).
+The same owned C fixture classified a normal float construction, calling
+`py_float_from_f64` → `pcc_gc_alloc(24, PY_TYPE_FLOAT, 0)`, then reading
+its value and calling `pcc_gc_release`. Automatic collection was disabled
+only for this isolated allocation/refcount primitive. It ran on CPU 8,
+five alternating base/candidate/unchanged-base-control triples, 4,000,000
+iterations per arm. Every process checked a sum of 7,000,000 and equal
+live requested bytes before/after the loop. The measured process CPU cost
+was 212.284 / 214.385 / 218.946 ns/op (base/candidate/control), +0.99%
+(candidate 2/5); wall 212.529 / 218.441 / 226.004 ns/op, +2.78% (2/5).
+The median absolute paired control deviations were 0.62% CPU and 0.77%
+wall, but the formal `pcc_perf` maximum control floor was 7.87%/8.73%.
+Both are inconclusive at the unchanged 5% gate; no attribution of the
+small observed overhead as a real regression. The same native source
+SHA-256 `590e9a89b62c4475f8b637b85288bc586a0f3ff3a8e85928f7eba22ebc3727e4`
+compiled with each exact source-matched owned toolchain; raw receipt
+`14d12ce54fca05f948c8a881c289b5f08634cb61537dff33d6592cd9956ee181`.
+
+Independent longer w4 replay used the original frozen handler binaries
+above, fixed CPUs 4–8, concurrency 100, 2,000 rounds (200,000 timed requests)
+per arm, five alternating triples. No other owned heavy build or benchmark
+ran during the timing window. Median QPS 39,056.756 / 40,261.474 / 39,790.891
+(+3.08%, 2/5); processor µs/request 93.3445 / 91.5924 / 92.7252
+(-1.88%, 2/5); all allocation medians 7,642,847; peak RSS 41,463,808 /
+41,512,960 / 41,504,768 B; max-STW 1,952 / 1,996 / 1,966 µs. Median
+absolute paired control deviations were 1.88% QPS and 0.66% CPU,
+but formal maximum control floor 8.30%/6.28% remains above 5%. The earlier
+w1 maximum floor was 3.52%/3.76% (still within noise), earlier w4
+20.47%/16.84% (still inconclusive). Preserve both independent trials;
+longer w4 looks encouraging but **remains inconclusive**; do not release
+performance acceptance or frontend admissions. Raw longer receipt SHA-256
+`3ca0271edc7fef57278467ee635ea89e5d18782ab2317634d93086838d2470f2`.

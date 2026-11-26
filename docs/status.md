@@ -2635,7 +2635,6 @@ in the relevant section or issue and removes the entry.
    on 2026-11-26.
 
    Claims:
-   - #13 described-layout ordinary allocation primitive and long w4 non-regression retest: Codex, Linux, 2026-11-26T18:17Z, area runtime-gc-described-layout
    - Stage1 Linux x64 function emission register-copy/frame repeated scans: Codex, Linux, 2026-11-26T18:08Z, area backend-x64-function
    - Closed-world continuation factory immediate result handoff proof and narrow candidate: Codex, Linux, 2026-11-26T17:39Z, area runtime-codegen-factory
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
@@ -2747,7 +2746,20 @@ in the relevant section or issue and removes the entry.
    admission. See shared storage design for frozen hashes, receipt and
    control details. Next: quiet stable repeat + required platform native
    and macOS A/B before generic Go/Java lowering or unchanged upstream
-   acceptance. C++
+   acceptance. Independent same-source ordinary float allocate/read/release
+   primitive 4M iterations x15, exact live requested bytes unchanged and
+   checksum7M, CPU212.284→214.385 ns/control218.946 (+0.99%,2/5),
+   wall212.529→218.441/control226.004 (+2.78%,2/5); maximum control
+   floors7.87%/8.73%, inconclusive. Independent exclusive longer w4
+   C100x2000 five alternating triples same handler/affinity, QPS
+   39,056.756→40,261.474/control39,790.891 (+3.08%,2/5), CPU
+   93.3445→91.5924/control92.7252 us (-1.88%,2/5); allocation medians
+   7,642,847 each; RSS41,463,808→41,512,960/control41,504,768 B;
+   STW1952→1996/control1966 us. Median control deviations1.88%/0.66%
+   but formal max floor8.30%/6.28% exceeds 5%, still inconclusive.
+   Earlier w1 max floors3.52%/3.76% within noise; w4 no release.
+   Both receipts preserved in shared storage design. No language admission.
+   C++
    [#14](https://github.com/ikshengmin/pcc/issues/14):
    implicit/explicit destructor exception specifications and the non-throwing
    override rule now select ordinary versus effect-gated D1 destruction.
