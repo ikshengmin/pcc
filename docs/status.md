@@ -483,6 +483,18 @@ in the relevant section or issue and removes the entry.
    The actual failing assertion reproduced before the fix; 22 focused
    contract tests pass after it on host Python 3.13. Hosted execution is
    pending; collection is not a pass of the whole gate.
+   #20 Source CI-contracts ordinary Linux (coverage 15131867000) had
+   only the same stale inventory assertion; the preceding fix covers it.
+   Source shared ordinary macOS (coverage 15131222277) stopped before
+   collection: the platform owner erroneously required a Linux Stage1
+   bundle. The exact tracked 54 Darwin nodes remain mandatory. Scope
+   Linux native fixture admission and aggregate receipt checks to the
+   default Linux campaign; the Darwin host retains its exact ownership
+   and cannot admit or claim a foreign Linux bundle. The Linux shared
+   campaigns still require and authenticate their Stage1 inputs. The
+   new regression reproduced the old behavior before the fix; 216 Linux
+   host-Python CI native-input/owner/coverage/workflow tests passed after
+   it. No workflow lane or guard relaxed; hosted Darwin execution pending.
    Next: re-run worker-prior/changed-module and remaining Source; the 216-node
    source shared batch still requires a hosted rerun, and the active
    checkpoint's independent wheel evidence is pending.
@@ -594,7 +606,7 @@ in the relevant section or issue and removes the entry.
    under the unchanged 90 s / 1 GiB guard. Hosted verification pending.
 
    Claims:
-   - Latest Source shared/CI-contracts failure attribution and focused CI fix: Codex, Linux, 2026-11-26T15:51Z, area checkpoint
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and

@@ -79,6 +79,35 @@ def test_rust_platform_owner_does_not_silently_accept_or_require_a_foreign_archi
         coverage.native_evidence(tmp_path, {'native_inputs': {}}, 'rust', 'integration', 'macos-arm64', {})
 
 
+def test_shared_darwin_source_owner_preserves_linux_stage1_contract(tmp_path, monkeypatch):
+    # The 54 tracked Darwin execution nodes are a separate host-PCC source
+    # owner; they neither consume nor authenticate a Linux x86-64 archive.
+    from scripts import ci_validation_coverage as coverage
+    from scripts import ci_validation_owners as owners
+
+    manifest, _ = owners.read_manifest(Path(__file__).resolve().parents[1])
+    assert len([rule for rule in manifest['overrides'] if rule['domain'] == 'shared'
+                and rule['lane'] == 'ordinary' and 'macos-arm64' in rule['platforms']]) == 54
+    assert owners.additional_campaigns(['shared'], manifest) == [
+        dict(domain='shared', lane='ordinary', platform='macos-arm64', runner='macos-15')]
+    for lane in planner.LANES:
+        assert planner.requires_native_inputs('shared', lane)
+        assert planner.requires_native_inputs('shared', lane, platform='linux-x86_64')
+        assert not planner.requires_native_inputs('shared', lane, platform='macos-arm64')
+    with pytest.raises(FileNotFoundError):
+        coverage.native_evidence(tmp_path, {}, 'shared', 'ordinary', 'linux-x86_64', {})
+    coverage.native_evidence(tmp_path, {}, 'shared', 'ordinary', 'macos-arm64', {})
+    with pytest.raises(ValueError, match='unexpected native inputs'):
+        coverage.native_evidence(tmp_path, {'native_inputs': {}}, 'shared', 'ordinary', 'macos-arm64', {})
+    (tmp_path / 'native-inputs-before.json').write_text('{}')
+    with pytest.raises(ValueError, match='unexpected native inputs'):
+        coverage.native_evidence(tmp_path, {}, 'shared', 'ordinary', 'macos-arm64', {})
+    monkeypatch.setattr(native.bundle, 'host_platform', lambda: 'macos-arm64')
+    monkeypatch.setattr(native.bundle, 'import_bundle', lambda *a: pytest.fail('Darwin admitted Linux bundle'))
+    with pytest.raises(ValueError, match='source native inputs require Linux x86-64'):
+        native.admit(tmp_path, tmp_path, domain='shared', lane='ordinary', environ={})
+
+
 def test_rust_runtime_consumer_cannot_inherit_a_forced_compiler(tmp_path, monkeypatch):
     monkeypatch.setattr(native.bundle, 'host_platform', lambda: 'linux-x86_64')
     monkeypatch.setattr(native.bundle, 'import_bundle', lambda *a: pytest.fail('compiler override admitted'))

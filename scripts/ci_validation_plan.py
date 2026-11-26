@@ -46,10 +46,14 @@ def requires_native_inputs(domain, lane, *, platform=None):
     """Only these source owners consume the same-run Linux Stage1 inputs.
 
     A lane without an explicit platform is the original default campaign.
-    Additional Rust owners do not consume the Linux yyjson ABI fixture.
+    Additional owners run their own host-PCC source partition; they cannot
+    consume the Linux Stage1 compiler/runtime, including Rust's yyjson ABI
+    fixture and the shared domain's Linux native fixture requirements.
     """
+    if platform not in (None, "linux-x86_64"):
+        return False
     if domain == "rust":
-        return lane == "integration" and platform in (None, "linux-x86_64")
+        return lane == "integration"
     return lane in LANES and (
         domain == "shared" or (lane == "integration" and domain in {"cpp", "ci-contracts"})
     )
