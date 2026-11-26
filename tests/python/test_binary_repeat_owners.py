@@ -1,4 +1,8 @@
-"""Execute multiplication bodies with moving roots, aliases and disposal."""
+"""Execute multiplication bodies at collection points, with aliases and disposal.
+
+The one collector takes no lease (item 2 (d) U8): copies return a status
+only, so ``leases`` stays empty and an owned value is one with refs > 0.
+"""
 from __future__ import annotations
 
 import ast
@@ -102,6 +106,7 @@ class RepeatMemory(PercentMemory):
         return super().ptr(base, offset)
 
     def copy(self, destination, source):
+        # pcc_gc_root_copy: retain into an empty root; a status, no lease.
         self.park()
         self.copy_count += 1
         if self.copy_count == self.copy_failure:
@@ -113,9 +118,7 @@ class RepeatMemory(PercentMemory):
             return 0
         self.object(value)['refs'] += 1
         self.store(destination, 0, value)
-        assert destination not in self.leases
-        self.leases[destination] = 1
-        return 1
+        return 0
 
     def decref(self, value):
         if value is None:
@@ -250,7 +253,7 @@ class RepeatMemory(PercentMemory):
             self.store(output, 0, result)
             return 0
 
-        def snapshot(source, output, length, plans, tokens):
+        def snapshot(source, output, length, plans):
             self.park()
             self.snapshot_attempts += 1
             before = self.object(self.load(source))
@@ -272,9 +275,7 @@ class RepeatMemory(PercentMemory):
                 self.store(borrowed, 0, self.current(identity))
                 self.store(output, index * 8, self.load(borrowed))
                 self.store(borrowed, 0, None)
-                self.leases[output + index * 8] = 1
-                self.store(tokens, index * 8, 1)
-                self.plans[plans + index * 256] = identity
+                self.plans[plans + index * 128] = identity
             assert self.load(borrowed) is None
             self.locked = False
             if self.mutation == 'replace':
@@ -293,8 +294,8 @@ class RepeatMemory(PercentMemory):
             self.park()
             identity = self.plans.get(plan)
             if identity is not None:
+                # The copied child is owned by its registered snapshot root.
                 assert self.objects[identity]['refs'] > 0
-                assert any(isinstance(self.load(slot), Handle) and self.load(slot).identity == identity for slot in self.leases)
 
         def memory_free(value):
             self.park()
@@ -322,7 +323,7 @@ class RepeatMemory(PercentMemory):
         def barrier(owner, slot, value):
             assert value is self.load(slot)
             if value is not None:
-                assert slot in self.leases
+                assert self.object(value)['refs'] > 0
             self.barriers.append(slot)
 
         def enter(frame_map, base):
@@ -345,9 +346,7 @@ class RepeatMemory(PercentMemory):
             store_i32=self.store_scalar, store_i64=self.store_scalar, store_i8=self.store_byte,
             global_addr=lambda name: 8, cstr=lambda value: value,
             global_load_ptr=lambda name: self.current(self.not_implemented.identity),
-            pcc_gc_root_copy_lease=self.copy, pcc_gc_root_move=move,
-            pcc_gc_foreign_lease_acquire=self.acquire,
-            pcc_gc_foreign_lease_release=self.release,
+            pcc_gc_root_copy=self.copy, pcc_gc_root_move=move,
             pcc_gc_store_root=self.drop,
             pcc_gc_note_slot_write_barrier=barrier,
             py_tuple_new=tuple_new, py_tuple_set_item=tuple_set,
@@ -362,7 +361,7 @@ class RepeatMemory(PercentMemory):
             pcc_capi_is_cext_type_tag=lambda tag: 0,
             pcc_list_snapshot_commit_slots=snapshot,
             pcc_gc_backend=lambda: 4,
-            pcc_gc_root_copy_lease_finish=finish,
+            pcc_gc_store_root_plan_finish=finish,
             pcc_gc_frame_enter=enter, pcc_gc_frame_leave=leave,
             pcc_gc_publish_initialized=lambda value: self.park(),
             malloc=memory_alloc, free=memory_free,
@@ -484,14 +483,6 @@ def test_partial_input_copy_cleanup(failure):
     model.close()
 
 
-@pytest.mark.parametrize('role', ('snapshot', 'result'))
-def test_result_publication_precedes_failing_lease(role):
-    model = RepeatMemory(lease_failure=role)
-    status, _ = model.run([1, 2], 3)
-    assert status == -1 and model.pending == 'lease-error'
-    model.close()
-
-
 def test_aliasing_operands_have_independent_owners():
     model = RepeatMemory()
     status, result = model.run(2**80, None, alias=True)
@@ -499,7 +490,7 @@ def test_aliasing_operands_have_independent_owners():
     model.close()
 
 
-def test_fresh_results_run_the_root_barrier_while_address_leased():
+def test_fresh_results_run_the_root_barrier_while_owned():
     model = RepeatMemory()
     status, result = model.run([1, 2], 3)
     assert status == 0 and model.value(result) == [1, 2, 1, 2, 1, 2]
@@ -526,7 +517,9 @@ def test_snapshot_failure_at_each_position_finishes_all_plans(position, mutate):
     model.close()
 
 
-@pytest.mark.parametrize('allocation', (1, 2, 3))
+# Two raw allocations remain (plans, children); the token array went with
+# the leases (item 2 (d) U8).
+@pytest.mark.parametrize('allocation', (1, 2))
 def test_snapshot_raw_allocation_failure_cleans_unregistered_scratch(allocation):
     model = RepeatMemory(allocation_failure=allocation)
     status, _ = model.run([1, 2], 2)

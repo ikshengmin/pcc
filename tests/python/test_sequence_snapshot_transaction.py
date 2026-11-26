@@ -36,7 +36,6 @@ class StagedSnapshot:
         self.children = 20000
         self.borrowed = self.children + len(values) * 8
         self.plan_base = 30000
-        self.tokens = 50000
         self.memory = {}
         self.refs = {}
         self.leases = {}
@@ -64,8 +63,6 @@ class StagedSnapshot:
                         pcc_gc_store_root_plan_init=self.plan_init,
                         pcc_gc_store_root_plan_commit_locked=self.commit,
                         pcc_gc_load_borrowed_ptr=self.borrow,
-                        pcc_gc_foreign_lease_acquire=self.acquire,
-                        pcc_gc_foreign_lease_release=self.release,
                         pcc_gc_store_root_plan_finish=self.finish,
                         pcc_py_gc_minor_graph_lock=self.lock,
                         pcc_py_gc_minor_graph_unlock=self.unlock,
@@ -75,7 +72,7 @@ class StagedSnapshot:
         abi = {'object.list.items_offset':32, 'object.list.length_offset':16,
                'object.pointer.size':8, 'object.header.type_tag_offset':8, 'object.type.list':5}
         self.env['abi_constant'] = abi.__getitem__
-        install(RUNTIME / 'py_obj.py', {'pcc_gc_root_copy_lease_prepare_locked', 'pcc_gc_root_copy_lease_finish'}, self.env)
+        install(RUNTIME / 'py_obj.py', {'pcc_gc_root_copy_prepare_locked'}, self.env)
         install(PROPOSAL / 'freestanding_sequence_snapshot.py', {'pcc_list_snapshot_commit_slots'}, self.env)
 
     def load(self, pointer, offset=0):
@@ -130,22 +127,6 @@ class StagedSnapshot:
         self.events.append(('root-barrier', destination, value))
         return 1
 
-    def acquire(self, slot):
-        assert self.locked and slot in self.owning
-        index = (slot - self.children) // 8
-        if self.fail == 'lease' and index == self.failure_index:
-            return -1
-        value = self.load(slot)
-        if not value or value % 2:
-            return 0
-        self.leases[slot] = 1
-        return 1
-
-    def release(self, slot, token):
-        if token:
-            assert self.leases.pop(slot) == token
-        return 0
-
     def finish(self, plan):
         assert not self.locked
         self.events.append(('finish', plan))
@@ -153,15 +134,14 @@ class StagedSnapshot:
     def run(self, length=None):
         status = self.env['pcc_list_snapshot_commit_slots'](
             self.source_root, self.children, len(self.values) if length is None else length,
-            self.plan_base, self.tokens,
+            self.plan_base,
         )
         assert not self.locked and self.load(self.borrowed) == 0
         before = tuple(self.load(self.children, i * 8) for i in range(len(self.values)))
         for i in range(len(self.values)):
-            self.env['pcc_gc_root_copy_lease_finish'](self.plan_base + i * 256)
+            self.env['pcc_gc_store_root_plan_finish'](self.plan_base + i * 128)
         for i in range(len(self.values)):
             slot = self.children + i * 8
-            self.release(slot, self.load(self.tokens, i * 8))
             value = self.load(slot)
             if value and value % 2 == 0:
                 self.refs[value] -= 1
@@ -182,7 +162,7 @@ def test_registered_staging_preserves_aliases_and_borrowed_healing(values, forwa
     assert model.events.index('unlock') < next((i for i,event in enumerate(model.events) if isinstance(event,tuple) and event[0]=='finish'), len(model.events))
 
 
-@pytest.mark.parametrize('failure', ('copy', 'lease'))
+@pytest.mark.parametrize('failure', ('copy',))
 @pytest.mark.parametrize('position', (0,1,2))
 @pytest.mark.parametrize('forwarded', (False, True))
 def test_partial_failure_clears_borrowed_slot_and_balances_all_copied_roots(failure, position, forwarded):
@@ -211,7 +191,7 @@ def test_invalid_snapshot_shape_does_not_publish_an_owner(shape):
     before = dict(model.refs)
     status = model.env['pcc_list_snapshot_commit_slots'](
         model.source_root, 0 if shape == 'null_children' else model.children,
-        -1 if shape == 'negative_length' else 2, model.plan_base, model.tokens,
+        -1 if shape == 'negative_length' else 2, model.plan_base,
     )
     assert status == -1 and not model.locked
     assert model.load(model.borrowed) == 0
@@ -224,6 +204,6 @@ def test_nonempty_staging_root_is_rejected_without_changing_its_owner():
     model.store(model.children,0,4000)
     model.refs[4000] = 1
     before = dict(model.memory)
-    assert model.env['pcc_list_snapshot_commit_slots'](model.source_root,model.children,1,model.plan_base,model.tokens) == -1
+    assert model.env['pcc_list_snapshot_commit_slots'](model.source_root,model.children,1,model.plan_base) == -1
     assert model.memory == before
     assert not model.leases and model.refs == {3000:1,4000:1}

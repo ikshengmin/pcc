@@ -1,4 +1,4 @@
-"""Callback owner/lease model, not a native/collector semantics substitute."""
+"""Callback owner model (no leases), not a native/collector semantics substitute."""
 import ast
 from pathlib import Path
 import pytest
@@ -8,7 +8,7 @@ SOURCE = Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_re_match_runti
 class CallbackModel(MatchModel):
     def __init__(self, case, fail=None):
         super().__init__()
-        for i in (2,3):self.ns['_re_drop'](self.slots,self.tokens,i)
+        for i in (2,3):self.ns['_re_drop'](self.slots,i)
         self.case=case
         text=self.new('str',b'ab',record=False)
         spans=self.build_tuple([self.new('int',v,record=False) for v in (0,2,0,1,-1,-1)])
@@ -26,7 +26,7 @@ class CallbackModel(MatchModel):
         self.kind=kind
         self.nargs=len(self.objects[args]['value'])
         for i,obj in ((3,args),(4,text),(5,spans),(6,names)):
-            self.memory[self.slots+i*8]=obj;self.memory[self.tokens+i*8]=1;self.objects[obj]['leases']+=1
+            self.memory[self.slots+i*8]=obj
         self.events=[];self.fail=fail
         self.ns.update({'memset':lambda p,v,n:[self.memory.__setitem__(p+i,v) for i in range(n)],
             'load_i32':lambda p,n:self.memory[p+n],
@@ -35,7 +35,7 @@ class CallbackModel(MatchModel):
             'py_int_to_i64':self.as_int,'py_str_utf8':self.utf8_value,
             'py_str_byte_len':self.strlen,'py_str_byte_slice_i64':self.slice,
             'py_dict_new':lambda:self.new('dict',{}),'py_dict_set':self.dict_set,
-            'pcc_gc_root_copy_lease':self.copy_owned,
+            'pcc_gc_root_copy':self.copy_owned,
             'py_exc_new':lambda tag,msg:self.new('error',(tag,msg)), 'py_raise':self.raise_error})
         selected={'_re_span_value','_re_same_name','_re_select_group','_re_group_item','_re_callback_result','_re_error'}
         nodes=[]
@@ -75,8 +75,7 @@ class CallbackModel(MatchModel):
         obj=self.memory[source];self.require(obj)
         if self.operation('default_copy'):return -1
         self.memory[dest]=obj;self.incref(obj)
-        if obj==1:return 0
-        self.objects[obj]['leases']+=1;return 1
+        return 0
     def dict_set(self,obj,key,value):
         for item in (obj,key,value):self.require(item)
         if self.operation('dict_set'):self.set_error('dict_set');return
@@ -85,7 +84,7 @@ class CallbackModel(MatchModel):
     def raise_error(self,error):
         self.require(error);self.incref(error);self.tls=error
         if not self.original_error:self.original_error=error
-    def callback(self):self.ns['_re_callback_result'](self.slots,self.tokens,self.kind,self.nargs,2)
+    def callback(self):self.ns['_re_callback_result'](self.slots,self.kind,self.nargs,2)
 
 CASES=['default_alias','dict_default_alias','index_alias','index_new','name','multi']
 @pytest.mark.parametrize('case',CASES)

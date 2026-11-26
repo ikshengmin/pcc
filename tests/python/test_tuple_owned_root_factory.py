@@ -63,7 +63,7 @@ class TupleFactoryMemory:
             'pcc_platform_abort': lambda: pytest.fail('invariant abort'),
         }
         _functions(PORT, {'py_tuple_new', '_tuple_owned_construction_failed',
-                          'py_tuple_from_owned_roots', 'pcc_tuple_from_owned_roots_lease'}, self.ns)
+                          'py_tuple_from_owned_roots'}, self.ns)
 
     def stack(self, size):
         self.next_address += max(1024, size + 32)
@@ -232,7 +232,7 @@ def test_tuple_factory_transfers_each_owner_with_tracking(values, backend):
 
 
 @pytest.mark.parametrize('backend', (0,))
-@pytest.mark.parametrize('failure', ['header', 'lease'])
+@pytest.mark.parametrize('failure', ['header'])
 @pytest.mark.parametrize('pending', [None, 'selected-error'])
 def test_tuple_factory_failure_preserves_sources_and_selected_exception(backend, failure, pending):
     m = TupleFactoryMemory(('a', 'b', 'a'), backend, failure, pending)
@@ -241,7 +241,7 @@ def test_tuple_factory_failure_preserves_sources_and_selected_exception(backend,
     assert all(m.load(slot, 0) in m.children for slot in m.source_slots)
     assert m.owned() == m.children and m.frames == m.initial_frames and not m.leases
     assert m.pending == (pending or 'tuple: out of memory')
-    assert m.tracked == 0 and m.disposals == (failure == 'lease')
+    assert m.tracked == 0 and m.disposals == 0
 
 
 @pytest.mark.parametrize('count', [0, -1, 134217729])
@@ -354,16 +354,6 @@ def test_tuple_transfer_preserves_aliases_finalizers_and_reachable_cycles(
         (tmp_path / ('gc' + str(backend) + '.stdout')).write_text(result.stdout)
         (tmp_path / ('gc' + str(backend) + '.stderr')).write_text(result.stderr)
         assert (result.returncode, result.stdout, result.stderr) == (0, expected + '\n', ''), backend
-
-
-@pytest.mark.parametrize('backend', (0,))
-def test_tuple_factory_can_handoff_its_existing_output_lease(backend):
-    m = TupleFactoryMemory(('a', 'cycle'), backend)
-    token = m.ns['pcc_tuple_from_owned_roots_lease'](m.sources, 2, m.output)
-    assert token == 1 and m.leases == {m.output: token}
-    assert m.owned() == m.children and m.frames == m.initial_frames
-    m.release(m.output, token)
-    assert not m.leases and m.pending is None
 
 
 def test_gc0_keeps_resolution_when_read_barriers_are_enabled():

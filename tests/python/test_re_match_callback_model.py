@@ -29,7 +29,6 @@ def materialize(obj):
 class CallbackModel:
     def __init__(self, match, args):
         self.slots = {}
-        self.tokens = {}
         self.error = None
         self.none = Heap(None)
         self.slots[4 * 8] = Heap(match.string)
@@ -67,11 +66,11 @@ class CallbackModel:
             "py_str_byte_slice_i64": lambda obj, lo, hi: Heap(obj.value.encode()[lo:hi].decode()),
             "py_dict_new": lambda: Heap({}),
             "py_dict_set": lambda obj, name, item: obj.value.__setitem__(name.value, item),
-            "pcc_gc_root_copy_lease": self.copy,
-            "_re_adopt": lambda slots, tokens, index: int(self.load(slots, index * 8) != 0),
-            "_re_drop": lambda slots, tokens, index: self.store(slots, index * 8, 0),
+            "pcc_gc_root_copy": self.copy,
+            "_re_adopt": lambda slots, index: int(self.load(slots, index * 8) != 0),
+            "_re_drop": lambda slots, index: self.store(slots, index * 8, 0),
             "_re_error": self.raise_error,
-            "py_runtime_error_if_unset": lambda op, msg: self.raise_error(None, None, 7, msg),
+            "py_runtime_error_if_unset": lambda op, msg: self.raise_error(None, 7, msg),
         }
         wanted = {"_re_span_value", "_re_same_name", "_re_select_group", "_re_group_item", "_re_callback_result"}
         nodes = []
@@ -119,7 +118,7 @@ class CallbackModel:
         self.store(destination, 0, Heap(value))
         return 0
 
-    def raise_error(self, slots, tokens, tag, message):
+    def raise_error(self, slots, tag, message):
         if self.error is None:
             self.error = {3: TypeError, 5: IndexError, 7: RuntimeError}[tag]
 
@@ -173,7 +172,7 @@ def test_callback_bodies_match_cpython(pattern, text, method, args):
     else:
         expected_error = None
     model = CallbackModel(match, args)
-    model.run(model.slots, model.tokens, kind, len(args), match.re.groups)
+    model.run(model.slots, kind, len(args), match.re.groups)
     assert model.error == expected_error
     if expected_error is None:
         assert materialize(model.slots[0]) == expected

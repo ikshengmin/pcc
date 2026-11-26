@@ -7,16 +7,16 @@ ROOT=Path(__file__).resolve().parents[2] / 'pcc/runtime/py'
 SOURCE=ROOT/'py_re_match_runtime.py'
 
 def run(model):
-    # Constructor model starts with leased inputs; no-argument bridge has none.
+    # Constructor model starts with owned inputs; no-argument bridge has none.
     for index in (2,3):
-        model.ns['_re_drop'](model.slots,model.tokens,index)
+        model.ns['_re_drop'](model.slots,index)
     node=next(n for n in ast.parse(SOURCE.read_text()).body if isinstance(n,ast.FunctionDef) and n.name=='pcc_re_match_instance_into')
     node.decorator_list=[]
     model.ns['memset']=lambda p,v,n:[model.memory.__setitem__(p+i,v) for i in range(n)]
     exec(compile(ast.Module(body=[node],type_ignores=[]),str(SOURCE),'exec'),model.ns)
     return model.ns[node.name](model.slots)
 
-def test_shared_class_is_leased_through_instance_allocation_and_released_before_return():
+def test_shared_class_is_owned_through_instance_allocation_and_released_before_return():
     model=MatchModel()
     assert run(model)==0
     result=model.memory[model.slots]
@@ -29,8 +29,9 @@ def test_shared_class_is_leased_through_instance_allocation_and_released_before_
 
 def test_all_instance_factory_fault_points_preserve_error_and_drop_owners():
     baseline=MatchModel();run(baseline)
-    assert baseline.events==['class_copy','alloc:instance','lease']
-    for point in range(1,4):
+    # The one collector takes no lease: two fault points remain.
+    assert baseline.events==['class_copy','alloc:instance']
+    for point in range(1,3):
         model=MatchModel(fail=point,cleanup_error=True)
         run(model)
         assert model.memory[model.slots]==0

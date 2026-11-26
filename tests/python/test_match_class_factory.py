@@ -1,7 +1,9 @@
 """Host fault/concurrency model for actual singleton factory source.
 
-No runtime collector is executed. Each owner/lease transition is modeled and
-asserted; native five-GC proof remains separate.
+No runtime collector is executed. Each owner transition is modeled and
+asserted. The one collector's factory copies through the status-only
+pcc_gc_root_copy and takes no lease (item 2 (d) U8), so ``tokens`` and each
+object's ``leases`` stay empty.
 """
 import ast
 from concurrent.futures import ThreadPoolExecutor
@@ -55,9 +57,7 @@ class Model:
             "pcc_platform_abort": lambda: (_ for _ in ()).throw(AssertionError("abort")),
             "pcc_gc_scheduler_root_register_handle": self.register,
             "pcc_gc_publish_owned_root": self.publish,
-            "pcc_gc_foreign_lease_acquire": self.acquire,
-            "pcc_gc_foreign_lease_release": self.release,
-            "pcc_gc_root_copy_lease": self.copy,
+            "pcc_gc_root_copy": self.copy,
             "pcc_gc_store_root": self.store_root,
             "pcc_gc_load_ptr": lambda owner, slot: self.slots[slot],
         }
@@ -65,7 +65,7 @@ class Model:
         for node in nodes:
             node.decorator_list = []
         exec(compile(ast.Module(body=nodes, type_ignores=[]), str(SOURCE), "exec"), self.namespace)
-        self.factory = self.namespace["pcc_re_"+kind+"_class_copy_lease"]
+        self.factory = self.namespace["pcc_re_"+kind+"_class_copy"]
 
     def error(self, operation, detail):
         if not getattr(self.local, "error", None):
@@ -157,7 +157,7 @@ class Model:
         self.slots[destination] = obj
         if not self.objects[obj]["immortal"]:
             self.objects[obj]["refs"] += 1
-        return self.acquire(destination)
+        return 0
 
     def store_root(self, slot, value):
         assert slot in self.roots and value == 0
@@ -171,35 +171,34 @@ class Model:
                 del self.objects[obj]
 
     def untrack(self, obj):
-        assert self.objects[obj]["leases"] >= 2
+        # The winner is owned by its result slot and the published global.
+        assert self.objects[obj]["refs"] >= 2
         assert obj in (self.slots["pcc_re_match_class"],self.slots["pcc_re_pattern_class"])
         self.objects[obj]["tracked"] = False
 
     def immortalize(self, op, obj, offset, mask, order):
         assert (op, offset, mask, order) == ("or", 12, 1, "relaxed")
-        assert self.objects[obj]["leases"] >= 2
+        assert self.objects[obj]["refs"] >= 2
         assert obj in (self.slots["pcc_re_match_class"],self.slots["pcc_re_pattern_class"])
         self.objects[obj]["immortal"] = True
 
 
 @pytest.mark.parametrize("kind", ["match", "pattern"])
-def test_first_and_cached_factory_return_same_class_with_independent_leases(kind):
+def test_first_and_cached_factory_return_same_class_with_independent_owners(kind):
     model = Model(kind=kind)
     first = model.factory(101)
     second = model.factory(102)
-    assert first == second == 1
+    assert first == second == 0
     assert model.slots[101] == model.slots[102] == model.slots[model.cache]
     assert len(model.allocations) == 1 and model.register_count == 1
     obj = model.objects[model.slots[101]]
-    assert obj["immortal"] and not obj["tracked"] and obj["leases"] == 2
-    model.release(101, first)
-    model.release(102, second)
+    assert obj["immortal"] and not obj["tracked"] and obj["leases"] == 0
     assert not model.tokens
 
 
-@pytest.mark.parametrize("failure", ["mutex", "first_lock", "allocation", "publish", "lease", "second_lock", "register", "global_copy"])
+@pytest.mark.parametrize("failure", ["mutex", "first_lock", "allocation", "publish", "second_lock", "register", "global_copy"])
 @pytest.mark.parametrize("kind", ["match", "pattern"])
-def test_failure_does_not_publish_class_or_leak_candidate_owner_or_lease(kind, failure):
+def test_failure_does_not_publish_class_or_leak_candidate_owner(kind, failure):
     model = Model(failure,kind=kind)
     assert model.factory(101) == -1
     assert model.slots[101] == 0 and model.slots[model.cache] == 0
@@ -208,7 +207,7 @@ def test_failure_does_not_publish_class_or_leak_candidate_owner_or_lease(kind, f
     # A successfully registered empty global root is reused on retry.
     assert model.register_count == (1 if failure == "global_copy" else 0)
     model.failure = None
-    assert model.factory(101) > 0
+    assert model.factory(101) == 0
     assert model.register_count == 1
 
 
@@ -218,12 +217,12 @@ def test_two_real_host_threads_publish_one_identity_and_free_collectible_loser(k
     with ThreadPoolExecutor(max_workers=2) as pool:
         first = pool.submit(model.factory, 101)
         second = pool.submit(model.factory, 102)
-        tokens = [first.result(timeout=10), second.result(timeout=10)]
-    assert all(token > 0 for token in tokens)
+        statuses = [first.result(timeout=10), second.result(timeout=10)]
+    assert statuses == [0, 0]
     assert model.slots[101] == model.slots[102] == model.slots[model.cache]
     assert len(model.allocations) == 2 and len(model.freed) == 1
     assert len(model.objects) == 1 and model.register_count == 1
-    assert next(iter(model.objects.values()))["leases"] == 2
+    assert next(iter(model.objects.values()))["leases"] == 0
 
 
 @pytest.mark.parametrize("kind", ["match", "pattern"])
@@ -239,8 +238,7 @@ def test_invalid_nonempty_result_is_unchanged(kind):
 @pytest.mark.parametrize("kind", ["match", "pattern"])
 def test_cached_copy_failure_preserves_global_owner_and_empty_result(kind):
     model = Model(kind=kind)
-    first = model.factory(101)
-    model.release(101, first)
+    assert model.factory(101) == 0
     model.store_root(101, 0)
     winner = model.slots[model.cache]
     model.failure = "cached_copy"
@@ -252,8 +250,7 @@ def test_cached_copy_failure_preserves_global_owner_and_empty_result(kind):
 @pytest.mark.parametrize("kind", ["match", "pattern"])
 def test_cached_owner_is_reloaded_from_registered_global_after_modeled_relocation(kind):
     model = Model(kind=kind)
-    first = model.factory(101)
-    model.release(101, first)
+    assert model.factory(101) == 0
     model.store_root(101, 0)
     old = model.slots[model.cache]
     moved = old + 100
@@ -268,9 +265,9 @@ def test_cached_owner_is_reloaded_from_registered_global_after_modeled_relocatio
 def test_both_classes_publish_independently_during_four_thread_race():
     model=Model(barrier=threading.Barrier(4))
     with ThreadPoolExecutor(max_workers=4) as pool:
-        calls=[pool.submit(model.namespace["pcc_re_"+kind+"_class_copy_lease"],slot)
+        calls=[pool.submit(model.namespace["pcc_re_"+kind+"_class_copy"],slot)
                for kind,slot in [("match",101),("pattern",102),("match",103),("pattern",104)]]
-        assert all(f.result(timeout=10)==1 for f in calls)
+        assert all(f.result(timeout=10)==0 for f in calls)
     assert model.slots[101]==model.slots[103]==model.slots["pcc_re_match_class"]
     assert model.slots[102]==model.slots[104]==model.slots["pcc_re_pattern_class"]
     assert model.slots[101]!=model.slots[102]
@@ -278,5 +275,4 @@ def test_both_classes_publish_independently_during_four_thread_race():
     assert len(model.objects)==2 and len(model.freed)==2 and model.register_count==2
     assert model.objects[model.slots[101]]["name"]=="re.Match"
     assert model.objects[model.slots[102]]["name"]=="re.Pattern"
-    for slot in (101,102,103,104):model.release(slot,1)
     assert not model.tokens

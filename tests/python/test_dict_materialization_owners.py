@@ -35,7 +35,7 @@ class MaterializeMemory(DictMemory):
             pcc_gc_root_copy_owned_prepare_locked=self.copy_owned_prepare,
             pcc_gc_store_root_plan_finish=self.copy_finish,
             py_tuple_set_item=self.set_tuple,
-            pcc_tuple_from_owned_roots_lease=self.tuple_from_owned_roots,
+            py_tuple_from_owned_roots=self.tuple_from_owned_roots,
             pcc_gc_store_root=self.store_root,
             # This model is the general slot protocol; the GC0 transaction
             # is test_dict_materialize_gc0_transaction's.
@@ -100,7 +100,8 @@ class MaterializeMemory(DictMemory):
                 assert value.leases == 0
             pair.fields[abi.PYTUPLEOBJECT_ITEMS_OFFSET + index * abi.C_POINTER_SIZE] = value
             self.write(source, 0, None)
-        return self.acquire(output)
+        # py_tuple_from_owned_roots: a status only, no output lease (4c).
+        return 0
 
     def append_list(self, obj, value):
         self.collect('callback')
@@ -464,6 +465,6 @@ def test_materialization_slot_indices_stay_in_machine_ir(tmp_path):
     )
     assert match is not None
     calls = re.findall(r'\bcall\b[^\n]*@([^ (]+)\(', match.group(0))
-    assert 'pcc_tuple_from_owned_roots_lease' in calls
+    assert 'py_tuple_from_owned_roots' in calls
     assert not any(name.startswith('py_int_') for name in calls), calls
     assert 'pcc_gc_frame_enter_mapped' not in calls

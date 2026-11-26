@@ -50,8 +50,12 @@ class NamespaceMemory(DictMemory):
             # lease and finishes the plan after the outermost unlock, as
             # test_dict_materialization_owners models it.
             'pcc_gc_root_copy_owned_prepare_locked': self.copy_owned_prepare,
+            # The one collector's split copy (item 2 (d) U8): owning source only here.
+            'pcc_gc_root_copy_prepare_locked': lambda destination, source, borrowed, plan: (
+                self.copy_owned_prepare(destination, source, plan) if borrowed == 0
+                else pytest.fail('unexpected borrowed namespace source')),
             'pcc_gc_store_root_plan_finish': self.copy_finish,
-            'pcc_tuple_from_owned_roots_lease': self.tuple_from_owned_roots,
+            'py_tuple_from_owned_roots': self.tuple_from_owned_roots,
             'py_list_append_from_slots': self.append_from_slots,
         })
         for file, prefixes, names in (
@@ -100,7 +104,8 @@ class NamespaceMemory(DictMemory):
                 assert value.leases == (1000 if value is self.none else 0)
             pair.fields[abi.PYTUPLEOBJECT_ITEMS_OFFSET + index * abi.C_POINTER_SIZE] = value
             self.write(source, 0, None)
-        return self.acquire(output)
+        # py_tuple_from_owned_roots: a status only, no output lease (4c).
+        return 0
 
     def append_from_slots(self, destination, source, borrowed):
         assert borrowed == 0

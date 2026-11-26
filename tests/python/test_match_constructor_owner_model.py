@@ -1,4 +1,8 @@
-"""Execute actual Match constructor/method/finish under an owning-slot model."""
+"""Execute actual Match constructor/method/finish under an owning-slot model.
+
+The one collector takes no lease (item 2 (d) U8): every raw pointer a runtime
+call receives must be owned (refs > 0) by a registered slot or an owner.
+"""
 import ast
 from pathlib import Path
 
@@ -33,8 +37,6 @@ class MatchModel:
         self.text = self.new('text', 'ab', record=False)
         for index, obj in ((2, self.pattern), (3, self.text)):
             self.memory[self.slots + index * 8] = obj
-            self.memory[self.tokens + index * 8] = 1
-            self.objects[obj]['leases'] += 1
         for index, value in enumerate((0, 2, 0, 2)):
             self.memory[self.caps + index * 8] = value
         namespace = {
@@ -50,8 +52,6 @@ class MatchModel:
             'global_load_ptr': lambda name: 1,
             'py_runtime_error_if_unset': self.set_error,
             'py_err_occurred': lambda: int(self.tls != 0),
-            'pcc_gc_foreign_lease_acquire': self.acquire,
-            'pcc_gc_foreign_lease_release': self.release,
             'pcc_gc_store_root': self.store_root,
             'pcc_py_gc_minor_graph_lock': self.lock,
             'pcc_py_gc_minor_graph_unlock': self.unlock,
@@ -69,7 +69,7 @@ class MatchModel:
             'py_func_new_named': self.function,
             'py_obj_setattr': self.setattr,
             'pcc_re_match_method_address': lambda: 777,
-            'pcc_re_match_class_copy_lease': self.class_copy,
+            'pcc_re_match_class_copy': self.class_copy,
             'py_str_utf8': self.utf8,
             'pcc_re_engine_group_names_flags': self.names,
         }
@@ -112,7 +112,7 @@ class MatchModel:
 
     def require(self, obj):
         assert obj in self.objects, ('dead pointer', obj)
-        assert obj == 1 or self.objects[obj]['leases'] > 0, ('unleased raw pointer', obj, self.objects[obj])
+        assert obj == 1 or self.objects[obj]['refs'] > 0, ('unowned raw pointer', obj, self.objects[obj])
 
     def acquire(self, slot):
         obj = self.memory[slot]
@@ -190,8 +190,7 @@ class MatchModel:
         if self.operation('class_copy'):
             return -1
         self.memory[slot] = 2
-        self.objects[2]['leases'] += 1
-        return 1
+        return 0
 
     def instance(self, cls):
         self.require(cls)
@@ -247,10 +246,10 @@ class MatchModel:
         return 1
 
     def construct(self):
-        return self.ns['_re_construct'](self.slots, self.tokens, self.caps, 1, 0)
+        return self.ns['_re_construct'](self.slots, self.caps, 1, 0)
 
     def finish(self):
-        return self.ns['_re_finish'](self.slots, self.tokens)
+        return self.ns['_re_finish'](self.slots)
 
     def reachable(self, root):
         found = set()
@@ -276,10 +275,10 @@ def test_constructor_installs_six_methods_and_finish_leaves_only_reachable_outpu
     assert all(model.memory[model.slots+i*8] == 0 for i in range(1, 16))
 
 
-def test_every_constructor_allocation_lease_and_setter_failure_cleans_owners_and_preserves_error():
+def test_every_constructor_allocation_and_setter_failure_cleans_owners_and_preserves_error():
     baseline = MatchModel()
     assert baseline.construct() == 1
-    assert {'class_copy', 'alloc:instance', 'lease', 'alloc:tuple', 'alloc:int', 'alloc:str', 'alloc:function', 'tuple_set', 'setattr', 'names'} <= set(baseline.events)
+    assert {'class_copy', 'alloc:instance', 'alloc:tuple', 'alloc:int', 'alloc:str', 'alloc:function', 'tuple_set', 'setattr', 'names'} <= set(baseline.events)
     for failed in range(1, len(baseline.events)+1):
         model = MatchModel(fail=failed, cleanup_error=True)
         assert model.construct() == 0, (failed, baseline.events[failed-1])
@@ -292,12 +291,3 @@ def test_every_constructor_allocation_lease_and_setter_failure_cleans_owners_and
         assert set(model.objects) == {1, 2, original}, (failed, baseline.events[failed-1], model.objects)
         assert all(obj['leases'] == 0 for obj in model.objects.values())
         assert all(model.memory[model.slots+i*8] == 0 for i in range(16))
-
-
-def test_error_slot_lease_failure_is_explicit_fail_stop_not_silent_cleanup():
-    model = MatchModel()
-    model.set_error('original', 'error')
-    model.fail = 1
-    with pytest.raises(RuntimeError, match='abort'):
-        model.finish()
-    assert model.memory[model.slots+8] == model.original_error

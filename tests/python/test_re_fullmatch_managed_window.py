@@ -15,7 +15,7 @@ def run_window(pattern, text, start, endpos):
     result = {"error": None, "spans": None, "none": False}
     none = object()
 
-    def construct(slots, tokens, caps, groups, flags):
+    def construct(slots, caps, groups, flags):
         result["spans"] = [(core.read(caps, index * 16, 8, True), core.read(caps, index * 16 + 8, 8, True)) for index in range(groups + 1)]
         return 1
 
@@ -47,7 +47,7 @@ def run_window(pattern, text, start, endpos):
         "_re_construct": construct,
         "_re_adopt": lambda *args: 1,
         "global_load_ptr": lambda name: none,
-        "_re_error": lambda slots, tokens, kind, message: result.update(error=(kind, message)),
+        "_re_error": lambda slots, kind, message: result.update(error=(kind, message)),
     }
     nodes = []
     for node in ast.parse(SOURCE.read_text()).body:
@@ -56,7 +56,7 @@ def run_window(pattern, text, start, endpos):
         elif isinstance(node, ast.FunctionDef) and node.name in {"_re_bytes_ascii", "_re_run_fullmatch"}:
             nodes.append(node)
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(SOURCE), "exec"), ns)
-    ns["_re_run_fullmatch"](slots, {}, 0, start, endpos)
+    ns["_re_run_fullmatch"](slots, 0, start, endpos)
     return result
 
 

@@ -45,9 +45,11 @@ def test_snapshot_kernel_remains_freestanding_and_semantic_entry_is_runtime_port
     assert '__pcc_runtime_port__ = True' in (runtime / 'py_binary_repeat_runtime.py').read_text()
 
 
-def test_snapshot_uses_the_existing_exact_split_root_copy_abi():
+def test_snapshot_uses_the_exact_split_root_copy_abi():
+    # The one collector's split copy, a status only (item 2 (d) U8).
     check = runtime_abi.is_freestanding_gc_cross_object_runtime_import
-    symbol = 'pcc_gc_root_copy_lease_prepare_locked'
+    symbol = 'pcc_gc_root_copy_prepare_locked'
+    assert symbol + '(' in (ROOT / 'pcc/runtime/py/freestanding_sequence_snapshot.py').read_text()
     assert check(symbol, '(c_ptr,c_ptr,c_int64,c_ptr)', 'c_int64')
     assert not check(symbol, '(c_ptr,c_ptr,c_ptr)', 'c_int64')
     assert not check(symbol, '(c_ptr,c_ptr,c_ptr,c_ptr)', 'c_int64')

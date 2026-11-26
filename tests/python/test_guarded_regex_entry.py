@@ -130,12 +130,12 @@ def test_raw_trampoline_ir_has_no_poll_before_guard_or_managed_prologue(tmp_path
     assert calls[0] == "pcc_thread_no_park_depth"
     assert calls.index("pcc_thread_no_park_enter") < calls.index("pcc_gc_note_frame_enter_checked")
     assert calls.count("pcc_gc_note_frame_enter_checked") == 2
-    publisher = re.search(r"^define[^\n]*@pcc_re_publish_copy_lease\([^\n]*\).*?^}", text, re.M | re.S).group()
+    publisher = re.search(r"^define[^\n]*@pcc_re_publish_copy\([^\n]*\).*?^}", text, re.M | re.S).group()
     assert "@pcc_thread_stop_requested" not in publisher
     assert "@pcc_gc_frame_enter(" not in publisher
     assert "@pcc_gc_pin(" not in publisher and "@pcc_gc_unpin(" not in publisher
-    assert publisher.index("@pcc_thread_no_park_exit(") < publisher.index("@pcc_gc_root_copy_borrowed_lease(")
-    assert publisher.index("@pcc_gc_root_copy_borrowed_lease(") < publisher.index("@pcc_gc_note_frame_leave(")
+    assert publisher.index("@pcc_thread_no_park_exit(") < publisher.index("@pcc_gc_root_copy_borrowed(")
+    assert publisher.index("@pcc_gc_root_copy_borrowed(") < publisher.index("@pcc_gc_note_frame_leave(")
     assert calls.index("pcc_thread_no_park_exit") < calls.index("pcc_re_engine_fullmatch_into")
     # LLVM block layout is not execution order: callback branch blocks can be
     # printed after the join. The take block must return without another call.
@@ -196,7 +196,7 @@ def test_inherited_no_park_is_fail_stop_before_root_or_managed_work():
     assert model.depth == 1 and not model.roots
 
 
-def test_compile_normalization_returns_tokens_through_cleanup_not_raw_objects(tmp_path, monkeypatch):
+def test_compile_normalization_returns_status_through_cleanup_not_raw_objects(tmp_path, monkeypatch):
     from pcc.frontends.python.owned_runtime_build import _compile_runtime_module
     source = SOURCE.with_name("py_re_engine_runtime.py")
     monkeypatch.setenv("PCC_RUNTIME_DIR", str(source.parent.parent))
@@ -211,15 +211,16 @@ def test_compile_normalization_returns_tokens_through_cleanup_not_raw_objects(tm
         body = body.group()
         assert body.startswith("define external i64 ") or body.startswith("define i64 ")
         assert "ret ptr" not in body
-        assert "@pcc_re_publish_copy_lease(" in body
+        assert "@pcc_re_publish_copy(" in body
         if slot == "output":
             assert "ptr %working.addr." in body
             assert re.search(r"@pcc_gc_frame_enter\(ptr [^,]+, ptr %working.addr.", body)
     assert not re.search(r"^define[^\n]*@py_re_compile_obj\(", text, re.M)
     assert not re.search(r"^define[^\n]*@py_re_engine_fullmatch_flags\(", text, re.M)
     compile_body = re.search(r"^define[^\n]*@pcc_re_normalize_compile_pattern_into\([^\n]*\).*?^}", text, re.M | re.S).group()
-    assert compile_body.index("@pcc_re_publish_copy_lease(") < compile_body.index("@user_py_re_engine_runtime__normalize_verbose_pattern(")
-    assert "store i64" in compile_body and "ptr %projection_token_slot" in compile_body
+    assert compile_body.index("@pcc_re_publish_copy(") < compile_body.index("@user_py_re_engine_runtime__normalize_verbose_pattern(")
+    # The one collector's publication returns a status; no token is stored.
+    assert "projection_token_slot" not in compile_body
 
 
 
@@ -243,7 +244,7 @@ def test_normalizer_publication_roots_borrowed_value_before_poll_without_pin_mut
         if failure == "copy":
             return -1
         output[0] = source[0]
-        return 1
+        return 0
     def leave(slot):
         assert state["root"] and slot is borrowed
         state["root"] = False
@@ -252,10 +253,10 @@ def test_normalizer_publication_roots_borrowed_value_before_poll_without_pin_mut
               pcc_thread_no_park_exit=exit_guard, stack_alloc=lambda size: borrowed,
               store_ptr=lambda slot,offset,value: slot.__setitem__(offset,value), global_addr=lambda name:name,
               pcc_gc_note_frame_enter_checked=register, pcc_gc_note_frame_leave=leave,
-              pcc_gc_root_copy_borrowed_lease=copy,
+              pcc_gc_root_copy_borrowed=copy,
               pcc_platform_abort=lambda: (_ for _ in ()).throw(RuntimeError("root failure")))
     node = next(n for n in ast.parse(SOURCE.read_text()).body
-                if isinstance(n, ast.FunctionDef) and n.name == "pcc_re_publish_copy_lease")
+                if isinstance(n, ast.FunctionDef) and n.name == "pcc_re_publish_copy")
     node.decorator_list = []
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(SOURCE), "exec"), ns)
     if failure in ("registration", "outer_guard"):
@@ -263,7 +264,7 @@ def test_normalizer_publication_roots_borrowed_value_before_poll_without_pin_mut
             ns[node.name](10, state["output"])
         assert not state["events"] and not state["output"]
     else:
-        assert ns[node.name](10, state["output"]) == (-1 if failure == "copy" else 1)
+        assert ns[node.name](10, state["output"]) == (-1 if failure == "copy" else 0)
         assert state["output"] == ({} if failure == "copy" else {0: 11})
         assert not state["root"] and state["depth"] == 0
     called = {n.func.id for n in ast.walk(node) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}

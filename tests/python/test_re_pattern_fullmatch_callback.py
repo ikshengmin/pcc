@@ -19,7 +19,7 @@ def call(args):
             base, initial = base
             offset += initial
         return base.get(offset)
-    def copy(slots, tokens, index, borrowed, source):
+    def copy(slots, index, borrowed, source):
         slots[index * 8] = borrowed[source * 8]
         return 1
     def index(slot):
@@ -31,15 +31,15 @@ def call(args):
         except Exception as exc:
             error.append(type(exc))
             return 0
-    def run(slots, tokens, flags, start, end):
+    def run(slots, flags, start, end):
         outcome.append(re.compile(slots[16], flags).fullmatch(slots[24], start, end))
     ns = dict(c_ptr=object, stack_alloc=lambda size: {}, memset=lambda *args: None,
               _re_copy_input=copy, load_ptr=load, store_ptr=lambda b,o,v: b.__setitem__(o,v),
               ptr_add=lambda b,o: (b,o), ptr_is_null=lambda obj: int(obj is None),
               py_tuple_len=len, py_tuple_get=lambda seq,i: seq[i], cstr=lambda s:s,
               py_err_occurred=lambda: bool(error), _re_adopt=lambda *args: 1,
-              _re_drop=lambda b,t,i: b.pop(i*8,None), py_index_i64_checked_slots=index,
-              _re_error=lambda s,t,tag,msg: error.append({3:TypeError,7:RuntimeError}[tag]),
+              _re_drop=lambda b,i: b.pop(i*8,None), py_index_i64_checked_slots=index,
+              _re_error=lambda s,tag,msg: error.append({3:TypeError,7:RuntimeError}[tag]),
               _re_run_fullmatch=run, _re_finish=lambda *args: 0)
     nodes=[]
     for node in ast.parse(SOURCE.read_text()).body:
