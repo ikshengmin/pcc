@@ -69,10 +69,10 @@ def test_bootstrap_stage_result_declares_metric_scope_and_pairing_contract(
 def test_bootstrap_defaults_to_safe_auto_lanes_and_rejects_wide_override() -> None:
     options = bootstrap.Options({})
     assert options.py_frontend_jobs == "auto"
-    assert options.stage1_py_frontend_jobs == "auto"
-    assert options.self_backend_jobs == "2"
+    assert options.stage1_py_frontend_jobs == "6"
+    assert options.self_backend_jobs == "6"
     assert options.macho_link_jobs == "8"
-    assert bootstrap.SAFE_MAX_JOBS == 2
+    assert bootstrap.SAFE_MAX_JOBS == 6
     assert bootstrap.SAFE_MAX_LINK_JOBS == 8
     assert bootstrap.SAFE_MAX_TREE_RSS_BYTES == 17179869184
     # The tree budget default equals the safe maximum: measured stage1 peaks
@@ -96,21 +96,21 @@ def test_bootstrap_defaults_to_safe_auto_lanes_and_rejects_wide_override() -> No
         bootstrap.BootstrapError, match="unsafe bootstrap worker budget"
     ):
         bootstrap.validate_settings(
-            bootstrap.Options({"PCC_BOOTSTRAP_PY_FRONTEND_JOBS": "4"})
+            bootstrap.Options({"PCC_BOOTSTRAP_PY_FRONTEND_JOBS": "7"})
         )
     explicit = bootstrap.validate_settings(
         bootstrap.Options(
             {
-                "PCC_BOOTSTRAP_PY_FRONTEND_JOBS": "4",
+                "PCC_BOOTSTRAP_PY_FRONTEND_JOBS": "7",
                 "PCC_BOOTSTRAP_UNSAFE_HIGH_MEMORY_JOBS": "1",
             }
         )
     )
-    assert explicit.py_frontend_jobs == "4"
+    assert explicit.py_frontend_jobs == "7"
 
     environment = os.environ.copy()
     environment.pop("LC_ALL", None)
-    environment["PCC_BOOTSTRAP_PY_FRONTEND_JOBS"] = "4"
+    environment["PCC_BOOTSTRAP_PY_FRONTEND_JOBS"] = "7"
     rejected = subprocess.run(
         [sys.executable, str(BOOTSTRAP), "--help"],
         cwd=BOOTSTRAP.parents[1],

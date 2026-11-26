@@ -18,8 +18,8 @@ Runtime defaults for every stage:
   PCC_BOOTSTRAP_RUNTIME_HIGH=py
   PCC_BOOTSTRAP_PYTHON_IR_PASSES=${PCC_PYTHON_IR_PASSES:-off}
   PCC_BOOTSTRAP_PY_FRONTEND_JOBS=${PCC_PY_FRONTEND_JOBS:-auto} for stage2+
-  PCC_BOOTSTRAP_STAGE1_PY_FRONTEND_JOBS=${PCC_PY_FRONTEND_JOBS:-auto}
-  PCC_BOOTSTRAP_SELF_BACKEND_JOBS=${PCC_SELF_BACKEND_JOBS:-2}
+  PCC_BOOTSTRAP_STAGE1_PY_FRONTEND_JOBS=${PCC_PY_FRONTEND_JOBS:-6}
+  PCC_BOOTSTRAP_SELF_BACKEND_JOBS=${PCC_SELF_BACKEND_JOBS:-6}
   PCC_BOOTSTRAP_MACHO_LINK_JOBS=${PCC_MACHO_LINK_JOBS:-8}
   PCC_BOOTSTRAP_MAX_TREE_RSS_BYTES=17179869184
   PCC_BOOTSTRAP_AUTO_TREE_RSS_CEILING_BYTES=17179869184 (when no explicit cap)
@@ -63,7 +63,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 _GIB = 1024 * 1024 * 1024
-SAFE_MAX_JOBS = 2
+# Six backend workers (the user, 2026-11-26: "use 6 workers", not all
+# cores); the tree RSS cap still bounds their memory.
+SAFE_MAX_JOBS = 6
 SAFE_MAX_LINK_JOBS = 8
 SAFE_MAX_TREE_RSS_BYTES = 16 * _GIB
 # Permit the explicit two-hour CI Stage1 allowance without changing the
@@ -118,15 +120,17 @@ class Options:
             or env.get("PCC_PY_FRONTEND_JOBS")
             or "auto"
         )
+        # Six Stage1 workers: on a 12-core host "auto" allowed ten once
+        # memory admission stopped holding them to three or four.
         self.stage1_py_frontend_jobs = (
             env.get("PCC_BOOTSTRAP_STAGE1_PY_FRONTEND_JOBS")
             or env.get("PCC_PY_FRONTEND_JOBS")
-            or "auto"
+            or "6"
         )
         self.self_backend_jobs = (
             env.get("PCC_BOOTSTRAP_SELF_BACKEND_JOBS")
             or env.get("PCC_SELF_BACKEND_JOBS")
-            or "2"
+            or "6"
         )
         self.macho_link_jobs = (
             env.get("PCC_BOOTSTRAP_MACHO_LINK_JOBS")
@@ -136,7 +140,7 @@ class Options:
         # ``auto`` for these two lanes means the documented safe default; the
         # frontend lane keeps ``auto`` for the compiler to resolve.
         if self.self_backend_jobs == "auto":
-            self.self_backend_jobs = "2"
+            self.self_backend_jobs = "6"
         if self.macho_link_jobs == "auto":
             self.macho_link_jobs = "8"
         self.max_tree_rss_bytes = _env_int(
