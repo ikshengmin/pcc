@@ -1614,6 +1614,12 @@ in the relevant section or issue and removes the entry.
    sampled cycles per function of the self and clang builds under the same
    conditions (`pcc_perf.py top` on both arms, then the hot function's code
    in both) and rank by cycles; measure on an idle host with a control arm.
+   P0 unit 2 (next, unclaimed): the per-function cycle comparison of the same
+   runtime IR (10:34, self 52807 against clang 43004 cycles per request) is
+   flat, the largest excess `pcc_gc_store_root` +802; by leaf address about
+   70% of the gap is stack traffic. Frame layout is (h); next are value
+   stores to stack slots and small constant-size `memset`/`memmove`
+   (+560 and +361 cycles; clang expands them inline).
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2
@@ -1707,7 +1713,7 @@ in the relevant section or issue and removes the entry.
    on 2026-11-26.
 
    Claims:
-   - P0 unit 2: self AArch64 stack-slot traffic and small memset/memmove against clang on the same runtime IR: Claude, macOS, 2026-11-26T04:35Z, area backend (AArch64 selection, register allocation and their tests)
+   - J2 (a) generator parks and returns share one owned-local cleanup: Claude, macOS, 2026-11-26T04:40Z, area runtime-codegen (`pcc/frontends/python/codegen/generator_lowering.py`, `ownership_lowering.py` and their tests only; no file in common with item 2 (d) U7-U14)
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
