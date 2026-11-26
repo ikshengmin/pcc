@@ -980,7 +980,7 @@ in the relevant section or issue and removes the entry.
    than removing the assertion. Prior native 8 PASS unaffected.
 
    Claims:
-   - none
+   - Imported integer constructor ABI owned-result model after pin removal: Codex, Linux owned ELF, 2026-11-26T19:30Z, area ci-imported-constructor-abi
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
