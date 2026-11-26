@@ -305,8 +305,12 @@ def test_emitted_ir_preserves_slot_and_no_poll_boundaries(tmp_path, monkeypatch)
     allocation = re.search(r'(%[\w.]+) = call ptr[^\n]*@py_class_new\([^\n]*\)\n([^\n]+)', cache)
     assert allocation and 'store ptr ' + allocation.group(1) in allocation.group(2)
     constructor = body('user_py_exc_traceback__tb_new_instance')
-    assert constructor.index('@pcc_gc_foreign_lease_acquire(') < constructor.index('@py_instance_new(')
-    assert constructor.index('@py_instance_new(') < constructor.index('@py_cleanup_one_lease_preserving_exception(')
+    # The class stays owned by its registered slot: the one collector takes
+    # no lease around the allocation, and the NEW instance is published at once.
+    assert '@pcc_gc_foreign_lease_acquire(' not in constructor
+    assert '@py_cleanup_one_lease_preserving_exception(' not in constructor
+    instance = re.search(r'(%[\w.]+) = call ptr[^\n]*@py_instance_new\([^\n]*\)\n([^\n]+)', constructor)
+    assert instance and 'store ptr ' + instance.group(1) in instance.group(2)
     disposal = body('user_py_exc_traceback__tb_discard_class')
     assert disposal.index('@pcc_py_gc_minor_graph_lock(') < disposal.index('@pcc_gc_load_ptr(')
     assert disposal.index('atomicrmw and') < disposal.index('@pcc_py_gc_minor_graph_unlock(')

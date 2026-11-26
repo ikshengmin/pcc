@@ -25,23 +25,11 @@ class ListdirModel(BufferModel):
             directory_error=self.directory_error, directory_close=self.close,
             py_list_new=self.list_new, py_str_new=self.string_new,
             py_list_append=self.append, strlen=self.strlen,
-            pcc_gc_foreign_lease_acquire=self.acquire,
         )
         _functions(RUNTIME, {
             '_listdir_error', '_listdir_drop', '_listdir_adopt',
             '_listdir_read', '_listdir_owned', 'py_os_listdir',
         }, self.ns)
-
-    def acquire(self, slot):
-        self.boundary()
-        value = self.load(slot, 0)
-        if value is not None:
-            name = self.check(value)[0].name
-            if self.failure == 'lease-text' and name == 'text':
-                return -1
-            if self.failure == 'lease-item' and name == 'beta':
-                return -1
-        return super().acquire(slot)
 
     def stringify(self, source):
         self.boundary()
@@ -166,12 +154,9 @@ def test_listdir_owns_path_utf8_and_result_through_all_cleanup(relocate, alias):
     ('copy', 19, 'cannot retain path'),
     ('stringify', 71, 'path conversion failed'),
     ('utf8', 72, 'UTF-8 conversion failed'),
-    ('lease-text', 19, 'cannot lease owner'),
     ('open', 14, 'could not open directory'),
     ('list-allocation', 19, 'out of memory'),
-    ('lease-result', 19, 'cannot lease owner'),
     ('item-allocation', 19, 'out of memory'),
-    ('lease-item', 19, 'cannot lease owner'),
     ('append', 73, 'append callback failed'),
     ('read', 14, 'could not read directory'),
 ))

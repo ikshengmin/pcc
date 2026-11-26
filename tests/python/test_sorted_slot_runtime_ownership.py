@@ -58,7 +58,7 @@ class SortModel(_ExtensionModel):
             # The sorted frame registers its owned map (11 slots) by address.
             'pcc_gc_frame_enter': self.enter,
             'pcc_gc_frame_leave': self.leave,
-            'pcc_gc_root_copy_lease': self.copy,
+            'pcc_gc_root_copy': self.root_copy,
             'pcc_gc_root_move': self.move,
             'py_list_new': self.list_new, 'py_list_len': self.length,
             'py_list_get': self.get, 'py_list_extend': self.extend,
@@ -80,6 +80,18 @@ class SortModel(_ExtensionModel):
                     '_sorted_arguments', '_sorted_prepare_keys', '_sorted_less',
                     '_sorted_merge_indices', '_sorted_reorder_values',
                     '_sorted_slots_body', 'py_obj_sorted_slots'} | helpers, self.ns)
+
+    def root_copy(self, destination, source):
+        # pcc_gc_root_copy: retain into the destination, a status only; the
+        # one collector takes no lease (item 2 (d) 4c).
+        self.boundary()
+        self.copy_count += 1
+        if self.failure == 'copy-' + str(self.copy_count):
+            return -1
+        value = self.check(self.load(source, 0))
+        value[0].refs += 1
+        self.store(destination, 0, value)
+        return 0
 
     def move_words(self, destination, source, size):
         # The listsort port moves whole index words; overlap reads first.
@@ -161,14 +173,14 @@ class SortModel(_ExtensionModel):
         return 0
 
     def boundary(self):
+        # The one collector never moves an object (item 2 (d) 4c): a runtime
+        # boundary is a collection point, counted, and raw pointers stay
+        # valid. The base model's relocation still serves py_list's tests.
+        assert self.fresh is None, 'runtime boundary before NEW result publication'
         if getattr(self, 'depth', 0):
-            assert self.fresh is None
             return
-        super().boundary()
         if self.relocate:
-            for obj in self.objects:
-                if hasattr(obj, 'payload'):
-                    obj.payload = [value[0].pointer() if value is not None else None for value in obj.payload]
+            self.collections = getattr(self, 'collections', 0) + 1
 
     def fresh_copy(self, value):
         self.check(value)
@@ -343,7 +355,7 @@ def test_sorted_slots_stable_owners(values, key, compare, key_alias, reverse, re
 
 
 @pytest.mark.parametrize('relocate', (False, True))
-@pytest.mark.parametrize('failure', ('iteration', 'key', 'compare', 'allocation', 'publish', 'copy-1', 'lease-list', 'list-allocation', 'values-allocation', 'retarget'))
+@pytest.mark.parametrize('failure', ('iteration', 'key', 'compare', 'allocation', 'publish', 'copy-1', 'list-allocation', 'values-allocation', 'retarget'))
 def test_sorted_slots_error_preserves_primary_during_disposal(failure, relocate):
     model = SortModel([3, 1, 2], key=True, relocate=relocate, failure=failure)
     assert model.run() < 0
@@ -353,7 +365,6 @@ def test_sorted_slots_error_preserves_primary_during_disposal(failure, relocate)
         'allocation': 'sorted: cannot allocate index buffer',
         'publish': 'sorted: cannot transfer result owner',
         'copy-1': 'sorted: cannot retain input',
-        'lease-list': 'sorted: cannot lease owned value',
         'list-allocation': 'sorted: missing owned value',
         'values-allocation': 'sorted: missing owned value',
         'retarget': 'sorted: cannot retarget work list payload',

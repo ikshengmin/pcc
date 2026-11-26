@@ -141,7 +141,6 @@ class InlineFrameFactoryModel(FrameFactoryModel):
 @pytest.mark.parametrize('failure, message', (
     ('header', 'generator frame allocation failed'),
     ('items', 'generator frame slots allocation failed'),
-    ('lease', 'generator frame address lease failed'),
 ))
 def test_frame_factory_failure_preserves_pending_error(failure, message, pending, relocate):
     model = FrameFactoryModel(7, failure, pending, relocate)
@@ -168,10 +167,10 @@ def test_frame_factory_success_transfers_filled_current_owner(count, relocate):
 
 
 @pytest.mark.parametrize('relocate', (False, True))
-def test_frame_factory_handoff_reuses_live_address_lease(relocate):
+def test_frame_factory_handoff_takes_its_owner_without_graph_transaction(relocate):
     model = FrameFactoryModel(7, relocate=relocate)
     def forbidden_lock():
-        pytest.fail('a private leased factory result needs no graph transaction')
+        pytest.fail('a private factory result needs no graph transaction')
     model.ns['pcc_py_gc_minor_graph_lock'] = forbidden_lock
     model.ns['pcc_py_gc_minor_graph_unlock'] = forbidden_lock
     result = model.ns['py_gen_frame_new'](7)
@@ -208,7 +207,6 @@ def test_inline_entry_uses_one_local_pair_including_delegated_collectors(count, 
 @pytest.mark.parametrize('pending', (None, 'original-error'))
 @pytest.mark.parametrize('failure,message', (
     ('header', 'inline generator allocation failed'),
-    ('lease', 'generator frame address lease failed'),
 ))
 def test_inline_factory_failure_retires_local_roots_and_preserves_error(failure, message, pending):
     model = InlineFrameFactoryModel(33, failure=failure, pending=pending)

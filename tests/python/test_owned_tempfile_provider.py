@@ -96,6 +96,7 @@ class Runtime:
             'pcc_gc_scheduler_root_register_handle': self.register,
             'pcc_gc_scheduler_root_unregister_handle': lambda h:self.handles.pop(h),
             'pcc_gc_root_copy_lease':self.copy_lease,
+            'pcc_gc_root_copy':self.root_copy,
             'pcc_gc_foreign_lease_release':self.release_lease,
             'py_incref':lambda x:None, 'py_decref':lambda x:None,
             'py_err_occurred':lambda:int(self.error is not None),
@@ -234,6 +235,10 @@ class Runtime:
         o=self.read(s,0);self.write(d,0,o)
         key=id(o);self.leases[key]=self.leases.get(key,0)+1
         return 1
+    def root_copy(self,d,s):
+        # pcc_gc_root_copy: a status only; the one collector takes no lease.
+        o=self.read(s,0);self.write(d,0,o)
+        return 0
     def release_lease(self,s,t):
         assert t==1
         key=id(self.read(s,0));assert self.leases[key]>0

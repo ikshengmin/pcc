@@ -1,4 +1,8 @@
-"""Completion drops captures only after the owning resume and lease end."""
+"""Completion drops captures only after the owning resume ends.
+
+The one collector moves nothing, so the step takes no address lease on the
+thread or its continuation (item 2 (d) 4c); ``leases`` stays 0.
+"""
 
 import ast
 from pathlib import Path
@@ -22,20 +26,10 @@ def execute_step(mode, kind=1, later_completion=False):
     state = {"running": False, "failure": None, "detached": False}
     globals_ = {"py_None": none, "pcc_current_virtual_thread_py": None}
 
-    def acquire(cell):
-        cell.fields[0].leases += 1
-        return 1
-
-    def release(cell, token):
-        assert token == 1
-        cell.fields[0].leases -= 1
-
     def store(owner, slot, value):
         obj, offset = slot
         if obj is thread and offset == 16 and value is None:
             assert not state["running"]
-            assert continuation.leases == 0
-            assert thread.leases == 1
             state["detached"] = True
             continuation.alive = False
         obj.fields[offset] = value
@@ -47,7 +41,7 @@ def execute_step(mode, kind=1, later_completion=False):
 
     def resume(owner, context):
         state["running"] = True
-        assert context.leases == 1 and context.alive
+        assert context.alive and context.leases == 0
         if mode == "return":
             complete(owner, none)
         elif mode == "fail":
@@ -78,8 +72,6 @@ def execute_step(mode, kind=1, later_completion=False):
         "store_ptr": lambda cell, offset, value: cell.fields.__setitem__(offset, value),
         "pcc_gc_load_ptr": lambda owner, slot: slot[0].fields.get(slot[1]),
         "pcc_gc_store_ptr": store,
-        "pcc_gc_foreign_lease_acquire": acquire,
-        "pcc_gc_foreign_lease_release": release,
         "atomic_load_i64": lambda obj, offset, order: obj.fields.get(offset, 0),
         "py_continuation_resume_pc": lambda context: 1,
         "py_continuation_resume_abi": lambda context: 1,
@@ -110,7 +102,7 @@ def execute_step(mode, kind=1, later_completion=False):
 
 @pytest.mark.parametrize("kind", [1, 2])
 @pytest.mark.parametrize("mode", ["return", "fail", "implicit-return"])
-def test_completed_step_releases_captures_after_resume_and_lease(mode, kind):
+def test_completed_step_releases_captures_after_resume(mode, kind):
     thread, continuation, state = execute_step(mode, kind)
     assert state["detached"] and not continuation.alive
     assert thread.fields[16] is None

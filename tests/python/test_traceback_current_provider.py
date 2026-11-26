@@ -29,20 +29,20 @@ def test_interpreted_provider_delegates_to_cpython_with_options():
 
 
 class CurrentModel(Model):
-    def __init__(self, *, handled=True, fail_lease=False, fail_format=False):
+    def __init__(self, *, handled=True, fail_copy=False, fail_format=False):
         super().__init__()
         self.frames = []
         self.pinned = set()
         self.received = []
         self.printed = []
-        self.fail_lease = fail_lease
+        self.fail_copy = fail_copy
         self.fail_format = fail_format
         self.source = self.root(self.object('exception', immortal=False)) if handled else 0
         self.ns.update(
             stack_alloc=lambda size: self.alloc(), memset=self.zero,
             py_handled_exception_slot=lambda: self.source,
             pcc_gc_frame_enter=self.enter, pcc_gc_frame_leave=self.leave,
-            pcc_gc_root_copy_lease=self.copy_lease,
+            pcc_gc_root_copy=self.copy,
             py_exc_traceback_format_exc_abi=self.format_current,
             py_exc_traceback_print_exc_abi=self.print_current,
             pcc_gc_take_slot=self.take_slot,
@@ -79,20 +79,15 @@ class CurrentModel(Model):
         if hasattr(self, 'none_root'):
             self.none = self.load(self.none_root)
 
-    def copy_lease(self, destination, source):
+    def copy(self, destination, source):
+        # pcc_gc_root_copy: a status only; the one collector takes no lease.
         self.move()
-        if self.fail_lease:
+        if self.fail_copy:
             return -1
         assert source in self.roots and destination in self.roots
         assert not self.load(destination)
         self.root_store(destination, self.load(source))
-        return self.acquire(destination)
-
-    def release(self, slot, token):
-        if token == 0:
-            assert not self.leases[slot]
-            return
-        super().release(slot, token)
+        return 0
 
     def clear_owned(self, slot):
         self.move()
@@ -104,7 +99,7 @@ class CurrentModel(Model):
         self.check(exc)
         self.received.append(self.objects.get(exc))
         if exc:
-            assert exc in {self.load(s) for s, count in self.leases.items() if count}
+            assert exc in {self.load(s) for s in self.roots}
         if self.fail_format:
             self.error = 'formatter-error'
             return 0
@@ -115,7 +110,7 @@ class CurrentModel(Model):
         self.check(exc)
         self.printed.append(self.objects.get(exc))
         if exc:
-            assert exc in {self.load(s) for s, count in self.leases.items() if count}
+            assert exc in {self.load(s) for s in self.roots}
 
     def take_slot(self, result):
         # pcc_gc_take_slot: transfer the owner; nothing pinned (item 2 (d)).
@@ -138,7 +133,7 @@ def test_current_adapter_keeps_dynamic_owner_and_result_through_moves(handled, p
     assert len(m.printed if printing else m.received) == 1
 
 
-@pytest.mark.parametrize('failure', ['fail_lease', 'fail_format'])
+@pytest.mark.parametrize('failure', ['fail_copy', 'fail_format'])
 def test_current_adapter_error_preserves_owner_and_balances_frames(failure):
     m = CurrentModel(**{failure: True})
     initial_roots = set(m.roots)
@@ -159,7 +154,7 @@ def test_provider_routes_through_handled_slot_without_raw_pointer_escape(tmp_pat
     text = output.read_text()
     body = re.search(r'^define[^\n]*@user_py_exc_traceback__tb_current_call\([^\n]*\)[^\n]*\{\n(.*?)^}', text, re.M | re.S).group(1)
     assert body.index('@pcc_gc_frame_enter(') < body.index('@py_handled_exception_slot(')
-    assert '@pcc_gc_root_copy_lease(' in body
+    assert '@pcc_gc_root_copy(' in body
     assert '@py_current_exception(' not in body
     assert '@pcc_thread_safepoint(' not in body
     assert 'call ptr () @py_exc_traceback_format_current(' not in body

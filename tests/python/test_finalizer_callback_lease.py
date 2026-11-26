@@ -17,9 +17,9 @@ class FinalizerModel:
     """Run the live finalizer and lease bodies with a deterministic heap.
 
     The default stable-address lease is inert. The optional refcount
-    provenance probe still exercises the checked counted-token path, not an
-    alternate collector. The temporary reference is the finalizer owner in
-    both cases.
+    provenance probe still exercises the checked counted-token path of the
+    lease ABI itself, not an alternate collector. The temporary reference is
+    the finalizer owner in both cases; it takes no lease (item 2 (d) 4c).
     """
 
     def __init__(self, *, terminal=True, resurrect=False, pending=False,
@@ -159,9 +159,9 @@ class FinalizerModel:
         return self.ns['pcc_gc_foreign_lease_count_quiescent']()
 
     def boundary(self):
-        expected_token = int(self.provenance_probe != 0)
-        assert self.count() == self.active() == expected_token
-        assert self.ns['pcc_gc_object_is_address_pinned'](1000) == expected_token
+        # The finalizer owner is a reference, never an address lease.
+        assert self.count() == self.active() == 0
+        assert self.ns['pcc_gc_object_is_address_pinned'](1000) == 0
         assert self.load(1000, 0) > 0
         assert not self.load(1000, 12) & TERMINAL
 
@@ -173,7 +173,7 @@ class FinalizerModel:
         self.boundary()
         token = self.acquire(self.self_slot)
         expected_token = int(self.provenance_probe != 0)
-        assert token == expected_token and self.count() == 2 * expected_token
+        assert token == expected_token and self.count() == expected_token
         assert self.release(self.self_slot, token) == 0
         self.boundary()
         # Preserve unrelated flags, and model a real resurrection owner.
@@ -216,10 +216,10 @@ def test_terminal_address_probe_has_the_single_collector_contract(provenance_pro
 @pytest.mark.parametrize('provenance_probe', (0, 2))
 def test_temporary_finalizer_reference_owns_terminal_instance(provenance_probe):
     m = FinalizerModel(provenance_probe=provenance_probe)
-    token = m.ns['_finalizer_owner_enter'](m.self_slot)
+    m.ns['_finalizer_owner_enter'](m.self_slot)
     m.boundary()
     assert m.load(1000, 0) == 1
-    m.ns['_finalizer_owner_leave'](m.self_slot, token, TERMINAL)
+    m.ns['_finalizer_owner_leave'](m.self_slot, TERMINAL)
     assert m.load(1000, 0) == 0 and m.load(1000, 12) & TERMINAL
     assert m.count() == 0 and m.active() == 0
 

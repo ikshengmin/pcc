@@ -43,6 +43,7 @@ class BufferModel:
             pcc_gc_frame_enter_local=self.enter, pcc_gc_frame_leave_local=self.leave,
             pcc_gc_resolve_borrowed_root_slot_unlocked=self.load,
             pcc_gc_root_copy_lease=self.copy, pcc_gc_root_copy_borrowed_lease=self.copy,
+            pcc_gc_root_copy=self.root_copy, pcc_gc_root_copy_borrowed=self.root_copy,
             pcc_gc_foreign_lease_acquire=self.acquire, pcc_gc_foreign_lease_release=self.release,
             pcc_gc_root_move=self.move, pcc_gc_store_root=self.clear_root,
             pcc_gc_note_slot_write_barrier=self.barrier,
@@ -245,6 +246,18 @@ class BufferModel:
             value[0].refs += 1
         self.store(destination, 0, value)
         return self.acquire(destination)
+
+    def root_copy(self, destination, source):
+        # The one collector's status-only copy: no lease (item 2 (d) 4c).
+        self.boundary()
+        if self.failure == 'copy':
+            return -1
+        value = self.load(source, 0)
+        if value is not None:
+            self.check(value)
+            value[0].refs += 1
+        self.store(destination, 0, value)
+        return 0
 
     def move(self, destination, source):
         self.boundary()

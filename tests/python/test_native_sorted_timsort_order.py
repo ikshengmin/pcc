@@ -144,7 +144,7 @@ def _listsort_port(keys):
         "load_i64": load_i64, "store_i64": store_i64, "memmove": memmove,
         "ptr_add": lambda pointer, offset: _Pointer(pointer.buffer, pointer.offset + offset),
         "stack_alloc": lambda size: _Pointer(bytearray(size)),
-        "_sorted_less": lambda slots, tokens, first, second: int(keys[first] < keys[second]),
+        "_sorted_less": lambda slots, first, second: int(keys[first] < keys[second]),
         "ptr_is_null": lambda pointer: pointer is None,
     }
     code = compile(ast.Module(nodes, type_ignores=[]), str(RUNTIME), "exec")
@@ -161,7 +161,7 @@ def _ported_permutation(keys, reverse):
     count = len(keys)
     order = _Pointer(bytearray(b"".join(index.to_bytes(8, "little") for index in range(count))))
     scratch = _Pointer(bytearray(8 * count))
-    assert _listsort_port(keys)("slots", "tokens", order, scratch, count, int(reverse)) == 0
+    assert _listsort_port(keys)("slots", 1, order, scratch, count, int(reverse)) == 0
     result = [int.from_bytes(order.buffer[i * 8:i * 8 + 8], "little") for i in range(count)]
     assert scratch.buffer == order.buffer
     return result

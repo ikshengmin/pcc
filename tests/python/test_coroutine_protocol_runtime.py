@@ -26,13 +26,15 @@ class Generator(Memory):
 
 
 class Runtime:
-    """Execute the real port functions over a checked slot/lease model."""
+    """Execute the real port functions over a checked slot model.
+
+    The one collector's copies are status-only: no lease is ever taken, so
+    ``leases`` stays empty (item 2 (d) 4c)."""
     def __init__(self, inline_frame=False):
         self.inline_frame = inline_frame
         self.none = object()
         self.error = None
         self.leases = {}
-        self.next_token = 1
         self.flags = {}
         self.frames = set()
         self.finalizer_error = None
@@ -70,8 +72,7 @@ class Runtime:
             pcc_gc_frame_enter=lambda m,s: self.frames.add(s), pcc_gc_frame_leave=lambda s: self.frames.remove(s),
             pcc_gc_store_root=self.store_root, pcc_gc_load_ptr=lambda owner,p: self.load(p,0),
             pcc_gc_store_ptr=self.store_field,
-            pcc_gc_root_copy_borrowed_lease=self.borrow,
-            pcc_gc_foreign_lease_acquire=self.acquire, pcc_gc_foreign_lease_release=self.release,
+            pcc_gc_root_copy_borrowed=self.borrow,
             atomic_rmw_i32=lambda op,v,o,b,order: self.flags.__setitem__(id(v), self.flags.get(id(v),0)|b),
             pcc_gc_take_slot=self.take_slot, pcc_platform_abort=lambda: pytest.fail('owner contract aborted'),
             py_tls_exc_swap_slot=self.swap, py_clear_exception=lambda: setattr(self,'error',None),
@@ -134,20 +135,9 @@ class Runtime:
         if isinstance(owner,Memory) and owner.fields.get(60) == 1 and self.finalizer_error is not None:
             self.error = self.finalizer_error
 
-    def acquire(self,ptr):
-        if self.load(ptr,0) is None: return 0
-        token=self.next_token
-        self.next_token+=1
-        self.leases[token]=ptr
-        return token
-
     def borrow(self,dest,source):
+        # pcc_gc_root_copy_borrowed: copy the owner, return a status only.
         self.store(dest,0,self.load(source,0))
-        return self.acquire(dest)
-
-    def release(self,ptr,token):
-        if token:
-            assert self.leases.pop(token) == ptr
         return 0
 
     def take_slot(self,ptr):
