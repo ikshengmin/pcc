@@ -1763,10 +1763,17 @@ in the relevant section or issue and removes the entry.
        manifests with the direct-indexed capture off): the self backend
        takes about 200 us per IR line, linear in module size (class_gen:
        706k lines, 10 s frontend, about 125 s backend), so Stage1 is about
-       43M IR lines, 65 per source line. Two host-side candidates showed
-       no gain on two replayed modules (three runs each, objects
-       identical) and were not merged: reading arena lengths directly
-       instead of `len()`, and tuple-based CompilerInt records. Across
+       43M IR lines, 65 per source line. Replays run `python -m pcc`,
+       which puts the working directory first on `sys.path`: run them
+       from the tree under test (an earlier pair of "no gain" results ran
+       the main checkout's code). Measured from the worktree, alternating
+       arms, objects byte-identical: reading `CompilerIntArena._length`
+       directly instead of `len()` in the hot backend readers saves 4-8%
+       of a worker (array_core, hoist_predicates; two runs of five pairs,
+       10/10 wins each); tuple-based CompilerInt records on the host saved
+       4.5-4.9% but were rejected, because a tuple subclass changes every
+       `isinstance(x, tuple)` test a record reaches (a test helper tells
+       address groups from records that way). Across
        class_gen, c_codegen, cli_bootstrap, type_infer and four smaller
        modules (`pcc_perf.py ir`), per-call-site error paths are 25-30% of
        IR lines: a cleanup chain of `py_cleanup_one_root_preserving_exception`
