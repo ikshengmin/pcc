@@ -337,13 +337,16 @@ def test_custom_timing_keeps_cross_function_mutation(monkeypatch):
 @pytest.mark.parametrize("callback", (
     "instance-start", "instance-add", "class-start", "class-add", "clock",
 ))
-def test_exact_owned_timing_callbacks_keep_original_mutation(monkeypatch, callback):
+@pytest.mark.parametrize("worker_owned", (False, True))
+def test_exact_owned_timing_callbacks_keep_original_mutation(monkeypatch, callback, worker_owned):
     outcomes = []
     for original in (True, False):
         prepare = preparation.prepare_parsed_module_for_target
         captured, holders, mutations = [], [], []
         control = original_planner() if original else planner.build_function_stack_map_plan
         timing = ModulePhaseTiming("mutable-timing")
+        if worker_owned:
+            timing_module.mark_worker_owned_phase_timing(timing)
 
         def capture(*args, **kwargs):
             result = prepare(*args, **kwargs)
@@ -458,3 +461,59 @@ def test_next_production_call_rebuilds_from_current_globals(monkeypatch):
         emit_indexed_assembly(module)
     assert len(holders) == 2 and holders[0] is not holders[1]
     assert holders == [[], []]
+
+
+def test_worker_owned_timing_shares_index_without_changing_public_timer(monkeypatch):
+    source = source_text(triple=TARGETS[0], functions=3)
+    observed = []
+    original = emitter.build_function_stack_map_plan
+
+    def observe(*args, **kwargs):
+        observed.append(kwargs["_globals_index"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(emitter, "build_function_stack_map_plan", observe)
+    public = ModulePhaseTiming("public")
+    expected = emit_indexed_assembly(parse_self_backend_module(source), phase_timing=public)
+    assert observed == [None, None, None]
+    observed.clear()
+    worker = ModulePhaseTiming("worker")
+    timing_module.mark_worker_owned_phase_timing(worker)
+    assert timing_module.worker_owned_phase_timing_is_stable(worker)
+    assert emit_indexed_assembly(parse_self_backend_module(source), phase_timing=worker) == expected
+    assert len(observed) == 3 and all(holder is observed[0] for holder in observed)
+    assert observed[0] == []  # retired after the module even if a caller retains it
+    assert not timing_module.worker_owned_phase_timing_is_stable(public)
+
+
+@pytest.mark.parametrize("mutation", [
+    "instance-start", "instance-add", "class-start", "class-add", "clock",
+    "totals", "total-value", "module-name",
+])
+def test_marked_worker_timer_rejects_mutated_observer(monkeypatch, mutation):
+    timer = ModulePhaseTiming("worker")
+    timing_module.mark_worker_owned_phase_timing(timer)
+    assert timing_module.worker_owned_phase_timing_is_stable(timer)
+    if mutation == "instance-start":
+        timer.start = lambda: 1
+    elif mutation == "instance-add":
+        timer.add = lambda *_: None
+    elif mutation == "class-start":
+        monkeypatch.setattr(ModulePhaseTiming, "start", lambda self: 1)
+    elif mutation == "class-add":
+        monkeypatch.setattr(ModulePhaseTiming, "add", lambda *_: None)
+    elif mutation == "clock":
+        monkeypatch.setattr(timing_module.time, "perf_counter_ns", lambda: 1)
+    elif mutation == "totals":
+        class Totals(list):
+            pass
+        timer.totals_ns = Totals(timer.totals_ns)
+    elif mutation == "total-value":
+        class Counter(int):
+            pass
+        timer.totals_ns[0] = Counter(0)
+    else:
+        class Name(str):
+            pass
+        timer.module_name = Name(timer.module_name)
+    assert not timing_module.worker_owned_phase_timing_is_stable(timer)

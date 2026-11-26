@@ -786,9 +786,12 @@ def run_codegen_worker(
             phase_timing_complete = False
             if worker_timing:
                 try:
-                    from pcc.backend.indexed_phase_timing import ModulePhaseTiming
+                    from pcc.backend.indexed_phase_timing import (
+                        ModulePhaseTiming, mark_worker_owned_phase_timing,
+                    )
 
                     phase_timing = ModulePhaseTiming(module_name)
+                    mark_worker_owned_phase_timing(phase_timing)
                 except Exception:
                     # Optional diagnostics must not change compiler outcomes.
                     pass

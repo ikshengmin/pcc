@@ -223,6 +223,55 @@ class ModulePhaseTiming:
             pass
 
 
+# A worker-created timer has no user observer in its function loop. Keep
+# the original observer route whenever an exact timer/class/clock was
+# replaced, or an instance's scalar storage could invoke custom callbacks.
+_ORIGINAL_MODULE_PHASE_TIMING = ModulePhaseTiming
+_ORIGINAL_MODULE_PHASE_START = getattr(ModulePhaseTiming, "start", None)
+_ORIGINAL_MODULE_PHASE_ADD = getattr(ModulePhaseTiming, "add", None)
+_ORIGINAL_MODULE_PHASE_CLOCK = time.perf_counter_ns
+
+
+def mark_worker_owned_phase_timing(timer) -> None:
+    """Private opt-in at the isolated frontend worker's creation site."""
+    if type(timer) is _ORIGINAL_MODULE_PHASE_TIMING:
+        timer._worker_owned_globals_index = True
+
+
+def worker_owned_phase_timing_is_stable(timer) -> bool:
+    """Only a worker's unchanged built-in observer permits index reuse."""
+    if (type(timer) is not _ORIGINAL_MODULE_PHASE_TIMING
+            or ModulePhaseTiming is not _ORIGINAL_MODULE_PHASE_TIMING):
+        return False
+    # Host objects can shadow even an ordinary method on one instance.
+    # Check descriptors before reading the private marker or fields.
+    if sys.implementation.name == "cpython" and (
+        ModulePhaseTiming.__getattribute__ is not object.__getattribute__
+        or ModulePhaseTiming.__setattr__ is not object.__setattr__
+    ):
+        return False
+    if getattr(timer, "_worker_owned_globals_index", False) is not True:
+        return False
+    if (_ORIGINAL_MODULE_PHASE_START is None
+            or getattr(ModulePhaseTiming, "start", None) is not _ORIGINAL_MODULE_PHASE_START
+            or _ORIGINAL_MODULE_PHASE_ADD is None
+            or getattr(ModulePhaseTiming, "add", None) is not _ORIGINAL_MODULE_PHASE_ADD
+            or time.perf_counter_ns is not _ORIGINAL_MODULE_PHASE_CLOCK):
+        return False
+    attributes = getattr(timer, "__dict__", None)
+    if type(attributes) is not dict or "start" in attributes or "add" in attributes:
+        return False
+    if (type(timer.totals_ns) is not list or len(timer.totals_ns) != 16
+            or type(timer.failed) is not bool or type(timer.reported) is not bool
+            or type(timer.module_name) is not str or type(timer.target) is not str
+            or type(timer.route) is not str):
+        return False
+    for total in timer.totals_ns:
+        if type(total) is not int:
+            return False
+    return True
+
+
 # A fixed vocabulary keeps coordinator receipts bounded and prevents accidental
 # source, command, path, or environment text from entering this diagnostic sink.
 _COORDINATOR_PARENTS = {

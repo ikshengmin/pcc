@@ -21,7 +21,10 @@ guessing.
 """
 
 from . import BackendUnavailable
-from .indexed_phase_timing import begin_x86_backend_progress, complete_x86_backend_progress
+from .indexed_phase_timing import (
+    begin_x86_backend_progress, complete_x86_backend_progress,
+    worker_owned_phase_timing_is_stable,
+)
 from .code_profile import apply_function_order_profile
 from .precise_stackmap import precise_stackmap_tables_enabled
 from .self_backend_dynamic_alloca import X86_DYNAMIC_ARRAY
@@ -3688,17 +3691,19 @@ def _emit_prepared_x86_64_module(
         else:
             builder.append_lines(_split_assembly_entries(global_lines))
     del global_lines
-    # The public entry owns prepared.globals_: preparation copied the input,
-    # and ordinary emission never mutates that list. Direct prepared callers
-    # and timing callbacks may expose/mutate it, so retain their original
-    # per-function indexing. Even the owned timer's methods and clock can be
-    # replaced by callers. The planner additionally rejects custom records.
-    globals_index = (
-        [] if _share_globals_index and phase_timing is None else None
-    )
     if phase_timing is not None:
         complete_x86_backend_progress(phase_timing, "module_setup", progress_start)
         progress_start = begin_x86_backend_progress(phase_timing, "function_loop")
+    # Preparation owns its copied globals. Untimed ordinary emission and
+    # the isolated worker's unchanged private observer never mutate them.
+    # Public/direct prepared callers and custom timing callbacks retain
+    # their per-function view. Check after the coarse progress callbacks;
+    # the planner additionally rejects custom records.
+    globals_index = (
+        [] if _share_globals_index and (
+            phase_timing is None or worker_owned_phase_timing_is_stable(phase_timing)
+        ) else None
+    )
     try:
         for func in functions:
             if phase_timing is not None:

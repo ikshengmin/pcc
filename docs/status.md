@@ -2946,6 +2946,61 @@ in the relevant section or issue and removes the entry.
        all148 focused tests and exact small streamed ELF on the integrated
        source with trace opt-in disabled; the five-pair timing above is
        isolated pretrace source, not a fresh integrated speed run.
+       Timed worker global index (Codex, Linux, 2026-11-26, base
+       f1aac35b): the existing x64 globals index was deliberately disabled
+       for any timing observer, including exact public timers, because their
+       instance/class methods or clock may mutate prepared globals between
+       functions. Only the isolated worker's private timer creation marks
+       ownership; test unchanged exact class, start/add, clock, instance
+       method shadows, scalar/list storage after coarse progress callbacks
+       and before function iteration. Ordinary public timer instance shape,
+       aggregate/receipt schema and callback order unchanged; custom and
+       direct prepared callers remain per-function. Native guard fixture
+       compiled and executed from exact candidate source with strict matched
+       owned runtime (193 members), public unmarked false, worker true before
+       and after native clock/add, all16 aggregates retained. Existing
+       global-index and timing tests including marked cross-function mutation
+       oracle 503 passed. Actual c_codegen PIDX globals7,764 ×1,039 funcs =
+       8,066,796 repeated name reads/inserts; pre-edit isolated CPython
+       diagnostic repeated dictionary construction CPU0.513 s vs one build
+       0.000458 s (host ceiling about1% of this module backend, not a stage
+       speed claim). Source-matched owned native focused fixture imports
+       actual GlobalDef class, all7,764 actual global names, exact production
+       repeated expression vs one guarded holder, verifies every key and
+       ordered digest. Five quiet alternating triples, same binary/control:
+       native owner wall5.184989 -> 0.008057 s (-99.845%,5/5), control
+       5.229341, normalized -99.845%5/5 vs1.09% drift. Full process
+       CPU5.275418 -> 0.148393 s (-97.187%,5/5), control5.349459,
+       normalized -97.208%5/5; RSS16,660 -> 16,148 KiB, control16,660,
+       -3.073%5/5. All15 exact inventory and digest282919542712
+       (8,066,796 total entries); statically linked native fixture,
+       no dynamic/libpython dependency. This is the actual repeated-work
+       owner, not a whole Stage2 compiler benchmark. Current strict
+       625-source direct contextual capture for all three changed modules
+       zero fallback/no libpython: timing75 funcs/4,191 blocks/17,313 insns,
+       x64 emitter325/63,394/237,351, worker61/12,862/51,534; actual native
+       objects emitted. Actual marked c_codegen full streamed proof observed
+       every1,039 function sharing one 7,764-global holder, retired after
+       module, ELF exact 13,508,968 bytes sha256
+       8b6b5c7627edd2d289dd507d7d6522cabc7aaf26f421bf184c08a962cbba2277.
+       Five quiet actual full worker_resource_plan triples with private
+       worker marker on candidate: backend+obj CPU5.152 ->5.179 s
+       (+0.534% median,4/5 paired wins), control5.200, normalized -1.293%
+       4/5 within drift2.235%; full CPU normalized -1.694%5/5 within
+       drift2.987%, full wall -1.585%5/5; RSS81,180 ->81,248 KiB,
+       control81,180, normalized -0.049%3/5 within drift0.256%.
+       All15 exact ELF (1,739,176 bytes sha256
+       42d60bb810624c8f1b6ac655d6a554ee98a09c32b709acebeb5c974a1b2b58cc).
+       Full host worker neutral, no whole Stage1/Stage2 speed claim.
+       Latest verified Linux x64 Stage1 CI source c20c2c01, 625 modules/4 workers:
+       1,190.927 s /2,851,999,744 bytes (previous1,206.446s);
+       all625 indexed-native-sections phase receipts valid. Safe workers
+       1,086.151 s (91.2%), export58.174, link34.760; worker infer149.185
+       worker-s, codegen3,722.687; backend2,709.438, function emit1,519.736,
+       stack-map644.087, verify355.922, layout127.910, frontend generate919.276.
+       Largest c_codegen backend61.162s, class_gen58.074s, type_infer50.051,
+       cli_bootstrap46.520, cpp.parser44.524. This snapshot predates the
+       recent major route optimizations.
        Next (latest actual Linux CI codegen priority): (1) larger common
        indexed fact/emission owner (profile 2,643 frozen scalar value
        constructors and 719 stable text hash samples before route change;
@@ -3119,7 +3174,6 @@ in the relevant section or issue and removes the entry.
    finalizer and suspension semantics. No benchmark-specific bypass.
 
    Claims:
-   - Stage1 worker-owned timed x64 per-function global index reuse: Codex, Linux, 2026-11-26T19:11Z, area backend-x64-global-index
    - Ordinary list iterator consumer attribution and private loop cursor proof: Codex, Linux, 2026-11-26T19:06Z, area runtime-codegen-iterator
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
