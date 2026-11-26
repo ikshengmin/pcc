@@ -47,6 +47,9 @@ class Layer1InitMixin:
         # Real constructor state: cross-module class resolution consults
         # it, and pcc1's L1CodeGen has a fixed layout.
         self._import_from_module_cache = None
+        # Private source-annotation lookup cache, keyed by exact frozen
+        # current Module identity (native import rewrite can replace it).
+        self._annotation_module_bindings_cache: list = []
         self._emitting_finally = False
         self._prefer_native_callable_values = False
         self._cpy_values = set()

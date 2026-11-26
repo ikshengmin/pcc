@@ -997,10 +997,12 @@ class IrScaffoldLoweringMixin:
             # proof. Admission still requires the independent local/field
             # facts and capability checks above. Rebindings invalidate this
             # shared alias map, and ordinary foreign classes remain rejected.
-            from pcc.frontends.python.pipeline_exports import annotation_module_bindings
+            from pcc.frontends.python.pipeline_exports import _codegen_annotation_module_bindings
 
             root, separator, suffix = module.partition(".")
-            imported = annotation_module_bindings(self.ast_module).get(root)
+            imported = _codegen_annotation_module_bindings(
+                self.ast_module, self._annotation_module_bindings_cache
+            ).get(root)
             if imported is not None:
                 module = imported + (separator + suffix if separator else "")
         return module not in ("pcc.ir.ir", "pcc.ir.compat")

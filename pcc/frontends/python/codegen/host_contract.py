@@ -22,6 +22,7 @@ L1_CODEGEN_HOST_ATTRS = (
     "_handled_exception_scopes",
     "_return_handoff_sites",
     "_return_cleanup_roots",
+    "_annotation_module_bindings_cache",
     "_ast_body",
     "_async_body_depth",
     "_attr_pool",

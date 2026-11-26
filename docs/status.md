@@ -4320,8 +4320,53 @@ in the relevant section or issue and removes the entry.
    unchanged import/rebinding/scaffold proof. Require exact output and
    native focused source-matched evidence before production.
 
+   Immutable codegen annotation namespace reuse (measured structural fix).
+   Private per-L1 cache holds one exact frozen Module/tuple-body identity
+   and source-verified binding map, invalidates on native import AST
+   replacement even equal value, custom/mutable adapters and public
+   analysis still fresh. Constructor-owned fixed layout/host contract;
+   both scaffold nonprovider and tuple-base consumers share only source
+   facts, never relax independent receiver/provider proof. Host tests
+   97 passed/6 existing selection deselected, including rebinding/star,
+   exact identity, public mutable result, real consumer replacement,
+   tuple-base and scaffold proof. Contextual direct capture full
+   625-source graph complete63.524 s / 370,790,400 B, all five changed
+   compiler modules zero fallback. Fresh candidate owned runtime
+   135.177 s / 389,312,512 B; strict older archive codegen stamp rejected,
+   not bypassed. Native fixture explicit actual pipeline_closed_world
+   helper dependency added after incomplete fixture failure; full
+   58-module build179.745 s / 1,356,324,864 B, static ELF no libpython,
+   SHA256 d69cba4363fbe7d72453a9410ef78954debf78f929bbeaced0fa43685f2074da.
+   Actual old retained native class_gen v1 AST SHA256
+   b248d4510926ae8d117800144cc0e8aed91793d7bea7e9b803ef122d25a00240;
+   native contract rc0 NATIVE_ANNOTATION_CACHE_OK 95, exact binding
+   map/hit identity/equal distinct and empty replacement/original restoration.
+   Old 6cbafc4a source + exact five candidate blobs (all production
+   preimages match) separate host compiler actual same-route replay
+   COMPLETE68.377293 s, peak823,328,768 B; all 156 methods, annotation
+   scans 2 total (inference+first codegen), zero within methods versus
+   baseline cProfile2,025. Exact 57,304,557-byte assembly SHA256
+   7165f5ed623388294453b9a74154db3e9562185daf3d9f446b03c35811777e16,
+   exact 727 functions/332,713 instructions/86,393 blocks. Host timings
+   concurrent diagnostic only, no A/B speed claim.
+   Exclusive native 5 alternating baseline/candidate/control triples,
+   same static binary, actual AST, actual 2,025 scan count per arm,
+   pinned CPU, all15 exact map95/checksum210600. Median inner scan
+   3.123073436 -> 0.046051551 s (-98.525%,5/5, control+0.321%);
+   full process CPU9.048502 -> 6.008944 s (-33.592%,5/5,
+   control-0.269%), wall9.202035 -> 6.110530 s (-33.596%,5/5,
+   control-0.859%). Median RSS223,180 -> 223,708 KiB (+0.237%,
+   1/5 wins), unchanged control223,620 (+0.197%), residual+88 KiB
+   (+0.039%) within control; no RSS reduction claim. Harness COMPLETE
+   123.060 s, peak242,233,344 B, stdout SHA256
+   44a8bd5d3994b873f475bf0f9b9a8daa32677804da85f70dbcbd25183c07d1a8.
+   Isolated actual owner benefit, not whole Stage2 completion or
+   extrapolation. No relaxed limits/full bootstrap. Next larger measured
+   method owner: repeated MRO/subclass override scans; require actual
+   key/walk counts and cache invalidation proof.
+
    Claims:
-   - Stage2 immutable codegen annotation binding reuse: Codex, Linux, 2026-11-26T19:14Z, area selfhost
+   - none
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its

@@ -2480,12 +2480,14 @@ class MethodCallExpressionLoweringMixin:
 
 
     def _class_has_tuple_base(self, info):
-        from pcc.frontends.python.pipeline_exports import annotation_module_bindings
+        from pcc.frontends.python.pipeline_exports import _codegen_annotation_module_bindings
 
         # Method bodies can be emitted before runtime import statements have
         # populated value aliases. Reuse the existing source-verified import
         # binding analysis; unknown/rebound globals stay conservative.
-        bindings = annotation_module_bindings(self.ast_module)
+        bindings = _codegen_annotation_module_bindings(
+            self.ast_module, self._annotation_module_bindings_cache
+        )
         pending = [info]
         seen = set()
         while pending:

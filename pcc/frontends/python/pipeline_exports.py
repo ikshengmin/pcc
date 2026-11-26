@@ -806,6 +806,30 @@ def annotation_module_bindings(module):
     return bindings
 
 
+def _codegen_annotation_module_bindings(module, cache: list):
+    """Reuse source-verified bindings inside one compiler-owned AST owner.
+
+    Only the exact frozen lifted Module/tuple body uses the cache. Public
+    export analysis and structural/mutable adapters keep their ordinary
+    fresh scan. Native import rewriting replaces the Module; the strong
+    identity key invalidates without relying on equality or an address ID.
+    The private callers only read the returned name-to-module mapping.
+    """
+    from pcc.frontends.python.py_ast import Module
+
+    if type(module) is not Module or type(module.body) is not tuple:
+        return annotation_module_bindings(module)
+    if cache and cache[0][0] is module:
+        return cache[0][1]
+    bindings = annotation_module_bindings(module)
+    entry = (module, bindings)
+    if cache:
+        cache[0] = entry
+    else:
+        cache.append(entry)
+    return bindings
+
+
 def _qualify_export_type_descriptor(desc, module_bindings):
     """Resolve source module aliases before descriptors leave their owner."""
     if not isinstance(desc, tuple) or not desc:
