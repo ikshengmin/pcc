@@ -116,7 +116,7 @@ class ListMemory:
             "ptr_is_null": lambda value: int(value is None),
             "malloc": malloc, "free": memory.freed.append,
             "memmove": memmove, "memset": memset,
-            "pcc_gc_try_init_ptr_locked": try_init,
+            "pcc_gc_init_admitted_ptr_locked": try_init,
             "pcc_py_gc_minor_graph_lock": lock, "pcc_py_gc_minor_graph_unlock": unlock,
             # The list's transaction lock (container or graph lock).
             "_list_lock": lambda _list: lock(), "_list_unlock": lambda _list: unlock(),
@@ -128,8 +128,8 @@ class ListMemory:
                                  if isinstance(base, str) and base in globals_ else original_load(base, offset))
         tree = ast.parse(RUNTIME.read_text())
         nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef)
-                 and node.name in ("_append_existing_capacity_gc0", "_append_grow_gc0")]
-        assert len(nodes) == 2
+                 and node.name in ("_append_existing_capacity_gc0", "_append_grow_gc0", "_append_mode_admitted_locked")]
+        assert len(nodes) == 3
         code = compile(ast.Module(nodes, type_ignores=[]), str(RUNTIME), "exec")
         for const in code.co_consts:
             if isinstance(const, types.CodeType):

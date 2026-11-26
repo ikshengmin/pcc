@@ -173,3 +173,26 @@ def test_linux_x86_64_page_provider_lowers_to_raw_syscalls(tmp_path, monkeypatch
     assert "syscall" in asm
     assert "call mmap" not in asm
     assert "call munmap" not in asm
+
+
+def test_linux_aarch64_discard_checks_the_end_before_releasing_a_partial_slab(tmp_path):
+    source = tmp_path / "discard.py"
+    source.write_text(
+        "from pcc import i64\n"
+        "from pcc.extern import c_abi_export, c_ptr\n"
+        "from pcc.unsafe import page_discard\n"
+        "__pcc_freestanding__ = True\n"
+        "@c_abi_export('discard_range')\n"
+        "def discard_range(base: c_ptr, size: i64) -> i64:\n"
+        "    return page_discard(base, size)\n"
+    )
+    ir = tmp_path / "discard.ll"
+    pipeline.compile_python(
+        str(source), str(ir), emit_llvm_only=True, python_library=True,
+        backend="self", target_triple="aarch64-unknown-linux-gnu",
+    )
+    body = ir.read_text().split("define external i64 @discard_range", 1)[1].split("\n}", 1)[0]
+    calls = [line for line in body.splitlines() if "call" in line and "i64 233," in line]
+    assert len(calls) == 2, body
+    assert "i64 0, i64 0" in calls[0]
+    assert "select i1" in body and "i64 4," in calls[1]

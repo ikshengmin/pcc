@@ -44,6 +44,8 @@ class LateWeakrefCollection(WeakBatch):
         self.global_store("pcc_gc_backend_selected", 0)
         # The graph supplies ordinary tracked nodes, not flag-mode discovery.
         self.global_store("pcc_gc_tracking_flag_mode", 0)
+        # Inherit WeakBatch's list-only registry in this model's globals.
+        self.global_store("pcc_weak_target_dir_disabled", 1)
         self.ns.update(
             i64=int,
             global_addr=self.global_addr,
@@ -61,7 +63,11 @@ class LateWeakrefCollection(WeakBatch):
             pcc_gc_reclaim_retired_index_tables=lambda: 0,
             pcc_gc_default_table_lock=lambda: None,
             pcc_gc_default_table_unlock=lambda: None,
+            pcc_gc_tracked_count_flush=lambda: None,
             pcc_gc_tracked_materialize=lambda: 0,
+            py_user_del_pending=lambda obj: int(obj in self.finalizers),
+            pcc_thread_world_release_held=self.release_for_user_code,
+            pcc_thread_world_reacquire_held=self.reacquire_after_user_code,
             pcc_gc_tracked_dematerialize=lambda owned: None,
             py_gc_index_find=lambda obj: self.index.get(obj, 0),
             py_gc_index_remove=lambda obj: self.index.pop(obj),
@@ -71,12 +77,12 @@ class LateWeakrefCollection(WeakBatch):
             pcc_gc_backend0_clear_referents=self.clear_referents,
             pcc_gc_visit_native_root_frames=lambda kind, flags: 0,
             pcc_gc_visit_walked_stack_roots=lambda kind, flags: 0,
-            pcc_gc_trace_continuation_roots=lambda: 0,
             pcc_capi_is_cext_type_tag=lambda tag: 0,
             py_user_del_dispatch=self.finalize,
             pcc_gc_note_object_freeing=lambda obj: None,
             _dealloc_unreachable=self.disposed.append,
         )
+        load_functions(SOURCE, {"py_weakref_queue_gc0_batch", "py_weakref_run_queued_callbacks"}, self.ns)
         load_functions(
             COLLECTOR,
             {"_collect", "_recompute_reachability",
@@ -141,6 +147,15 @@ class LateWeakrefCollection(WeakBatch):
         assert not self.stopped
         self.stopped = True
         return 0
+
+    def release_for_user_code(self):
+        assert self.stopped and self.global_load("py_gc_collecting")
+        self.stopped = False
+        return 1
+
+    def reacquire_after_user_code(self, depth):
+        assert depth == 1 and self.global_load("py_gc_collecting")
+        self.stop()
 
     def resume(self):
         assert self.stopped
@@ -362,3 +377,18 @@ def test_no_user_callback_or_finalizer_keeps_one_recompute_and_one_weakref_pass(
     assert model.silent_passes == [(1, {target}, 1)]
     assert model.load(silent, 16) == 0
     assert model.cleared == model.disposed == [target]
+
+
+@pytest.mark.parametrize(("old", "young"), [(128, 0), (128, 8), (2048, 8)])
+def test_acquired_young_view_sizes_verdict_allocation(old, young):
+    model = LateWeakrefCollection()
+    model.global_store("pcc_gc_tracking_flag_mode", 1)
+    model.global_store("py_gc_tracked_count", old + young)
+    sizes = []
+    model.ns.update(
+        pcc_gc_tracked_materialize=lambda: young,
+        pcc_gc_tracked_count_flush=lambda: None,
+        malloc=lambda size: sizes.append(size) or 0,
+    )
+    assert model.ns["_collect"](0, 0) == 0
+    assert sizes == ([young * 8] if young else [])

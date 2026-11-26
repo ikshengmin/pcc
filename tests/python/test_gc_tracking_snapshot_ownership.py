@@ -39,7 +39,7 @@ class SnapshotRuntime:
         self.exception = None
         self.list_fault = None
         self.ns = dict(i64=int, c_ptr=int, null=lambda: 0,
-                       ptr_is_null=lambda p: int(p == 0),
+                       ptr_is_null=lambda p: int(p == 0), ptr_eq=lambda a, b: int(a == b),
                        is_tagged_int=lambda p: 0,
                        ptr_add=lambda p, n: p + n, ptr_diff=lambda p, q: p - q,
                        logical_shift_right_i64=lambda n, bits: (n & ((1 << 64) - 1)) >> bits,
@@ -462,3 +462,24 @@ def test_cold_snapshot_fixes_backend_before_retaining_pre_freeze_nodes():
     assert old_node not in rt.index.values()
     rt.decref(out)
     rt.drain_pool()
+
+
+def test_failed_widening_preserves_outer_young_view_and_can_retry():
+    rt = SnapshotRuntime()
+    young, other, large = rt.seed()
+    rt.enter()
+    rt.global_set('pcc_gc_tracking_materialized', 1)
+    rt.global_set('pcc_gc_tracking_young_view', 1)
+    assert rt.ns['_materialize_one'](young) == 1
+    outer = dict(rt.index)
+    rt.fail_insert = rt.insert_calls + 3
+    assert rt.ns['pcc_gc_tracked_materialize']() == -1
+    assert rt.index == outer
+    assert rt.global_get('pcc_gc_tracking_materialized') == 1
+    assert rt.global_get('pcc_gc_tracking_young_view') == 1
+    assert rt.load(outer[young], 24) == 0
+    rt.fail_insert = 0
+    assert rt.ns['pcc_gc_tracked_materialize']() == 2
+    assert set(rt.index) == {young, other, large}
+    rt.ns['pcc_gc_tracked_dematerialize'](1)
+    rt.leave()

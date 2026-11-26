@@ -62,6 +62,8 @@ define_global_i32("pcc_gc_backend0_young_request", 0)
 define_global_i32("pcc_gc_backend0_young_collections", 0)
 define_global_i64("pcc_gc_tracked_after_full", 0)
 define_global_i64("pcc_gc_young_log_chunks", 0)
+# Retired full-view blocks, protected by the stopped world.
+define_global_ptr_null("pcc_gc_young_handover_blocks")
 define_global_i32("pcc_gc_young_log_chunk_count", 0)
 define_global_i32("pcc_gc_young_log_lost", 0)
 # Full collection of the fused collector in bounded stops
@@ -90,7 +92,12 @@ define_global_ptr_null("pcc_gc_full_state")
 # cycle's candidates wait for a young collection. pcc_gc_full_release_head
 # lists the objects whose last reference the thread ended up holding: a
 # mutator releases them, because that may run a finalizer.
-define_global_i32("pcc_gc_full_concurrent", 0)
+# Mode 2 is the default: start a worker only with multiple registered
+# mutators. Explicit 1 also permits a worker in a one-mutator threaded build.
+define_global_i32("pcc_gc_full_concurrent", 2)
+define_global_i32("pcc_gc_full_worker_lifecycle", 0)
+define_global_i32("pcc_gc_full_worker_shutdown", 0)
+define_global_i32("pcc_gc_full_worker_atexit", 0)
 define_global_i32("pcc_gc_full_worker", 0)
 define_global_i32("pcc_gc_full_finished", 0)
 # Defer young collection while an incomplete full-candidate batch ages.

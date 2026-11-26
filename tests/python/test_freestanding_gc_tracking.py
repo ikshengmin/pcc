@@ -25,8 +25,15 @@ INTERNAL_SYMBOLS = {
     "pcc_gc_tracked_count_note",
     "pcc_gc_tracked_count_flush",
     # The young log of generational collection.
+    "pcc_gc_young_log_allocate",
+    "pcc_gc_young_log_thread_exit",
+    "pcc_gc_young_log_pace_full",
     "pcc_gc_young_log_note",
     "pcc_gc_young_log_collect",
+    "pcc_gc_collect_logged_items",
+    "pcc_gc_visit_young_log",
+    "pcc_gc_release_tracked_view",
+    "pcc_gc_materialize_one",
     "pcc_gc_young_log_reset",
     "pcc_gc_default_drain_deferred_nodes",
     "pcc_gc_default_table_lock",
@@ -53,24 +60,22 @@ RAW_FUNCTION_IMPORTS = {
     # The Darwin thread-local descriptor bootstrap of pcc_tls_tracked_delta.
     "tlv_bootstrap",
     # The young log keeps an entry only while its address is a live object.
+    "pcc_gc_backend0_full_abort",
     "pcc_gc_granule_is_object_start",
     "pcc_gc_managed_pointer_index_contains",
     "free",
     "malloc",
     "pcc_current_native_thread_token",
     "pcc_current_thread_id",
-    "pcc_gc_backend",
     "pcc_thread_safepoint",
     "pcc_thread_no_park_enter",
     "pcc_thread_no_park_exit",
     "pcc_platform_abort",
-    "pcc_threads_enabled",
     "py_gc_index_insert",
     "py_gc_index_remove",
     # Collection-time discovery of the flagged objects.
     "pcc_allocator_object_cells_enumerate",
     "pcc_gc_managed_pointer_index_enumerate",
-    "pcc_gc_object_list_non_slab_enumerate",
 }
 RAW_GLOBAL_IMPORTS = {
     # Generational collection: the young bit, the young view and its log.
@@ -78,10 +83,15 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_tracking_young_view",
     "pcc_gc_backend0_young_request",
     "pcc_gc_young_log_chunks",
+    "pcc_gc_young_handover_blocks",
     "pcc_gc_young_log_lost",
+    "pcc_gc_young_log_chunk_count",
+    "pcc_gc_full_handover_active",
+    "pcc_gc_full_phase",
+    "pcc_gc_full_slice_pending",
+    "pcc_gc_full_view_active",
     "pcc_gc_tracking_flag_mode",
     "pcc_gc_tracking_materialized",
-    "pcc_gc_nonmoving_count_free",
     # py_gc_track schedules GC0's automatic cycle collection.
     "pcc_gc_tracked_after_collect",
     "pcc_gc_backend4_auto_step_pending",
@@ -350,7 +360,7 @@ def test_gc_tracking_object_has_exact_raw_closure_and_atomic_lock(
     }
     # The object also defines its thread-local pending-count word.
     assert defined == PUBLIC_SYMBOLS | INTERNAL_SYMBOLS | {
-        "pcc_tls_tracked_delta", "pcc_tls_young_log_chunk",
+        "pcc_tls_tracked_delta", "pcc_tls_young_log_chunk", "pcc_tls_young_log_unbuffered",
     }
     assert "cmpxchg ptr" in ir_text
     assert "acq_rel acquire" in ir_text

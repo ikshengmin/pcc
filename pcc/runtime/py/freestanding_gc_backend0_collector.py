@@ -82,9 +82,6 @@ pcc_gc_reclaim_retired_index_tables = extern(
     "pcc_gc_reclaim_retired_index_tables", (), c_int64
 )
 pcc_thread_safepoint = extern("pcc_thread_safepoint", (), c_void)
-pcc_gc_trace_continuation_roots = extern(
-    "pcc_gc_trace_continuation_roots", (), c_int64
-)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_capi_is_cext_type_tag = extern(
     "pcc_capi_is_cext_type_tag", (c_int64,), c_int64
@@ -363,7 +360,6 @@ def _mark_runtime_roots() -> None:
             _visit_mapped_root_slots(frame_map, slots)
         continuation = load_ptr(continuation, 16)
 
-    pcc_gc_trace_continuation_roots()
     _visit_scheduler_root_slots()
 
 
@@ -549,7 +545,8 @@ def _collect(pairs, candidate_count: i64) -> i64:
             materialization_owned = 0
     pcc_gc_tracked_count_flush()
     tracked: i64 = atomic_load_i32(global_addr("py_gc_tracked_count"), 0, "acquire")
-    if materialized > tracked:
+    # An acquired view counts every node in this verdict, even when empty.
+    if materialization_owned != 0 or materialized > tracked:
         tracked = materialized
     if ptr_is_null(pairs) == 0:
         tracked = _prepare_subset(pairs, candidate_count)

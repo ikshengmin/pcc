@@ -2189,8 +2189,17 @@ class UnsafeIntrinsicMixin:
                     _I64,
                     name=self._fresh("unsafe.page.madvise.ptr"),
                 )
-                # madvise(MADV_DONTNEED): the next touch gets zero pages.
-                return self._unsafe_linux_syscall6(
+                # Linux rounds the length upward. AArch64 may use 64 KiB
+                # pages: require the end of a sub-slab range to be aligned
+                # before discarding any part of a neighbouring live cell.
+                if machine in ("aarch64", "arm64"):
+                    aligned = self._unsafe_linux_syscall6(
+                        ir.Constant(_I64, 28), self.builder.add(ptr_i, size),
+                        zero, zero, zero, zero, zero, name=self._fresh("unsafe.page.end.check"),
+                    )
+                    eligible = self.builder.icmp_signed("==", aligned, zero)
+                    size = self.builder.select(eligible, size, zero)
+                discarded = self._unsafe_linux_syscall6(
                     ir.Constant(_I64, 28),
                     ptr_i,
                     size,
@@ -2200,6 +2209,9 @@ class UnsafeIntrinsicMixin:
                     zero,
                     name=self._fresh("unsafe.page.madvise.syscall"),
                 )
+                if machine in ("aarch64", "arm64"):
+                    return self.builder.select(eligible, discarded, aligned)
+                return discarded
             raise NotImplementedError(
                 "pcc.unsafe.page_discard supports Darwin libSystem and Linux raw syscalls"
             )

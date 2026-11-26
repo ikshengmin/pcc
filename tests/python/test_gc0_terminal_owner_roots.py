@@ -7,7 +7,7 @@ import subprocess
 import pcc
 import pytest
 
-from tests.python.test_foreign_address_leases import _functions
+from tests.python.runtime_body_model import load_functions
 
 
 @pytest.mark.parametrize("reverse", (False, True))
@@ -42,11 +42,12 @@ def test_zero_count_pending_owner_keeps_transitive_fields_alive(reverse):
             mark(child)
 
     namespace = dict(global_load_ptr=lambda name: nodes[ordered[0]], ptr_is_null=lambda value: value == 0,
-                     load_ptr=load, load_i64=load, store_i64=store, store_i32=store,
+                     global_addr=lambda name: name, load_ptr=load, load_i32=load, load_i64=load,
+                     store_i64=store, store_i32=store,
                      pcc_gc_backend0_visit_subtract=subtract, pcc_gc_backend0_mark_reachable=mark,
                      _mark_runtime_roots=lambda: None)
     source = Path(pcc.__file__).resolve().parent / "runtime/py/freestanding_gc_backend0_collector.py"
-    _functions(source, {"_recompute_reachability"}, namespace)
+    load_functions(source, {"_recompute_reachability"}, namespace, local_helpers=False)
     namespace["_recompute_reachability"]()
     assert load(nodes[200], 16) == 1, "the pending owner still owns both child references"
     assert load(nodes[300], 16) == 1, "the pending owner's descendants must remain alive"
@@ -61,7 +62,7 @@ extern void py_decref(void *);
 extern i64 py_gc_collect(void);
 extern i64 pcc_gc_granule_is_object_start(void *);
 extern i64 py_list_len(void *);
-extern void *py_gc_index_find(void *);
+extern i64 py_gc_is_tracked(void *);
 extern void py_gc_untrack(void *);
 i64 terminal_owner_probe(void) {
     void *parent = py_list_new(1);
@@ -70,7 +71,7 @@ i64 terminal_owner_probe(void) {
     py_list_append(child, child);
     py_list_append(parent, child);
     py_decref(child);
-    if (!py_gc_index_find(parent) || !py_gc_index_find(child)) return 11;
+    if (!py_gc_is_tracked(parent) || !py_gc_is_tracked(child)) return 11;
     /* This is the real parked-decref boundary: rc reached zero, but untrack
        and field disposal have not run. The raw C local is deliberately not
        a compiler-registered root and does not contribute a reference. */

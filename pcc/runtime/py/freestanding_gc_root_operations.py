@@ -692,9 +692,15 @@ def pcc_gc_try_init_ptr_locked(destination, source) -> i64:
     safepoint occurs; a miss leaves both slots and counts untouched. Tracing,
     moving, diagnostic, dying and contended cases keep the ordinary protocol.
     """
-    if ptr_is_null(destination) != 0 or ptr_is_null(source) != 0 or ptr_eq(destination, source) != 0:
-        return 0
     if (load_i32(global_addr('pcc_gc_refcount_atomic'), 0) == 0 or load_i32(global_addr('pcc_diagnostics_runtime_log_fast_state'), 0) != 0 or atomic_load_i64(global_addr('pcc_gc_foreign_lease_active'), 0, 'acquire') < 0):
+        return 0
+    return pcc_gc_init_admitted_ptr_locked(destination, source)
+
+
+@c_abi_export("pcc_gc_init_admitted_ptr_locked")
+def pcc_gc_init_admitted_ptr_locked(destination, source) -> i64:
+    """Initialize a fresh field under its owner's lock after atomic-mode admission."""
+    if ptr_is_null(destination) != 0 or ptr_is_null(source) != 0 or ptr_eq(destination, source) != 0:
         return 0
     value = load_ptr(source, 0)
     if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:

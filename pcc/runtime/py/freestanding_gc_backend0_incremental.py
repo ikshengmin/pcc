@@ -34,7 +34,7 @@ mutator owns the stopped world and the tracked table. On the collector
 thread (pcc_gc_backend0_full_worker_main, the concurrent feature of the
 former GC2) the world runs, and the thread follows what mutators already
 obey: it holds the object-graph lock for a batch, which structural
-container changes take; it scans a list or an instance under that object's
+container changes take; it scans lists, dictionaries and instance fields under the owner's
 container lock; it reaches an object only from its node under the node's
 shard lock, which the object's untrack takes before the object can be
 freed, and keeps it alive with a reference while it scans it. It never
@@ -45,7 +45,7 @@ when the work done is behind what their allocation asks for
 """
 
 from pcc import i64
-from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
+from pcc.extern import c_abi_export, c_int32, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     abi_constant,
     atomic_cas_i32,
@@ -119,7 +119,6 @@ pcc_gc_granule_is_object_start = extern(
 pcc_gc_managed_pointer_index_contains = extern(
     "pcc_gc_managed_pointer_index_contains", (c_ptr,), c_int64
 )
-pcc_gc_young_log_note = extern("pcc_gc_young_log_note", (c_ptr,), c_void)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_container_lock = extern("pcc_container_lock", (c_ptr,), c_void)
@@ -137,7 +136,10 @@ pcc_capi_is_cext_type_tag = extern(
 )
 pcc_threads_enabled = extern("pcc_threads_enabled", (), c_int64)
 pcc_thread_start = extern("pcc_thread_start", (c_ptr, c_ptr, c_ptr), c_int64)
-pcc_thread_detach = extern("pcc_thread_detach", (c_ptr,), c_void)
+pcc_thread_join = extern("pcc_thread_join", (c_ptr, c_ptr), c_int64)
+pcc_thread_live_count = extern("pcc_thread_live_count", (), c_int64)
+atexit = extern("atexit", (c_ptr,), c_int32)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_thread_safepoint_gate = extern("pcc_thread_safepoint_gate", (), c_void)
 pcc_platform_sleep_ns = extern("pcc_platform_sleep_ns", (c_int64,), c_int64)
 py_decref = extern("py_decref", (c_ptr,), c_void)
@@ -470,6 +472,8 @@ def _scan(state, node, cursor: i64, marking: i64, concurrent: i64) -> i64:
             return _SLOT_DONE
         if (
             tag == abi_constant("object.type.list")
+            or tag == abi_constant("object.type.dict")
+            or tag == abi_constant("object.type.valuebox")
             or tag == abi_constant("object.type.instance")
             or tag >= abi_constant("object.type.user_class_start")
         ):
@@ -752,7 +756,6 @@ def _demote(state, deadline: i64) -> i64:
                 flags: i64 = load_i32(obj, 12)
                 if (flags & _TRACKED) != 0 and (flags & young) == 0:
                     atomic_rmw_i32("or", obj, 12, young, "acq_rel")
-                    pcc_gc_young_log_note(obj)
                     demoted = demoted + 1
             index = index + 1
             units = units + 1
@@ -761,7 +764,13 @@ def _demote(state, deadline: i64) -> i64:
                 store_i64(state, _STATE_DEMOTED, demoted)
                 return _PASS_MORE
         following = load_ptr(block, _BLOCK_NEXT)
-        free(block)
+        # The stopped young verdict revalidates these addresses against the
+        # current flags, including objects allocated at a recycled address.
+        if discard == 0 and atomic_load_i32(global_addr("pcc_gc_young_log_lost"), 0, "acquire") == 0:
+            store_ptr(block, _BLOCK_NEXT, global_load_ptr("pcc_gc_young_handover_blocks"))
+            global_store_ptr("pcc_gc_young_handover_blocks", block)
+        else:
+            free(block)
         block = following
         index = 0
         store_ptr(state, _STATE_CANDIDATES, block)
@@ -800,9 +809,14 @@ def pcc_gc_backend0_full_abort() -> None:
     state = global_load_ptr("pcc_gc_full_state")
     if ptr_is_null(state) != 0:
         return
+    phase: i64 = load_i32(global_addr("pcc_gc_full_phase"), 0)
+    if phase == _PHASE_DEMOTE and load_i64(state, _STATE_INDEX) > 0:
+        # The unpublished prefix already carries young bits. If the exact
+        # collection aborts before taking its view, retain the flag fallback.
+        atomic_store_i32(global_addr("pcc_gc_young_log_lost"), 0, 1, "release")
     block = load_ptr(state, _STATE_BLOCKS)
     index: i64 = 0
-    if load_i32(global_addr("pcc_gc_full_phase"), 0) == _PHASE_SWEEP:
+    if phase == _PHASE_SWEEP:
         # The current block's swept prefix is no longer in the index.
         index = load_i64(state, _STATE_INDEX)
     while ptr_is_null(block) == 0:
@@ -821,10 +835,18 @@ def pcc_gc_backend0_full_abort() -> None:
 
 @c_abi_export("pcc_gc_backend0_full_start")
 def _start() -> None:
+    # A retiring worker must not advance a subsequent cycle, including
+    # one for which the mutator has explicitly disabled concurrency.
+    if atomic_load_i32(global_addr("pcc_gc_full_worker"), 0, "acquire") != 0:
+        return
     if load_i32(global_addr("pcc_gc_tracking_flag_mode"), 0) == 0:
         return
     if load_i32(global_addr("pcc_gc_tracking_young_bit"), 0) == 0:
         return
+    # A manually started second cycle may precede the first young verdict.
+    # Keep at most one handover and use exact flag enumeration in that case.
+    if ptr_is_null(global_load_ptr("pcc_gc_young_handover_blocks")) == 0:
+        atomic_store_i32(global_addr("pcc_gc_young_log_lost"), 0, 1, "release")
     state = malloc(_STATE_BYTES)
     if ptr_is_null(state) != 0:
         return
@@ -970,7 +992,8 @@ def pcc_gc_backend0_full_worker_main(arg):
     waiting for a collection that owns the tracked nodes; the cycle then
     goes on in the mutators' stops."""
     waited: i64 = 0
-    while load_i32(global_addr("pcc_gc_full_phase"), 0) != 0 and waited < 20000:
+    while (atomic_load_i32(global_addr("pcc_gc_full_worker_shutdown"), 0, "acquire") == 0
+            and load_i32(global_addr("pcc_gc_full_phase"), 0) != 0 and waited < 20000):
         outcome: i64 = _concurrent_batch()
         if outcome == 3:
             _stop(0)
@@ -987,7 +1010,8 @@ def pcc_gc_backend0_full_worker_main(arg):
 
 @c_abi_export("pcc_gc_backend0_full_worker_start")
 def _worker_start() -> None:
-    if load_i32(global_addr("pcc_gc_full_concurrent"), 0) == 0:
+    mode: i64 = atomic_load_i32(global_addr("pcc_gc_full_concurrent"), 0, "acquire")
+    if mode == 0 or (mode == 2 and pcc_thread_live_count() <= 1):
         return
     if pcc_threads_enabled() == 0:
         return
@@ -997,18 +1021,48 @@ def _worker_start() -> None:
         return
     if load_i32(global_addr("pcc_gc_list_container_mode"), 0) == 0:
         return
-    if atomic_cas_i32(
-        global_addr("pcc_gc_full_worker"), 0, 0, 1, "acq_rel", "acquire"
-    ) != 0:
+    gate = global_addr("pcc_gc_full_worker_lifecycle")
+    # A concurrent starter or shutdown owns the handle; mutators can assist.
+    if atomic_cas_i32(gate, 0, 0, 1, "acq_rel", "acquire") != 0:
         return
-    if pcc_thread_start(
-        global_addr("pcc_gc_full_worker_handle"),
-        function_addr("pcc_gc_backend0_full_worker_main"),
-        null(),
-    ) != 0:
-        atomic_store_i32(global_addr("pcc_gc_full_worker"), 0, 0, "release")
-        return
-    pcc_thread_detach(global_load_ptr("pcc_gc_full_worker_handle"))
+    if (atomic_load_i32(global_addr("pcc_gc_full_worker_shutdown"), 0, "acquire") == 0
+            and atomic_load_i32(global_addr("pcc_gc_full_worker"), 0, "acquire") == 0):
+        _join_previous_worker()
+        if load_i32(global_addr("pcc_gc_full_worker_atexit"), 0) == 0:
+            if atexit(function_addr("pcc_gc_backend0_worker_shutdown")) != 0:
+                atomic_store_i32(gate, 0, 0, "release")
+                return
+            store_i32(global_addr("pcc_gc_full_worker_atexit"), 0, 1)
+        atomic_store_i32(global_addr("pcc_gc_full_worker"), 0, 1, "release")
+        if pcc_thread_start(
+            global_addr("pcc_gc_full_worker_handle"),
+            function_addr("pcc_gc_backend0_full_worker_main"),
+            null(),
+        ) != 0:
+            atomic_store_i32(global_addr("pcc_gc_full_worker"), 0, 0, "release")
+    atomic_store_i32(gate, 0, 0, "release")
+
+
+@c_abi_export("pcc_gc_backend0_join_previous_worker")
+def _join_previous_worker() -> None:
+    handle = global_load_ptr("pcc_gc_full_worker_handle")
+    if ptr_is_null(handle) == 0:
+        if pcc_thread_join(handle, null()) != 0:
+            pcc_platform_abort()
+        global_store_ptr("pcc_gc_full_worker_handle", null())
+
+
+@c_abi_export("pcc_gc_backend0_worker_shutdown")
+def pcc_gc_backend0_worker_shutdown() -> None:
+    """Close admission, synchronize with handle publication and join every started worker."""
+    atomic_store_i32(global_addr("pcc_gc_full_worker_shutdown"), 0, 1, "release")
+    gate = global_addr("pcc_gc_full_worker_lifecycle")
+    while atomic_cas_i32(gate, 0, 0, 1, "acq_rel", "acquire") != 0:
+        pcc_thread_safepoint()
+    _join_previous_worker()
+    atomic_store_i32(gate, 0, 0, "release")
+    pcc_gc_backend0_full_drain_releases()
+
 
 
 @c_abi_export("pcc_gc_backend0_full_begin")
@@ -1058,12 +1112,11 @@ def pcc_gc_backend0_full_set_concurrent(enabled: i64) -> i64:
     """Let the next cycles of a threaded program run on a collector thread
     (1) or in the mutators' stops only (0); the previous value."""
     slot = global_addr("pcc_gc_full_concurrent")
-    previous: i64 = load_i32(slot, 0)
     value: i64 = 0
     if enabled != 0:
         value = 1
-    store_i32(slot, 0, value)
-    return previous
+    previous: i64 = atomic_rmw_i32("xchg", slot, 0, value, "acq_rel")
+    return 1 if previous != 0 else 0
 
 
 @c_abi_export("pcc_gc_backend0_full_counter")

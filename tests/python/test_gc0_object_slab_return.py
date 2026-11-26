@@ -214,3 +214,19 @@ def test_empty_object_slabs_return_to_the_system(tmp_path, name, program, expect
     result = subprocess.run([str(executable)], capture_output=True, text=True, timeout=300,
                             env=dict(os.environ))
     assert (result.returncode, result.stdout) == (0, expected), result.stderr
+
+
+def test_one_live_cell_per_slab_keeps_identity_across_page_return_and_reuse(
+    tmp_path, pcc_runtime_archive,
+):
+    import mmap
+    from pathlib import Path
+    from tests.owned_runtime_c_fixture import link_c_harness_bounded
+
+    source = Path(__file__).with_name("fixtures") / "gc_sparse_slab.c"
+    binary = tmp_path / "sparse_slab"
+    linked = link_c_harness_bounded(source, binary, runtime_archive=pcc_runtime_archive)
+    assert linked.returncode == 0, linked.stdout + linked.stderr
+    for layout in ([], ["crossing"]):
+        run = subprocess.run([binary, str(mmap.PAGESIZE), *layout], capture_output=True, text=True, timeout=30)
+        assert run.returncode == 0, (layout, run.returncode, run.stdout, run.stderr)

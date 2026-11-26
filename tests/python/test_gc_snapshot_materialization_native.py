@@ -177,11 +177,15 @@ int main(void) {
         if (pcc_gc_tracking_materialized || pcc_gc_table_lock_depth
                 || pcc_thread_owns_stopped_world()) return fail(22);
         PyObject *seen = py_weakref_call(weak);
-        if (seen != py_None) return fail(23);
+        /* A callback-free weakref survives resurrection in CPython 3.15. */
+        if (seen != saved) return fail(23);
         py_decref(seen);
         py_decref(saved);
         saved = 0;
         if (py_gc_collect() < 1 || finalized != 1) return fail(24);
+        seen = py_weakref_call(weak);
+        if (seen != py_None) return fail(26);
+        py_decref(seen);
         py_decref(weak);
         py_decref((PyObject *)cls);
     }

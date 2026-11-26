@@ -1115,10 +1115,9 @@ in the relevant section or issue and removes the entry.
        remove the frontend's closed-young analysis, which has no consumer;
        remove the per-collector options of `scripts/pcc_perf.py` (`--gc`,
        the pacer option). Area `runtime-codegen`.
-   (e) Collector thread default. A program in which threads change old
-       lists and dictionaries while a cycle scans them; a join of the
-       thread at process exit; an A/B at four workers. The maintainer then
-       decides the default.
+   (e) The maintainer chose “多线程默认开启，保留显式关闭。补上退出等待，测一下扫描中退出。”
+       The worker lifecycle and its validation are described below under
+       “Concurrent old-generation scanning”.
    (f) Replaced by (0b).
    (g) Linux: done at `cba826a9` (the slab-return programs, which call
        `page_discard`, and five shared-managed integration cases). Left:
@@ -2224,25 +2223,37 @@ were 0.370 and 0.367 ms; peak RSS was about 119.5 MiB on both arms; exact
 reclaim varied, medians 179.6 and 177.3 ms. This is a pause probe, not a
 throughput claim; macOS and hosted CI were not run.
 
-Collector thread, the concurrent feature of the former GC2 (off by default:
-`pcc_gc_full_concurrent`, set through
-`pcc_gc_backend0_full_set_concurrent(1)`; the program of its test case
-passed 30 consecutive runs on the local Mac). It stays off (Claude's
-choice, not a maintainer decision) until three things exist: a program in
-which threads change old lists and dictionaries while a cycle scans them,
-a join of the thread at process exit, and an A/B at four workers. When a cycle begins in a threaded
-program with atomic counts and container locks, a detached thread does the
-passes with the world running. It holds the object-graph lock for a batch,
-scans a list or an instance under that object's container lock, reaches an
-object only from its node under the node's shard lock and keeps it alive
-with a reference while it scans it, never dereferences a child, and skips C
-extension objects. The large-object part of the build, the runtime's roots
-and the hand-over to the young generation take a stop. Mutators assist with
-a stop of their own when the work done is behind sixteen node visits per
-tracked container (`pcc_gc_backend0_full_step`). A reference the thread ends
-up owning is released by a mutator. The fifth case of the test file above
-(`concurrent`) exercises it with four threads. Not handled: the thread is
-not joined at process exit.
+**Concurrent old-generation scanning.** The November 26 change on
+`8f756a029b` starts a worker at the beginning of a full cycle when more
+than one mutator is registered, reference counts are atomic, and the
+container-lock mode is available. `pcc_gc_backend0_full_set_concurrent(0)`
+disables subsequent worker starts. Explicit 1 also allows a worker in a
+one-mutator threaded runtime. A mutator assists when allocation outpaces
+scanning. Roots, large-object index enumeration, handover, and the exact
+young verdict still require stops. Worker startup registers a normal-exit
+callback, reaps the previous handle, and publishes the new joinable handle.
+Normal exit closes admission, joins the worker, and drains its held releases.
+Immediate process termination retains its platform semantics.
+
+Local Darwin arm64 verification uses `uv run pytest -x -vv
+tests/python/test_gc0_worker_exit.py`. A native exit callback observes an
+active scan; an earlier registered callback runs after shutdown and checks
+that the worker has exited and its handle is clear. The explicit opt-out
+starts no worker. A complete young log and retired handover blocks now feed
+the exact view in one validated walk; ordinary mutator-log saturation still
+uses exact allocator/index enumeration. Run `uv run pytest -x -vv
+tests/python/test_gc0_high_fanout_pause.py tests/python/test_gc0_young_log_bound.py`.
+The final synchronous verdict still has no hard pause bound. Five alternating
+Darwin arm64 pairs against the sealed parent, including an independently
+linked baseline control, measured the exact young verdict for 160,001
+unreachable containers. With 640,000 unrelated old lists retained the
+median fell from 35.79 to 32.40 ms (5/5). With 1,280,000 it fell from 42.86
+to 31.78 ms (5/5). With 320,001 candidates and no unrelated retained
+lists, medians were 62.55 and 64.54 ms (0/5 shorter; control floor 6.5%).
+The ordinary handler's five-pair median QPS changed +1.75% at one worker
+and -5.30% at four, inside control floors of 6.95% and 13.09%.
+The host-pcc0 weakref executables at both provenance settings matched the
+CPython 3.15 reference. Native-pcc1 qualification needs a current compiler.
 
 Memory return, the purpose of the former GC4 (done without relocation,
 Claude, local Mac, 2026-11-24). The maintainer said in this session that the features of
@@ -2276,7 +2287,15 @@ free; sparse; empty; discarded). A cell comes from a dense slab first, so
 new objects fill the slabs that are nearly full and a sparse slab empties
 as its objects die. The trim then takes the empty list, all but the slab
 emptied last, so its work follows the number of empty slabs, not of free
-cells. What stays: a slab that holds one long-lived object.
+cells. The subsequent partial-page trim also considers slabs newly crossing
+sparse occupancy thresholds. It returns wholly central-free 16 KiB ranges,
+including their allocator prefixes, and reconstructs dormant cells on reuse.
+Magazine cells and live cells remain in place. Counter 3 of
+`pcc_allocator_object_slab_counter` counts currently discarded partial
+bytes. On Darwin arm64, 20,000 lists on 35 slabs with one survivor per slab
+returned 1,720,320 bytes while preserving survivor identity and contents.
+The native regression fills the slabs again before releasing the survivors:
+`uv run pytest -x -vv tests/python/test_gc0_object_slab_return.py`.
 
 Evidence (local Mac): `tests/python/test_gc0_object_slab_return.py`, three
 programs: a peak of 200,000 objects with one in a thousand kept (more than

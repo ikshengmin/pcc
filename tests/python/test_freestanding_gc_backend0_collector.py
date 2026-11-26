@@ -35,13 +35,21 @@ OWNED_SYMBOLS = {
 }
 RAW_IMPORTS = {
     "pcc_gc_tracked_materialize",
+    "pcc_gc_tracked_count_flush",
+    "pcc_platform_abort",
+    "pcc_thread_world_reacquire_held",
+    "pcc_thread_world_release_held",
+    "py_decref",
+    "py_incref",
+    "py_user_del_pending",
+    "py_weakref_queue_gc0_batch",
+    "py_weakref_run_queued_callbacks",
     "pcc_gc_tracking_flag_mode",
     "pcc_gc_tracking_materialized",
     "pcc_gc_tracked_dematerialize",
     "pcc_gc_backend0_subset_active",
     "pcc_gc_backend0_subset_pairs",
     "pcc_gc_backend0_subset_count",
-    "pcc_gc_backend_selected",
     "py_gc_index_find",
     "pcc_gc_reclaim_retired_index_tables",
     "free",
@@ -56,17 +64,13 @@ RAW_IMPORTS = {
     "pcc_gc_default_table_unlock",
     "pcc_gc_default_unlink_tracked_node",
     "pcc_gc_frame_head",
-    "pcc_gc_load_ptr",
     "pcc_gc_note_object_freeing",
     "pcc_gc_root_count",
     "pcc_gc_root_slots",
     "pcc_gc_scheduler_root_head",
-    "pcc_gc_trace_continuation_roots",
     # Every mutator's mapped stack frames (a13c5b4a1), walked only while
     # GC0's frame roots are on.
-    "pcc_gc_visit_walked_stack_roots",
     "pcc_gc_visit_native_root_frames",
-    "pcc_gc_backend0_frame_roots_enabled",
     "pcc_resume_world",
     "pcc_platform_monotonic_us",
     "pcc_gc_record_collection_stw_pause",
@@ -100,7 +104,6 @@ RAW_IMPORTS = {
     "py_instance_dealloc",
     "py_user_del_dispatch",
     "py_weakref_invalidate",
-    "py_weakref_invalidate_gc0_candidates",
     "py_weakref_clear_gc0_candidates",
 }
 
@@ -171,7 +174,7 @@ def test_backend0_collector_preserves_ordering_and_graph_contract():
     assert "pcc_gc_backend0_visit_subtract(" in strict
     assert "pcc_gc_backend0_mark_reachable(" in strict
     assert "pcc_gc_backend0_clear_referents(obj)" in collect
-    assert collect.index("py_weakref_invalidate_gc0_candidates()") < collect.index(
+    assert collect.index("py_weakref_queue_gc0_batch(") < collect.index(
         "_maybe_finalize_unreachable("
     )
     assert collect.index("_maybe_finalize_unreachable(") < collect.index(

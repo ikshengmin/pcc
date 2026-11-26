@@ -34,6 +34,7 @@ from pcc.unsafe import (
     null,
     ptr_add,
     ptr_diff,
+    ptr_eq,
     ptr_is_null,
     store_i32,
     store_i64,
@@ -485,6 +486,10 @@ def py_gc_track(obj: c_ptr) -> None:
 # pcc_gc_young_log_chunks and reused after every reset. Exhaustion marks
 # this log incomplete; the next already-requested young collection uses the
 # exact object flags instead. Saturation itself must never request a collection.
+# Packed retired blocks from freestanding_gc_backend0_incremental.
+_HANDOVER_NEXT: i64 = 0
+_HANDOVER_COUNT: i64 = 8
+_HANDOVER_ITEMS: i64 = 16
 _YOUNG_CHUNK_NEXT: i64 = 0
 _YOUNG_CHUNK_USED: i64 = 8
 _YOUNG_CHUNK_OWNER_NEXT: i64 = 16
@@ -605,30 +610,68 @@ def _young_log_thread_exit() -> None:
 def _young_log_collect(out: c_ptr, capacity: i64, required: i64) -> i64:
     """Stopped world: the logged objects that are still live with every bit
     of ``required``. Counts with a zero capacity, as the enumerations do."""
+    return _visit_young_log(out, capacity, required, 0)
+
+
+@c_abi_export("pcc_gc_visit_young_log")
+def _visit_young_log(out, capacity: i64, required: i64, build_view: i64) -> i64:
     total: i64 = 0
     chunk = int_to_ptr(atomic_load_i64(global_addr("pcc_gc_young_log_chunks"), 0, "acquire"))
     while ptr_is_null(chunk) == 0:
-        used: i64 = load_i64(chunk, _YOUNG_CHUNK_USED)
-        index: i64 = 0
-        while index < used:
-            obj = load_ptr(chunk, _YOUNG_CHUNK_ITEMS + index * 8)
-            live: i64 = 0
-            if _pcc_gc_granule_is_object_start(obj) == 1:
-                live = 1
-            elif _pcc_gc_managed_pointer_index_contains(obj) != 0:
-                live = 1
-            if live != 0 and (load_i32(obj, 12) & required) == required:
+        total = _collect_logged_items(
+            ptr_add(chunk, _YOUNG_CHUNK_ITEMS), load_i64(chunk, _YOUNG_CHUNK_USED),
+            out, total, capacity, required, build_view,
+        )
+        if total < 0:
+            return -1
+        chunk = load_ptr(chunk, _YOUNG_CHUNK_NEXT)
+    block = global_load_ptr("pcc_gc_young_handover_blocks")
+    while ptr_is_null(block) == 0:
+        total = _collect_logged_items(
+            ptr_add(block, _HANDOVER_ITEMS), load_i64(block, _HANDOVER_COUNT),
+            out, total, capacity, required, build_view,
+        )
+        if total < 0:
+            return -1
+        block = load_ptr(block, _HANDOVER_NEXT)
+    return total
+
+
+@c_abi_export("pcc_gc_collect_logged_items")
+def _collect_logged_items(
+    items, used: i64, out, total: i64, capacity: i64, required: i64, build_view: i64,
+) -> i64:
+    index: i64 = 0
+    while index < used:
+        obj = load_ptr(items, index * 8)
+        live: i64 = 0
+        if _pcc_gc_granule_is_object_start(obj) == 1:
+            live = 1
+        elif _pcc_gc_managed_pointer_index_contains(obj) != 0:
+            live = 1
+        if live != 0 and (load_i32(obj, 12) & required) == required:
+            if build_view != 0:
+                inserted: i64 = _materialize_one(obj)
+                if inserted < 0:
+                    return -1
+                total = total + inserted
+            else:
                 if total < capacity:
                     store_ptr(out, total * 8, obj)
                 total = total + 1
-            index = index + 1
-        chunk = load_ptr(chunk, _YOUNG_CHUNK_NEXT)
+        index = index + 1
     return total
 
 
 @c_abi_export("pcc_gc_young_log_reset")
 def _young_log_reset() -> None:
     """Stopped world: clear active chains and free retired carrier chains."""
+    block = global_load_ptr("pcc_gc_young_handover_blocks")
+    global_store_ptr("pcc_gc_young_handover_blocks", null())
+    while ptr_is_null(block) == 0:
+        following = load_ptr(block, _HANDOVER_NEXT)
+        free(block)
+        block = following
     link = global_addr("pcc_gc_young_log_chunks")
     chunk = load_ptr(link, 0)
     while ptr_is_null(chunk) == 0:
@@ -786,6 +829,8 @@ def pcc_gc_tracked_materialize() -> i64:
     if atomic_load_i32(global_addr("pcc_gc_tracking_flag_mode"), 0, "acquire") == 0:
         return 0
     required: i64 = _TRACKED
+    borrowed_young: i64 = 0
+    outer_head = null()
     if atomic_load_i32(global_addr("pcc_gc_tracking_materialized"), 0, "acquire") != 0:
         if load_i32(global_addr("pcc_gc_tracking_young_view"), 0) == 0:
             count: i64 = 0
@@ -797,7 +842,8 @@ def pcc_gc_tracked_materialize() -> i64:
         # A borrower needs every tracked object (a gc-module snapshot from a
         # finalizer of a young collection): complete the young view in
         # place. Objects that already have a node are skipped below.
-        store_i32(global_addr("pcc_gc_tracking_young_view"), 0, 0)
+        borrowed_young = 1
+        outer_head = global_load_ptr("py_gc_head")
     elif (load_i32(global_addr("pcc_gc_backend0_young_request"), 0) != 0
           and atomic_load_i32(global_addr("pcc_gc_full_handover_active"), 0, "acquire") == 0):
         # Admission outside the stop can race the beginning of handover.
@@ -811,18 +857,17 @@ def pcc_gc_tracked_materialize() -> i64:
         # A complete view needs every tracked object as a node of its own:
         # a full collection in bounded stops gives up its nodes first.
         pcc_gc_backend0_full_abort()
-    logged: i64 = 0
     if (required != _TRACKED
             and atomic_load_i32(global_addr("pcc_gc_young_log_lost"), 0, "acquire") == 0):
-        logged = 1
-    small_cap: i64 = 0
-    large_cap: i64 = 0
-    if logged != 0:
-        small_cap = _young_log_collect(null(), 0, required)
-    else:
-        small_cap = pcc_allocator_object_cells_enumerate(null(), 0, required)
-        large_cap = pcc_gc_managed_pointer_index_enumerate(null(), 0, required)
-    tracing_cap: i64 = 0
+        # The logged inputs are stable under this stop. Validate and index
+        # once, without a count pass or an intermediate array of addresses.
+        atomic_store_i32(global_addr("pcc_gc_tracking_materialized"), 0, 1, "release")
+        added: i64 = _visit_young_log(null(), 0, required, 1)
+        if added < 0:
+            _release_tracked_view(0, null(), 0)
+        return added
+    small_cap: i64 = pcc_allocator_object_cells_enumerate(null(), 0, required)
+    large_cap: i64 = pcc_gc_managed_pointer_index_enumerate(null(), 0, required)
     # Count/fill runs under STW. Reject invalid sizes or changed enumeration
     # rather than clamp away tracked objects and publish a partial snapshot.
     if small_cap < 0 or large_cap < 0:
@@ -830,10 +875,9 @@ def pcc_gc_tracked_materialize() -> i64:
     if small_cap > 1152921504606846975 - large_cap:
         return -1
     capacity: i64 = small_cap + large_cap
-    if capacity > 1152921504606846975 - tracing_cap:
-        return -1
-    capacity = capacity + tracing_cap
     if capacity == 0:
+        if borrowed_young != 0:
+            store_i32(global_addr("pcc_gc_tracking_young_view"), 0, 0)
         atomic_store_i32(global_addr("pcc_gc_tracking_materialized"), 0, 1, "release")
         count_existing: i64 = 0
         node = global_load_ptr("py_gc_head")
@@ -844,59 +888,61 @@ def pcc_gc_tracked_materialize() -> i64:
     objects = malloc(capacity * 8)
     if ptr_is_null(objects):
         return -1
-    small: i64 = 0
-    large: i64 = 0
-    if logged != 0:
-        small = _young_log_collect(objects, small_cap, required)
-    else:
-        small = pcc_allocator_object_cells_enumerate(objects, small_cap, required)
+    small: i64 = pcc_allocator_object_cells_enumerate(objects, small_cap, required)
     if small != small_cap:
         free(objects)
         return -1
-    if logged == 0:
-        large = pcc_gc_managed_pointer_index_enumerate(
-            ptr_add(objects, small * 8), large_cap, required
-        )
+    large: i64 = pcc_gc_managed_pointer_index_enumerate(
+        ptr_add(objects, small * 8), large_cap, required
+    )
     if large != large_cap:
         free(objects)
         return -1
-    tracing: i64 = 0
     atomic_store_i32(global_addr("pcc_gc_tracking_materialized"), 0, 1, "release")
     added: i64 = 0
     index: i64 = 0
-    while index < small + large + tracing:
+    while index < small + large:
         obj = load_ptr(objects, index * 8)
-        shard: i64 = _tracked_shard_index(obj)
-        node = _tracked_node_pool_take(shard, 1)
-        if ptr_is_null(node):
-            free(objects)
-            pcc_gc_tracked_dematerialize(1)
-            return -1
-        store_i32(node, _NODE_SHARD, shard)
-        inserted: i64 = py_gc_index_insert(obj, node)
+        inserted: i64 = _materialize_one(obj)
         if inserted < 0:
-            _tracked_node_recycle(node)
             free(objects)
-            pcc_gc_tracked_dematerialize(1)
+            _release_tracked_view(0, outer_head, borrowed_young)
             return -1
-        if inserted == 0:
-            # The enumeration sources may overlap; the existing node already
-            # represents this object, so a duplicate is not an allocation error.
-            _tracked_node_recycle(node)
-        else:
-            store_ptr(node, _NODE_OBJECT, obj)
-            store_i64(node, _NODE_GC_REFS, 0)
-            store_i32(node, _NODE_REACHABLE, 0)
-            store_ptr(node, _NODE_PREV, null())
-            head = global_load_ptr("py_gc_head")
-            store_ptr(node, _NODE_NEXT, head)
-            if ptr_is_null(head) == 0:
-                store_ptr(head, _NODE_PREV, node)
-            global_store_ptr("py_gc_head", node)
-            added = added + 1
+        added = added + inserted
         index = index + 1
     free(objects)
+    if borrowed_young != 0:
+        store_i32(global_addr("pcc_gc_tracking_young_view"), 0, 0)
     return added
+
+
+@c_abi_export("pcc_gc_materialize_one")
+def _materialize_one(obj: c_ptr) -> i64:
+    shard: i64 = _tracked_shard_index(obj)
+    node = _tracked_node_pool_take(shard, 1)
+    if ptr_is_null(node):
+        return -1
+    store_i32(node, _NODE_SHARD, shard)
+    inserted: i64 = py_gc_index_insert(obj, node)
+    if inserted < 0:
+        _tracked_node_recycle(node)
+        return -1
+    if inserted == 0:
+        # The enumeration sources may overlap; the existing node already
+        # represents this object, so a duplicate is not an allocation error.
+        _tracked_node_recycle(node)
+    else:
+        store_ptr(node, _NODE_OBJECT, obj)
+        store_i64(node, _NODE_GC_REFS, 0)
+        store_i32(node, _NODE_REACHABLE, 0)
+        store_ptr(node, _NODE_PREV, null())
+        head = global_load_ptr("py_gc_head")
+        store_ptr(node, _NODE_NEXT, head)
+        if ptr_is_null(head) == 0:
+            store_ptr(head, _NODE_PREV, node)
+        global_store_ptr("py_gc_head", node)
+        return 1
+    return 0
 
 
 @c_abi_export("pcc_gc_tracked_dematerialize")
@@ -907,25 +953,35 @@ def pcc_gc_tracked_dematerialize(acquired: i64) -> None:
     Their deferred storage remains owned by the outermost table unlock, not
     by this view: a collector can still hold those dead-node pointers.
     """
-    if acquired <= 0:
-        return
+    if acquired > 0:
+        _release_tracked_view(1, null(), 0)
+
+
+@c_abi_export("pcc_gc_release_tracked_view")
+def _release_tracked_view(commit_ages: i64, outer_head, borrowed_young: i64) -> None:
+    """On failed widening, unlink only the prepended nodes and preserve the outer view."""
     if atomic_load_i32(global_addr("pcc_gc_tracking_materialized"), 0, "acquire") == 0:
         return
     young: i64 = load_i32(global_addr("pcc_gc_tracking_young_bit"), 0)
     node = global_load_ptr("py_gc_head")
-    global_store_ptr("py_gc_head", null())
-    while ptr_is_null(node) == 0:
+    global_store_ptr("py_gc_head", outer_head)
+    if ptr_is_null(outer_head) == 0:
+        store_ptr(outer_head, _NODE_PREV, null())
+    while ptr_eq(node, outer_head) == 0:
         next_node = load_ptr(node, _NODE_NEXT)
         obj = load_ptr(node, _NODE_OBJECT)
         if ptr_is_null(obj) == 0:
             py_gc_index_remove(obj)
-            if young != 0:
+            if commit_ages != 0 and young != 0:
                 # Examined by this collection: no longer young.
                 atomic_rmw_i32("and", obj, 12, ~young, "acq_rel")
         _tracked_node_recycle(node)
         node = next_node
+    if borrowed_young != 0:
+        return
     store_i32(global_addr("pcc_gc_tracking_young_view"), 0, 0)
-    _young_log_reset()
+    if commit_ages != 0:
+        _young_log_reset()
     atomic_store_i32(global_addr("pcc_gc_tracking_materialized"), 0, 0, "release")
 
 

@@ -322,9 +322,18 @@ CONCURRENT = PRELUDE + textwrap.dedent("""
     set_concurrent = extern("pcc_gc_backend0_full_set_concurrent", (c_int64,), c_int64)
 
 
-    def spin(limit):
+    shared_list = [None, None, None, None]
+    shared_dict = {0: None, 1: None, 2: None, 3: None}
+
+
+    def spin(worker, limit):
         rounds = 0
         while full_counter(0) == 0 and rounds < limit:
+            value = [worker, rounds]
+            shared_list[worker] = value
+            shared_dict[worker] = value
+            if shared_list[worker] is not value or shared_dict[worker] is not value:
+                raise RuntimeError("shared container lost its current value")
             churn(500)
             rounds += 1
 
@@ -339,10 +348,10 @@ CONCURRENT = PRELUDE + textwrap.dedent("""
             old[index] = None
             index += 2
         print("old garbage waits", len(finalized))
-        threads = [threading.Thread(target=spin, args=(8000,)) for _ in range(3)]
+        threads = [threading.Thread(target=spin, args=(i, 8000)) for i in range(3)]
         for thread in threads:
             thread.start()
-        spin(8000)
+        spin(3, 8000)
         for thread in threads:
             thread.join()
         print("cycle completed", full_counter(0) >= 1)
@@ -370,7 +379,7 @@ CONCURRENT = PRELUDE + textwrap.dedent("""
     """)
 
 CONCURRENT_OUTPUT = textwrap.dedent("""
-    concurrent before 0
+    concurrent before 1
     old garbage waits 0
     cycle completed True
     collector thread worked True

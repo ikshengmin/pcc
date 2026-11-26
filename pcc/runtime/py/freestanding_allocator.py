@@ -33,6 +33,7 @@ from pcc.unsafe import (
     load_i32,
     load_i64,
     load_ptr,
+    memset,
     mul_overflow_i64,
     null,
     page_alloc,
@@ -44,6 +45,7 @@ from pcc.unsafe import (
     ptr_is_null,
     process_exit,
     ptr_to_int,
+    stack_alloc,
     store_i64,
     store_i8,
     store_i32,
@@ -1061,7 +1063,14 @@ define_global_ptr_null("pcc_allocator_record_span_head")
 # count@32 (raw slabs), side-word array@40 and object-node record array@48
 # (object slabs, both allocated on first use), and @56 the next object span
 # that has a record array (pcc_allocator_record_span_first).
-SPAN_BYTES = 96
+SPAN_PARTIAL_MASK = 96
+SPAN_TRIM_NEXT = 104
+SPAN_TRIM_QUEUED = 112
+SPAN_BYTES = 120
+_OBJECT_SLAB_BYTES = 65536
+_DISCARD_UNIT = 16384
+_DISCARD_UNITS = 4
+_MAX_SLAB_CELLS = 1024
 SPAN_NODE_RECORDS_OFFSET = 48
 SPAN_RECORD_NEXT_OFFSET = 56
 # The central free cells of the object family. Every object slab keeps its
@@ -1077,7 +1086,7 @@ SPAN_RECORD_NEXT_OFFSET = 56
 # one. New objects so fill the slabs that are nearly full, and a sparse
 # slab is left to empty as its objects die: nothing is moved, and a slab
 # that only short-lived objects shared returns to the system. A slab that
-# holds one long-lived object stays.
+# holds long-lived objects can return its entirely free page ranges.
 SPAN_FREE_CELLS_OFFSET = 32
 SPAN_FREE_HEAD_OFFSET = 64
 SPAN_LIST_NEXT_OFFSET = 72
@@ -1097,6 +1106,8 @@ define_global_i64_array(
 )
 # Object slabs given back so far, carved again so far, and the bytes
 # given back at the moment.
+define_global_i64_array("pcc_allocator_sparse_trim_heads", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+define_global_i64("pcc_allocator_partial_discarded_bytes", 0)
 define_global_i64("pcc_allocator_object_slabs_discarded", 0)
 define_global_i64("pcc_allocator_object_slabs_reused", 0)
 define_global_i64("pcc_allocator_object_discarded_bytes", 0)
@@ -1185,6 +1196,9 @@ def _span_new(kind: i64, stride: i64, base) -> c_ptr:
     store_ptr(span, SPAN_LIST_NEXT_OFFSET, null())
     store_ptr(span, SPAN_LIST_PREV_OFFSET, null())
     store_i64(span, SPAN_LIST_OFFSET, 0)
+    store_i64(span, SPAN_PARTIAL_MASK, 0)
+    store_ptr(span, SPAN_TRIM_NEXT, null())
+    store_i64(span, SPAN_TRIM_QUEUED, 0)
     return span
 
 
@@ -1773,7 +1787,17 @@ def _span_place(span, index: i64) -> None:
         wanted = SPAN_LIST_SPARSE
     elif free_cells > 0:
         wanted = SPAN_LIST_DENSE
-    if load_i64(span, SPAN_LIST_OFFSET) != wanted:
+    previous: i64 = load_i64(span, SPAN_LIST_OFFSET)
+    # Only newly sparse spans and subsequent occupancy milestones need
+    # reconsideration. A full collection does not walk all object slabs.
+    if wanted == SPAN_LIST_SPARSE and (previous != wanted or free_cells == cells - 1
+                                       or free_cells == cells * 3 // 4):
+        if load_i64(span, SPAN_TRIM_QUEUED) == 0:
+            queue = ptr_add(global_addr("pcc_allocator_sparse_trim_heads"), index * 8)
+            store_ptr(span, SPAN_TRIM_NEXT, load_ptr(queue, 0))
+            store_ptr(queue, 0, span)
+            store_i64(span, SPAN_TRIM_QUEUED, 1)
+    if previous != wanted:
         _span_unlink(span, index)
         if wanted != 0:
             _span_link(span, index, wanted)
@@ -1793,6 +1817,9 @@ def pcc_allocator_take_small_object(usable: i64) -> c_ptr:
     if ptr_is_null(span) != 0:
         return null()
     cell = load_ptr(span, SPAN_FREE_HEAD_OFFSET)
+    if ptr_is_null(cell) != 0:
+        _restore_discarded_cells(span, usable)
+        cell = load_ptr(span, SPAN_FREE_HEAD_OFFSET)
     store_ptr(span, SPAN_FREE_HEAD_OFFSET, load_ptr(cell, 0))
     store_i64(span, SPAN_FREE_CELLS_OFFSET, load_i64(span, SPAN_FREE_CELLS_OFFSET) - 1)
     _span_place(span, index)
@@ -1821,6 +1848,98 @@ def pcc_allocator_put_small_object(ptr, usable: i64) -> None:
     _span_place(span, _object_magazine_class(usable))
 
 
+@c_abi_export("pcc_allocator_cell_page_mask")
+def _cell_page_mask(offset: i64, stride: i64) -> i64:
+    # Includes both the allocator prefix and the payload of a crossing cell.
+    first: i64 = offset // _DISCARD_UNIT
+    last: i64 = (offset + stride - 1) // _DISCARD_UNIT
+    return (1 << (last + 1)) - (1 << first)
+
+
+@c_abi_export("pcc_allocator_clear_partial_accounting")
+def _clear_partial_accounting(span) -> None:
+    mask: i64 = load_i64(span, SPAN_PARTIAL_MASK)
+    if mask != 0:
+        size: i64 = 0
+        while mask != 0:
+            size = size + (mask & 1) * _DISCARD_UNIT
+            mask = logical_shift_right_i64(mask, 1)
+        atomic_rmw_i64("sub", global_addr("pcc_allocator_partial_discarded_bytes"), 0, size, "relaxed")
+        store_i64(span, SPAN_PARTIAL_MASK, 0)
+
+
+@c_abi_export("pcc_allocator_restore_discarded_cells")
+def _restore_discarded_cells(span, usable: i64) -> None:
+    # A discarded range intersected only centrally free cells. No magazine
+    # could have taken one while its intrusive list entry was absent.
+    mask: i64 = load_i64(span, SPAN_PARTIAL_MASK)
+    stride: i64 = load_i64(span, 8)
+    slab = load_ptr(span, 16)
+    head = load_ptr(span, SPAN_FREE_HEAD_OFFSET)
+    index: i64 = 0
+    while index < load_i64(span, 24):
+        offset: i64 = index * stride
+        if (_cell_page_mask(offset, stride) & mask) != 0:
+            cell = ptr_add(slab, offset + 48)
+            pcc_allocator_initialize_small(cell, slab, usable)
+            store_i64(cell, GRANULE_MAPPING_SIZE_OFFSET, -1)
+            store_i64(cell, 8, FREE_LIST_POISON)
+            store_ptr(cell, 0, head)
+            head = cell
+        index = index + 1
+    store_ptr(span, SPAN_FREE_HEAD_OFFSET, head)
+    _clear_partial_accounting(span)
+
+
+@c_abi_export("pcc_allocator_trim_sparse_span_locked")
+def _trim_sparse_span_locked(span) -> None:
+    if load_i64(span, SPAN_LIST_OFFSET) != SPAN_LIST_SPARSE:
+        return
+    cells: i64 = load_i64(span, 24)
+    stride: i64 = load_i64(span, 8)
+    slab = load_ptr(span, 16)
+    central = stack_alloc(_MAX_SLAB_CELLS)
+    memset(central, 0, cells)
+    free_cell = load_ptr(span, SPAN_FREE_HEAD_OFFSET)
+    while ptr_is_null(free_cell) == 0:
+        index: i64 = (ptr_diff(free_cell, slab) - 48) // stride
+        store_i8(central, index, 1)
+        free_cell = load_ptr(free_cell, 0)
+
+    old: i64 = load_i64(span, SPAN_PARTIAL_MASK)
+    eligible: i64 = ((1 << _DISCARD_UNITS) - 1) & ~old
+    index: i64 = 0
+    while index < cells and eligible != 0:
+        pages: i64 = _cell_page_mask(index * stride, stride)
+        if load_i8(central, index) == 0 and (pages & old) == 0:
+            eligible = eligible & ~pages
+        index = index + 1
+
+    discarded: i64 = old
+    page: i64 = 0
+    while eligible != 0:
+        if (eligible & 1) != 0:
+            if page_discard(ptr_add(slab, page * _DISCARD_UNIT), _DISCARD_UNIT) == 0:
+                discarded = discarded | (1 << page)
+                atomic_rmw_i64("add", global_addr("pcc_allocator_partial_discarded_bytes"), 0, _DISCARD_UNIT, "relaxed")
+        eligible = logical_shift_right_i64(eligible, 1)
+        page = page + 1
+    if discarded == old:
+        return
+    # Old links on discarded pages are gone. Rebuild from the saved
+    # membership, leaving the dormant free cells represented by the mask.
+    head = null()
+    index = 0
+    while index < cells:
+        if load_i8(central, index) != 0 and (_cell_page_mask(index * stride, stride) & discarded) == 0:
+            cell = ptr_add(slab, index * stride + 48)
+            store_ptr(cell, 0, head)
+            head = cell
+        index = index + 1
+    store_ptr(span, SPAN_FREE_HEAD_OFFSET, head)
+    store_i64(span, SPAN_PARTIAL_MASK, discarded)
+
+
 @c_abi_export("pcc_allocator_trim_object_class_locked")
 def _trim_object_class_locked(index: i64) -> i64:
     """Give back the pages of this size class's empty slabs, all but the
@@ -1834,11 +1953,14 @@ def _trim_object_class_locked(index: i64) -> i64:
         span = load_ptr(span, SPAN_LIST_NEXT_OFFSET)
     while ptr_is_null(span) == 0:
         following = load_ptr(span, SPAN_LIST_NEXT_OFFSET)
+        if page_discard(load_ptr(span, 16), _OBJECT_SLAB_BYTES) != 0:
+            span = following
+            continue
+        _clear_partial_accounting(span)
         _span_unlink(span, index)
         store_ptr(span, SPAN_FREE_HEAD_OFFSET, null())
         store_i64(span, SPAN_FREE_CELLS_OFFSET, 0)
         _span_link(span, index, SPAN_LIST_DISCARDED)
-        page_discard(load_ptr(span, 16), 65536)
         discarded = discarded + 1
         span = following
     if discarded > 0:
@@ -1871,7 +1993,17 @@ def pcc_allocator_trim_objects() -> i64:
         if ptr_is_null(state) == 0:
             _object_magazine_drain_locked(state, index, usable, 0)
         discarded = discarded + _trim_object_class_locked(index)
+        queue = ptr_add(global_addr("pcc_allocator_sparse_trim_heads"), index * 8)
+        pending = load_ptr(queue, 0)
+        store_ptr(queue, 0, null())
         pcc_allocator_lock_release()
+        while ptr_is_null(pending) == 0:
+            pcc_allocator_lock_acquire()
+            following = load_ptr(pending, SPAN_TRIM_NEXT)
+            store_i64(pending, SPAN_TRIM_QUEUED, 0)
+            _trim_sparse_span_locked(pending)
+            pcc_allocator_lock_release()
+            pending = following
         usable = usable * 2
         index = index + 1
     return discarded
@@ -1911,13 +2043,15 @@ def _recarve_object_slab_locked(span, usable: i64, stride: i64, count: i64) -> c
 @c_abi_export("pcc_allocator_object_slab_counter")
 def pcc_allocator_object_slab_counter(which: i64) -> i64:
     """0: object slabs given back so far. 1: carved again so far. 2: bytes
-    given back at the moment."""
+    in fully discarded slabs; 3: bytes currently discarded in partial slabs."""
     if which == 0:
         return atomic_load_i64(global_addr("pcc_allocator_object_slabs_discarded"), 0, "relaxed")
     if which == 1:
         return atomic_load_i64(global_addr("pcc_allocator_object_slabs_reused"), 0, "relaxed")
     if which == 2:
         return atomic_load_i64(global_addr("pcc_allocator_object_discarded_bytes"), 0, "relaxed")
+    if which == 3:
+        return atomic_load_i64(global_addr("pcc_allocator_partial_discarded_bytes"), 0, "relaxed")
     return 0
 
 

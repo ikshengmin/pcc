@@ -14,6 +14,22 @@ extern int32_t pcc_gc_full_slice_pending;
 extern int32_t pcc_gc_backend4_auto_step_pending;
 /* pcc_gc_backend0_full_counter(3) reports the internal phase ordinal. */
 enum { SWEEP_PHASE = 4, HANDOVER_PHASE = 5 };
+static int continuation_roots(void) {
+    int32_t descriptor = 64;
+    PyObject *slots[64];
+    py_gc_init();
+    py_gc_disable();
+    PyObject *cycle = py_list_new(0);
+    py_list_append(cycle, cycle);
+    for (int i = 0; i < 64; i++) slots[i] = cycle;
+    void *frame = pcc_gc_register_continuation_root_node(&descriptor, slots);
+    if (!frame) return 30;
+    py_decref(cycle);
+    if (py_gc_collect() != 0 || py_list_len(cycle) != 1) return 31;
+    pcc_gc_unregister_continuation_root_node(frame);
+    return py_gc_collect() != 1;
+}
+
 static int mixed_cycle(void) {
     py_gc_init();
     py_gc_disable();
@@ -68,11 +84,13 @@ static int repeat_exact(void) {
 }
 
 int main(int argc, char **argv) {
+    if (argc == 2 && strcmp(argv[1], "continuation-roots") == 0) return continuation_roots();
     if (argc == 2 && strcmp(argv[1], "repeat-exact") == 0) return repeat_exact();
     if (argc == 2 && strcmp(argv[1], "mixed") == 0) return mixed_cycle();
     if (argc != 2 && argc != 3) return 2;
     const char *mode = argc == 3 ? argv[2] : "flat";
     const int grouped = strcmp(mode, "grouped") == 0;
+    const int mixed_log = strcmp(mode, "mixed-log") == 0;
     const int racing = strcmp(mode, "racing-young") == 0;
     const int disabled = strcmp(mode, "disabled") == 0;
     const int abort_sweep = strcmp(mode, "abort-sweep") == 0;
@@ -167,6 +185,13 @@ int main(int argc, char **argv) {
     for (int p=1; p<10; p++) printf(" %lld", (long long)peak[p]);
     puts("");
     int64_t demoted = pcc_gc_backend0_full_counter(2);
+    if (mixed_log) {
+        /* This mutator cycle is in the ordinary log, outside the retired
+         * full-view blocks. The exact verdict must include both sources. */
+        PyObject *fresh = py_list_new(0);
+        py_list_append(fresh, fresh);
+        py_decref(fresh);
+    }
     const int64_t before_reclaim = py_gc_get_count(0);
     int64_t before = pcc_gc_telemetry(PCC_GC_COUNTER_COLLECTION_STW_SUM_US);
     int lost = pcc_gc_young_log_lost;
@@ -179,5 +204,6 @@ int main(int argc, char **argv) {
         (long long)reclaimed, (long long)py_gc_get_count(0));
     const int64_t expected = (int64_t)n + 1 + (grouped ? ((int64_t)n + 255) / 256 : 0);
     return pcc_gc_backend0_full_counter(0) != 1 || demoted != expected
-        || before_reclaim != expected || reclaimed != expected || py_gc_get_count(0) != 0;
+        || lost != 0 || before_reclaim != expected + mixed_log
+        || reclaimed != expected + mixed_log || py_gc_get_count(0) != 0;
 }

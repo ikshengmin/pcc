@@ -90,6 +90,7 @@ py_list_count = extern("py_list_count", (c_ptr, c_ptr), c_int64)
 py_list_reverse = extern("py_list_reverse", (c_ptr,), c_void)
 
 py_incref = extern("py_incref", (c_ptr,), c_void)
+pcc_gc_init_admitted_ptr_locked = extern("pcc_gc_init_admitted_ptr_locked", (c_ptr, c_ptr), c_int64)
 pcc_gc_try_init_ptr_locked = extern("pcc_gc_try_init_ptr_locked", (c_ptr, c_ptr), c_int64)
 py_decref = extern("py_decref", (c_ptr,), c_void)
 py_obj_eq = extern("py_obj_eq", (c_ptr, c_ptr), c_int32)
@@ -752,8 +753,8 @@ def _container_fast_admitted() -> int:
     return load_i32(global_addr("pcc_gc_refcount_atomic"), 0)
 
 
-def _container_fast_still_admitted() -> int:
-    """The locked recheck: a GC0 transition reserves -1 before switching."""
+def _append_mode_admitted_locked() -> int:
+    """Admit the atomic initialization once for this locked append transaction."""
     if atomic_load_i64(global_addr("pcc_gc_foreign_lease_active"), 0, "acquire") < 0:
         return 0
     if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
@@ -765,14 +766,10 @@ def _container_fast_still_admitted() -> int:
 
 def _append_existing_capacity_gc0(list_slot, item_slot) -> int:
     """One nonparking transaction for an existing private append position."""
-    if _container_fast_admitted() == 0:
-        return 0
     locked = load_ptr(list_slot, 0)
     _list_lock(locked)
-    # Configuration reserves -1 before dropping this lock for a transition.
-    # Recheck the selected backend too: the atomic admission flag is updated
-    # later in that transition, so its pre-lock value is not sufficient.
-    if _container_fast_still_admitted() == 0:
+    # Admit once under the lock that also protects length and the new slot.
+    if _append_mode_admitted_locked() == 0:
         _list_unlock(locked)
         return 0
     # Nonmoving GC0 and the graph lock protect these existing roots and the
@@ -791,7 +788,7 @@ def _append_existing_capacity_gc0(list_slot, item_slot) -> int:
         _list_unlock(locked)
         return _append_grow_gc0(list_slot, item_slot, full_items, capacity)
     items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
-    result: int = pcc_gc_try_init_ptr_locked(ptr_add(items, length * C_POINTER_SIZE), item_slot)
+    result: int = pcc_gc_init_admitted_ptr_locked(ptr_add(items, length * C_POINTER_SIZE), item_slot)
     if result != 0:
         store_i64(lst, PYLISTOBJECT_LENGTH_OFFSET, length + 1)
     _list_unlock(locked)
@@ -816,7 +813,7 @@ def _append_grow_gc0(list_slot, item_slot, old_items, old_capacity: int) -> int:
         return 0
     locked = load_ptr(list_slot, 0)
     _list_lock(locked)
-    if _container_fast_still_admitted() == 0:
+    if _append_mode_admitted_locked() == 0:
         _list_unlock(locked)
         free(new_items)
         return 0
@@ -837,7 +834,7 @@ def _append_grow_gc0(list_slot, item_slot, old_items, old_capacity: int) -> int:
     memset(ptr_add(new_items, length * C_POINTER_SIZE), 0, (new_capacity - length) * C_POINTER_SIZE)
     store_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET, new_items)
     store_i64(lst, PYLISTOBJECT_CAPACITY_OFFSET, new_capacity)
-    result: int = pcc_gc_try_init_ptr_locked(ptr_add(new_items, length * C_POINTER_SIZE), item_slot)
+    result: int = pcc_gc_init_admitted_ptr_locked(ptr_add(new_items, length * C_POINTER_SIZE), item_slot)
     if result != 0:
         store_i64(lst, PYLISTOBJECT_LENGTH_OFFSET, length + 1)
     _list_unlock(locked)

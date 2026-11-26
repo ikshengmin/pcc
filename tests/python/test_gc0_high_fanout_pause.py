@@ -22,7 +22,7 @@ def test_large_old_list_is_scanned_in_multiple_stops(
 
 @pytest.mark.parametrize(
     "layout",
-    ["flat", "grouped", "mixed", "sliced", "racing-young", "disabled", "abort-sweep", "repeat-exact"],
+    ["flat", "large-handover", "mixed-log", "grouped", "mixed", "continuation-roots", "sliced", "racing-young", "disabled", "abort-sweep", "repeat-exact"],
 )
 def test_large_unreachable_component_survives_handover_until_exact_reclaim(
     tmp_path: Path, pcc_runtime_archive: Path, layout: str,
@@ -32,8 +32,10 @@ def test_large_unreachable_component_survives_handover_until_exact_reclaim(
     build = link_c_harness_bounded(fixture, binary, runtime_archive=pcc_runtime_archive)
     assert build.returncode == 0, build.stdout + build.stderr
     args = [str(binary), "20000"]
-    if layout in ("mixed", "repeat-exact"):
+    if layout in ("mixed", "repeat-exact", "continuation-roots"):
         args = [str(binary), layout]
+    elif layout == "large-handover":
+        args = [str(binary), "160000"]
     elif layout != "flat":
         args.append(layout)
     run = subprocess.run(args, capture_output=True, text=True, timeout=30)
