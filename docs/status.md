@@ -1204,7 +1204,7 @@ in the relevant section or issue and removes the entry.
    No production or gate change; integrated hosted CI UNRUN.
 
    Claims:
-   - none
+   - External class annotations actual runtime method dispatch correctness: Codex, Linux, 2026-11-26T20:43Z, area external-class-dispatch
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
