@@ -2426,7 +2426,20 @@ in the relevant section or issue and removes the entry.
    hashes; independent G++ 14.2 agrees. Strict whole-current-runtime fixture
    is added, hosted execution pending. Unchanged NumPy halffloat.cpp now
    passes stdlib.h acquisition and stops on string.h (same original SHA).
-   Next NumPy C++: owned string.h spelling, then real generated config.
+   C++ follow-up: owned `<string.h>` now selects the existing `<cstring>`
+   canonical declarations and exact global/std search overload identities;
+   the former explicit missing-header test now verifies both include orders,
+   repeated inclusion, no fake-libc fallback, and const/linkage identity.
+   The mutable search still emits its real unresolved C++ provider, not
+   a const-erasure or substitute C call. 63 focused host tests passed.
+   Actual Linux ELF const `strchr`, `memcmp`, and `strlen` returned 42
+   with empty streams using a bounded owned runtime archive whose current
+   `freestanding_mem_str` source/object hashes matched; independent G++
+   14.2 gives the same result. Strict complete runtime fixture added,
+   hosted execution pending. Unchanged NumPy halffloat.cpp now advances
+   from missing string.h to missing errno.h (same original SHA), not an
+   emitted object. Next NumPy C++: owned errno.h spelling, then real
+   generated configuration; no fabricated headers or production claim.
    The opt-in Go source probe reached `internal/bytealg/bytealg.go:9:2`; no dependency-closure executable exists.
    See the
    [closure audit](investigations/go-math-bits-original-closure-frontier.md).
@@ -2464,7 +2477,7 @@ in the relevant section or issue and removes the entry.
    neither an external token nor a caller-provided crate named core waives it.
 
    Claims:
-   - Owned C++ string.h spelling and const-correct search declarations (NumPy halffloat next blocker): Codex, Linux, 2026-11-26T17:04Z, area frontend-cpp
+   - none
 5. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:

@@ -7,8 +7,10 @@ runtime. Native/reference cases deliberately do not call unresolved routines.
 import hashlib
 import json
 import os
+import platform
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -38,8 +40,8 @@ def parse_header(tail=''):
     return parser
 
 
-def compile_public(source):
-    return CEvaluator(backend='self', target_triple=TARGET).compile_translation_units(
+def compile_public(source, target=TARGET):
+    return CEvaluator(backend='self', target_triple=target).compile_translation_units(
         [TranslationUnit('cstring.cpp', None, source)], use_system_cpp=False,
         frontend_opt_level=0, use_compile_cache=False,
     )
@@ -119,11 +121,27 @@ def test_const_and_ambiguous_search_diagnostics(source, code):
     '#include <string.h>\n#include <cstring>\n',
 ))
 def test_c_compatibility_header_is_not_silently_used_as_cpp_string_header(headers):
-    # The owned C compatibility string.h currently pulls _fake_typedefs.h and
-    # does not supply the C++ overload/wrapper contract. It is deliberately not
-    # in the default C++ search path; this is an explicit unimplemented boundary.
-    with pytest.raises(RuntimeError, match='header not found: string\\.h'):
-        preprocess_cpp(headers, target_triple=TARGET)
+    # Both spellings use the owned C++ header and the same declarations. Never
+    # import the fake C-only compatibility header, which loses the C++ search
+    # overloads' const correctness and their distinct ABI/linkage identities.
+    text = preprocess_cpp(headers + '#include <string.h>\n', target_triple=TARGET)
+    assert '_fake_typedefs.h' not in text
+    assert text.count('using size_t') == 1
+    parser = CppParser(target_triple=TARGET)
+    parser.parse(text, 'string-declarations.cpp')
+    standard = parser.scope.names['std'].namespace_scope.names
+    for name in NAMES:
+        direct = parser.scope.names[name].overloads
+        assert len(direct) == (2 if name in SEARCH else 1)
+        assert len(standard[name].overloads) == len(direct)
+        assert all(a is b for a, b in zip(direct, standard[name].overloads))
+        assert direct[0].language_linkage == 'C' and direct[0].c_name == name
+        assert all(not symbol.defined for symbol in direct)
+        if name in SEARCH:
+            assert direct[1].language_linkage == 'C++' and direct[1].c_name != name
+            base = 'void' if name == 'memchr' else 'char'
+            assert direct[0].dtype == PointerType(ConstType(base))
+            assert direct[1].dtype == PointerType(base)
 
 
 @pytest.mark.parametrize('declaration', (
@@ -140,6 +158,57 @@ def test_raw_c_search_signature_does_not_erase_cpp_const_return(declaration):
     with pytest.raises(CppDiagnostic) as error:
         parse_header(declaration)
     assert error.value.code == 'cpp.return-type-overload'
+
+
+STRING_H_PROGRAM = (
+    '#include <string.h>\n#include <cstring>\n'
+    'int main(){const char* p=::strchr("array",\'r\');if(p==nullptr)return 1;'
+    'if(::memcmp(p,"rray",4)!=0)return 2;return int(std::strlen(p))+38;}'
+)
+
+
+def test_string_h_public_calls_keep_exact_const_and_mutable_linkage(monkeypatch):
+    def forbidden(*args, **kwargs):
+        pytest.fail('owned string.h compiler invoked external process')
+    monkeypatch.setattr(subprocess, 'Popen', forbidden)
+    compiled = compile_public(STRING_H_PROGRAM)
+    obj = emit_owned_object(compiled[0][1], TARGET)
+    assert _object_symbol_sets(parse_relocatable(obj))[1] == frozenset(('strchr', 'memcmp', 'strlen'))
+    # Mutable search has a distinct C++ declaration, not a fabricated C ABI
+    # implementation or a cast removing const. Its provider remains unresolved.
+    source = '#include <string.h>\nchar* probe(char* p){return ::strchr(p,0);}'
+    pp = preprocess_cpp(source, target_triple=TARGET)
+    parser = CppParser(target_triple=TARGET)
+    parser.parse(pp)
+    selected = next(item for item in parser.scope.names['strchr'].overloads
+                    if item.language_linkage == 'C++')
+    mutable = compile_public(source)
+    image = emit_owned_object(mutable[0][1], TARGET)
+    assert _object_symbol_sets(parse_relocatable(image))[1] == frozenset((selected.c_name,))
+    with pytest.raises(CppDiagnostic) as error:
+        CppParser(target_triple=TARGET).parse(preprocess_cpp(
+            ' #include <string.h>\nchar* bad(const char* p){return ::strchr(p,0);}',
+            target_triple=TARGET))
+    assert error.value.code == 'cpp.invalid-conversion'
+
+
+def run_string_h_native(directory, archive, monkeypatch, target):
+    from pcc.backend.owned_elf_link import link_inputs
+    obj, exe = directory / 'string-header.o', directory / 'string-header'
+    with monkeypatch.context() as guard:
+        guard.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('external compiler/linker invoked'))
+        unit = compile_public(STRING_H_PROGRAM, target)
+        obj.write_bytes(emit_owned_object(unit[0][1], target))
+        link_inputs(target=target, output=str(exe), objects=[str(obj)], archives=[str(archive)])
+    record_execution(exe, Execution(42, b'', b''))
+
+
+@pytest.mark.integration
+@pytest.mark.pcc_gate(unavailable=None if sys.platform == 'linux' and platform.machine().lower() in (
+    'amd64', 'x86_64', 'aarch64', 'arm64') else 'requires owned Linux string runtime execution')
+def test_string_h_const_search_compare_and_length_execute(tmp_path, pcc_runtime_archive, monkeypatch):
+    from pcc.frontends.python.pipeline_targets import host_target_triple
+    run_string_h_native(tmp_path, pcc_runtime_archive, monkeypatch, host_target_triple())
 
 
 NO_CALL_CASES = (
