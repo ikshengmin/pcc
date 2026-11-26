@@ -2552,8 +2552,28 @@ in the relevant section or issue and removes the entry.
    then tackle summary-worker repeated effect export decode and provably
    root-independent class reconstruction. Maintain same guards.
 
+   Native reader replay follow-up: same candidate static x86 Linux ELF
+   (actual 55-module production reader fixture from the preceding round),
+   same frozen real worker_resource_plan root, v1 vs v2 only. Five alternating
+   fresh-process CPU/RSS pairs: median CPU7.00259 ->2.13842 s (-69.5%, 5/5),
+   wall7.03230 ->2.13915 s; peak RSS339,544 ->288,212 KiB (-15.1%, 5/5).
+   Unchanged small-v2 control .03680 CPU s/23,412 KiB, some competing host
+   compilation noise; exact selected root counts 1 module, 1,193 types,
+   1,453 base keys. Guard COMPLETE51.0s/max344,498,176B. Separate same-ELF
+   full semantic JSON output comparison byte-identical SHA256
+   57bbd37a2210f9f4663d8c81dcc535aa0927095a03c6042f4f610567792cde5c.
+   Native owner-level evidence, not whole Stage2 timing; CI checkpoint
+   6cbafc4a covers the production DAG.
+   ARM full CI artifact15135712330: Stage1 actual1735.907s/4,598,730,752B
+   peak, Stage2 sampled1781.508s/4,295,376,896B peak then timeout; three
+   codegen modules done, class_gen active. Export360.751 vs51.847s,
+   summary103.486 vs12.861s, preload117.674 vs15.835s. Stage2 wall parity
+   failed all non-Mac platforms. Next: profile actual summary-worker effect
+   graph accesses and remove repeated whole-graph decode where exact
+   effect-summary bytes and resource guards agree.
+
    Claims:
-   - Stage2 native indexed reader v1/v2 replay measurement: Codex, Linux, 2026-11-26T16:13Z, area selfhost
+   - none
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
