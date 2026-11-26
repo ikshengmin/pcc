@@ -2083,7 +2083,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
-   - Linux actual handler lifecycle call attribution (single collector, separate from Stage1 codegen): Codex, Linux, 2026-11-26T15:50Z, area runtime-gc
+   - Linux handler blocker: builtin virtual-thread alias before compiled facade dispatch (method_call_expression_lowering.py, disjoint generator files): Codex, Linux, 2026-11-26T15:55Z, area frontend-python
    - J2 Stage1 IR reduction: consolidate generator frame-save programs with identical slot/flag plans, disjoint from runtime and preload; Claude resting per maintainer, previous claim retained: Codex, Linux, 2026-11-26T15:50Z, area frontend-python
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
