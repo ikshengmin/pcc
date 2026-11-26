@@ -291,10 +291,51 @@ def drop_fallthrough_uncond_branches(fragments, semantics, span):
     return fragments.drop_fallthrough_branches(span)
 
 
+_NOP_WORD = 0xD503201F
+
+
 def drop_loop_separator_nops(fragments, semantics, span):
+    """``drop_loop_separator_nops_records`` over the raw module records.
+
+    Every record is one event; only a NOP word asks for the previous
+    instruction's opcode, so the scan costs one record read per event
+    instead of a validated opcode and label lookup for each.
+    """
     from .self_backend_aarch64_typed_pass_context import TypedPassContext
+    from .self_backend_aarch64_fragments import EMISSION_RECORD_EMPTY, EMISSION_RECORD_LABEL
     ctx = TypedPassContext(fragments, semantics)
-    return ctx.write_span(drop_loop_separator_nops_records(ctx, ctx.read_span(span)))
+    records = ctx.read_span(span)
+    raw = fragments.records
+    names = fragments.symbol_names
+    out = []
+    previous = -1
+    count = len(records)
+    index = 0
+    while index < count:
+        record_id = records[index]
+        code = raw.get4_unchecked(record_id)
+        if code.second == EMISSION_RECORD_EMPTY:
+            out.append(record_id)
+            index += 1
+            continue
+        if code.second >= 0 and code.first == _NOP_WORD and previous >= 0:
+            prior = raw.get4_unchecked(previous)
+            if prior.second >= 0 and not _is_call(ctx.opcode(previous)):
+                following = index + 1
+                while following < count and raw.get4_unchecked(records[following]).second == EMISSION_RECORD_EMPTY:
+                    following += 1
+                if following < count:
+                    after = raw.get4_unchecked(records[following])
+                    if after.second == EMISSION_RECORD_LABEL:
+                        name = names[after.first]
+                        if name.startswith("L_pcc_smap_") and not name.startswith("L_pcc_smap_end_"):
+                            # The previous instruction stays the previous one.
+                            index += 1
+                            continue
+        out.append(record_id)
+        previous = record_id
+        index += 1
+    return ctx.write_span(out)
 
 
 def drop_unreferenced_empty_local_labels(fragments, semantics, span, metadata_labels=()):

@@ -680,8 +680,20 @@ def fold_sign_extending_load(fragments, semantics, span):
             a = p.rid(index)
             b = p.rid(index + 1) if index + 1 < len(p.ids) else -1
             replacement = -2
-            load_op = p.op(a)
-            if b >= 0 and load_op in ("ldr", "ldur") and p.op(b) == "sxtw":
+            # Words first: only an LDR/LDUR W (unsigned or unscaled offset)
+            # followed by SXTW (SBFM X, #0, #31) can match, so the validated
+            # opcode lookups below run for those pairs alone.
+            load_op = ""
+            if b >= 0:
+                code_a = p.code(a)
+                word_a = code_a.first
+                if code_a.second >= 0 and (
+                    (word_a & 0xFFC00000) == 0xB9400000 or (word_a & 0xFFE00C00) == 0xB8400000
+                ):
+                    code_b = p.code(b)
+                    if code_b.second >= 0 and (code_b.first & 0xFFFFFC00) == 0x93407C00:
+                        load_op = p.op(a)
+            if load_op in ("ldr", "ldur") and p.op(b) == "sxtw":
                 t = p.tokens(a)
                 narrow, wide, source = p.register(a, 0), p.register(b, 0), p.register(b, 1)
                 if (narrow >= 0 and wide >= 0 and source == narrow
