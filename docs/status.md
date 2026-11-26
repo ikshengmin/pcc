@@ -866,7 +866,7 @@ in the relevant section or issue and removes the entry.
    No waiver or claim of current integrated hosted pass.
 
    Claims:
-   - none
+   - C++ reference defaulted array value-init padding oracle exact source/standard attribution: Codex, Linux, 2026-11-26T19:13Z, area ci-cpp-padding-reference
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
