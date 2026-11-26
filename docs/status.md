@@ -2235,7 +2235,7 @@ in the relevant section or issue and removes the entry.
    [Phase investigation](investigations/stage2-worker-budget-parity-45643044565.md).
 
    Claims:
-   - none
+   - AArch64 typed publication compile-time optimization: Codex, Linux, 2026-11-26T15:02Z, area backend
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
