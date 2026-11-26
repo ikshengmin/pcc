@@ -181,8 +181,8 @@ landed: actual native class-preload private compact wire `16f2386b`
 compiler typed CFG `81af95e8`, exact four-platform worker-prior test
 fix `bd763672`, and unchanged NumPy C++ frontier header fixes
 `b53d7e49`, `54ba01e6`, `9ea658c7`, `fdbe7161`. This non-skip receipt
-queues a distinct integrated snapshot covering all these units; existing
-runs remain intact. Do not claim any hosted lane green from focused tests. The latest completed
+queued [run 45868668374](https://github.com/ikshengmin/pcc/actions/runs/45868668374),
+exact head `9223aca1`, observed pending; existing runs remain intact. Do not claim any hosted lane green from focused tests. The latest completed
 [checkpoint comparison](investigations/checkpoint-validation-45427972345.md)
 keeps that baseline: candidate `7ec14d388` has exact test regressions
 [#19](https://github.com/ikshengmin/pcc/issues/19) and
