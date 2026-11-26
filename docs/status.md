@@ -875,9 +875,35 @@ in the relevant section or issue and removes the entry.
    (`5c4d10927`, py_gen merged by hand), the 24 generator test files have
    none against `94f786b16`. Not run: the heavy
    files over the 2.5 GiB cap, integration, pcc1 and Linux.
-   Remaining 4b: `py_obj_ops_dispatch` and `py_class`. (c) J1 merged and
-   released them (no J1 claim line on 2026-11-26T01:46Z), which settles the
-   waiting-list question about the overlap.
+   Stability check after (c) J1 and P0 landed (Claude, local Mac,
+   2026-11-26): `pcc_perf.py arm stable-e7c` at `e7c3d4947` (2.5 GiB tree
+   cap, peak 1.68 GiB) built the runtime and both handler programs, and all
+   59 smoke runs (28 primitives at one and four workers, and the two
+   programs) gave CPython's results. `table stable-e7c`, load 3.0 on 10
+   cores: 59,799 req/s with one worker and 153,313 with four, 20.5 and
+   27.8 us of processor time a request. One screening run without a
+   control, so not an A/B result; the 2026-11-25 arm measured 55,124 and
+   139,821 under load 7.3.
+   (d) U4's `py_obj_ops_dispatch` (Claude, local Mac, `ea05029e0`, tests
+   `4e764ca9d`): truth of a root slot, bitwise dispatch, the sync and
+   bound-method constructors, the bound list/method/property/descriptor
+   result handoffs drop their pins and take through `pcc_gc_take_slot`;
+   `_bitwise_pin_result`, `_py_sync_pin` and `_py_sync_unpin` are gone, and
+   no graph-lock call is left in the module. It compiles alone (158 calls
+   to `pcc_gc_take_slot`, none to `pcc_gc_take_pinned_slot`, `pcc_gc_pin`
+   or `pcc_gc_unpin`). Removed as pin-only (the user's rule
+   "改写或删并列出"): `test_result_alias_preserves_an_existing_external_pin`.
+   The string slot model binds `pcc_gc_take_slot` (the find adapters reuse
+   it). Host pcc0, by node id against HEAD `e7c3d4947`, the 35 files naming
+   the module or its models and the string model's importers have no new
+   failing node
+   (`test_binary_repeat_owners.py::test_fresh_results_run_the_root_barrier_while_address_leased`
+   and `test_detached_str_search_methods.py::test_string_descriptor_runtime_strict_ir`
+   fail on HEAD as well). Not run: `test_py_multi_file_bootstrap_shim.py`
+   (over the 2.5 GiB cap), integration, pcc1 and Linux.
+   Remaining 4b: `py_class` (U5). (c) J1 merged and released it and
+   `py_obj_ops_dispatch` (no J1 claim line on 2026-11-26T01:46Z), which
+   settles the waiting-list question about the overlap.
    Correction: `pcc_gc_backend4_auto_step_pending` is the one collector's
    live automatic-collection request (young and full collections are
    scheduled through it), not a leftover; it may only be renamed, before
@@ -885,8 +911,7 @@ in the relevant section or issue and removes the entry.
    Next for (d): the plan Claude runs without asking between units
    (the user, 2026-11-26: "你这么继续继续的有点需要我参与。能plan一下吗").
    Done: steps 1, 2 (pins outside the take protocol), 4a, 4b batches 1-2,
-   U1, U2, U3 and U4's `py_func`. U4's `py_obj_ops_dispatch` and U5 are
-   next, now that (c) J1 released their files.
+   U1, U2, U3 and U4. U5 is next.
    Units, in order, each one claim, commit and push (runtime first, then
    its test models, then the status result):
    (U1) 4b batch 3: py_obj, py_coroutine, py_obj_ops_compare, py_tempfile
@@ -1054,7 +1079,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (d) plan U1-U14 (the units under "Next for (d)", in order): Claude, macOS, 2026-11-26T01:48Z, area runtime-codegen
+   - (d) plan U1-U14 (the units under "Next for (d)", in order): Claude, macOS, 2026-11-26T02:12Z, area runtime-codegen
 
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
