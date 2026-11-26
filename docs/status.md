@@ -5410,8 +5410,61 @@ in the relevant section or issue and removes the entry.
    and malformed fallback, exact output/native CPU/RSS; no change
    before actual counts, no unqualified full Stage2 claim.
 
+   Rebound-name no-cache exact type dispatch, streaming fixture DENIED
+   under peak RSS gate (no production delta).
+   Actual old source read-only method owner COMPLETE80.502s/
+   841,580,544B, same original57,304,557B assembly SHA256
+   7165f5ed623388294453b9a74154db3e9562185daf3d9f446b03c35811777e16.
+   509 distinct(body,ident) pairs across156 exact bodies, no repeated
+   pair,16 true,124,783 nodes;2,875,180 generic field probes,75,241
+   hits. Exact Name29,302/1,084,174 absent probes (37.7%);
+   Attr11,868/439,116 probes(11,868 hits); Call9,792/362,304
+   (29,376 hits); StrLit5,373/198,801; If2,773/102,363;
+   Compare/BinOp3,647/134,939. No custom nodes in actual projection,
+   but preserve generic subclass/custom and malformed known-field
+   handling. No result cache (zero repeat pairs), no retained AST.
+   Original414,110,018B typed V1 snapshots preserved exact raw
+   gzip23,815,514B one-by-one SHA-verified; compact structural V2
+   1,988,429B neutralizes only unscanned ty/span/annotation/return_ty,
+   NOT full typed metadata equivalence. All509 exact legacy results
+   and original per-query node/probe counts checked before/after
+   compact V2 roundtrip. Receipt SHA256
+   99e893409fd845df0a56c4801fd7a5cdca154b719fca20f3dd6350c24a7c75cf.
+   Test-first exact preimage2 red/5 pass, candidate seven new pass;
+   existing recursive parameter tests six preexisting stale
+   GC-frame symbol regex fails, exact untouched preimage and all six
+   baseline/candidate emitted function bodies byte-identical. Candidate
+  28 pass/6 fail vs existing baseline21 pass/6 fail. Exact current
+   626-module contextual changed cpy_call_lowering capture74 funcs/
+   45,786 inst, zero fallback/no libpython edge. Actual same old
+   route candidate COMPLETE62.432s/846,622,720B concurrent diagnostic,
+   identical assembly, all509 results/124,783 nodes/75,241 hits
+   unchanged, probes2,875,180->380,777 (-86.756% actual call count,
+   not time). Real exact old/new extracted scanner bodies, same
+   fixture path and independent source-matched static native
+   binaries, actual py_ast classes and V2 reader, custom Name subclass
+   fallback and actual Assign target contract pass both. Streaming
+   per-body decode/scan, exclusive five alternating control triples:
+   all15 exact509 ordered results; inner4.592118->.799263s
+   (-82.595%,5/5,control+2.801%); full CPU7.594873->3.701872s
+   (-51.258%,5/5,control+3.064%), wall7.644570->3.747059s
+   (-50.984%,5/5,control+3.028%). RSS38,612->39,136KiB
+   (+524KiB/+1.357%,0/5 wins, control+324KiB/+0.839%).
+   Harness COMPLETE98.012s, raw receipt SHA256
+   1c4d5ed00be71a371cd5cd9c48a9f473a53d39eef1349009f441e470aafa4a78.
+   Memory gate fails despite strong CPU; no production push.
+   Separate approved actual-lifetime owner experiment may preload
+   all compact2MB bodies before scanning because real codegen retains
+   typed AST graph before method queries (stream fixture artificially
+   interleaves decode allocations and scans). Same exact source
+   candidate, exact input/output/order, separate RSS mapping
+   attribution and five paired/control triples required; disclose
+   this failed streaming gate regardless. No cherry-picking or
+   blanket Stage2 claim. CI raw free-function validation takes next
+   heavy slot; source-only prep until release.
+
    Claims:
-   - Stage2 rebound-name AST scan attribution: Codex, Linux, 2026-11-26T22:05Z, area selfhost
+   - Stage2 rebound AST preloaded lifetime experiment: Codex, Linux, 2026-11-26T22:36Z, area selfhost
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
