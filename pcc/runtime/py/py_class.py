@@ -181,6 +181,7 @@ pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_
 pcc_gc_publish_owned_root = extern("pcc_gc_publish_owned_root", (c_ptr,), c_int64)
 pcc_gc_root_copy_lease_prepare_locked = extern("pcc_gc_root_copy_lease_prepare_locked", (c_ptr, c_ptr, c_int64, c_ptr), c_int64)
 pcc_gc_root_copy_lease_finish = extern("pcc_gc_root_copy_lease_finish", (c_ptr,), c_void)
+pcc_gc_store_root_plan_finish = extern("pcc_gc_store_root_plan_finish", (c_ptr,), c_void)
 pcc_gc_resolve_root_slot_unlocked = extern("pcc_gc_resolve_root_slot_unlocked", (c_ptr, c_int64), c_ptr)
 py_obj_getattr = extern("py_obj_getattr", (c_ptr, c_ptr), c_ptr)
 py_func_call_kwargs = extern("py_func_call_kwargs", (c_ptr, c_ptr, c_ptr), c_ptr)
@@ -7053,10 +7054,10 @@ def py_obj_special_present(value, name) -> int:
 
 
 pcc_class_namespace_acquire_slots = extern(
-    "pcc_class_namespace_acquire_slots", (c_ptr, c_ptr, c_ptr, c_ptr, c_ptr), c_int64
+    "pcc_class_namespace_acquire_slots", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64
 )
 pcc_class_namespace_install_slots = extern(
-    "pcc_class_namespace_install_slots", (c_ptr, c_ptr, c_ptr, c_ptr, c_ptr, c_ptr, c_ptr), c_int64
+    "pcc_class_namespace_install_slots", (c_ptr, c_ptr, c_ptr, c_ptr, c_ptr, c_ptr), c_int64
 )
 pcc_gc_store_ptr_plan_init = extern(
     "pcc_gc_store_ptr_plan_init", (c_ptr, c_ptr, c_int64), c_void
@@ -7087,13 +7088,12 @@ _CLASS_WRITE_CONTEXT_COUNT = 2
 
 def _class_write_acquire_namespace(slots: c_ptr, tokens: c_ptr, create: int) -> int:
     output = ptr_add(slots, _CLASS_WRITE_DICT * C_POINTER_SIZE)
-    token_slot = ptr_add(tokens, _CLASS_WRITE_DICT * C_POINTER_SIZE)
     class_slot = ptr_add(slots, _CLASS_WRITE_CLASS * C_POINTER_SIZE)
-    plan = stack_alloc(256)
+    plan = stack_alloc(128)
     prepared = stack_alloc(C_POINTER_SIZE)
-    status: int = pcc_class_namespace_acquire_slots(class_slot, output, token_slot, plan, prepared)
+    status: int = pcc_class_namespace_acquire_slots(class_slot, output, plan, prepared)
     if load_i64(prepared, 0) != 0:
-        pcc_gc_root_copy_lease_finish(plan)
+        pcc_gc_store_root_plan_finish(plan)
     if status != 0:
         return status
     if create == 0:
@@ -7108,10 +7108,10 @@ def _class_write_acquire_namespace(slots: c_ptr, tokens: c_ptr, create: int) -> 
     py_dict_mark_class_namespace(load_ptr(created_slot, 0))
     write_plan = stack_alloc(128)
     pcc_gc_store_ptr_plan_init(write_plan, load_ptr(class_slot, 0), pcc_gc_backend())
-    status = pcc_class_namespace_install_slots(class_slot, created_slot, output, token_slot, write_plan, plan, prepared)
+    status = pcc_class_namespace_install_slots(class_slot, created_slot, output, write_plan, plan, prepared)
     pcc_gc_store_ptr_plan_finish(write_plan)
     if load_i64(prepared, 0) != 0:
-        pcc_gc_root_copy_lease_finish(plan)
+        pcc_gc_store_root_plan_finish(plan)
     _special_drop(slots, tokens, _CLASS_WRITE_CREATED)
     return status
 

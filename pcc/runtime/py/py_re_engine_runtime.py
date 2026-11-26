@@ -35,7 +35,7 @@ from pcc.unsafe import (
 )
 
 
-pcc_re_publish_copy_lease = extern("pcc_re_publish_copy_lease", (c_ptr, c_ptr), c_int64)
+pcc_re_publish_copy = extern("pcc_re_publish_copy", (c_ptr, c_ptr), c_int64)
 pcc_gc_retain = extern("pcc_gc_retain", (c_ptr,), c_ptr)
 
 py_str_utf8 = extern("py_str_utf8", (c_ptr,), c_ptr)
@@ -343,8 +343,8 @@ def _add_match_method(instance, name, text, spans, names, kind: int) -> None:
 
 def _new_match(pattern, text, caps, ngroups: int, flags: int):
     none = _none()
-    # The shared producer leases the class until instance creation and transfers
-    # a pinned NEW instance. Legacy argument/callback roots are separate work.
+    # The shared producer owns the class until instance creation and transfers
+    # a NEW instance. Legacy argument/callback roots are separate work.
     instance = pcc_re_match_instance_guarded()
     if ptr_is_null(instance) != 0:
         return none
@@ -1151,11 +1151,11 @@ def _normalize_verbose_pattern(pattern: str, result_slot: c_ptr) -> int:
         separated = False
         index += 1
     normalized: str = "".join(output)
-    return pcc_re_publish_copy_lease(normalized, result_slot)
+    return pcc_re_publish_copy(normalized, result_slot)
 
 
 @c_abi_export("pcc_re_normalize_compile_pattern_into")
-def _normalize_compile_pattern(pattern: str, flags: int, output: c_ptr, verbose_output: c_ptr, verbose_token_slot: c_ptr, projection_output: c_ptr, projection_token_slot: c_ptr) -> int:
+def _normalize_compile_pattern(pattern: str, flags: int, output: c_ptr, verbose_output: c_ptr, projection_output: c_ptr) -> int:
     """Project supported global flags onto the owned byte-regex engine."""
     working: str = pattern
     if working.startswith("(?"):
@@ -1183,24 +1183,20 @@ def _normalize_compile_pattern(pattern: str, flags: int, output: c_ptr, verbose_
     if flags & ~122:
         raise NotImplementedError("pcc re: re.compile flags are outside the native regex subset")
     if flags & 64:
-        # Inline projection may be a new string, not the caller-leased input.
-        # Publish and lease it before the verbose helper's ordinary prologue.
-        projection_token: int = pcc_re_publish_copy_lease(working, projection_output)
-        if projection_token < 0:
+        # Inline projection may be a new string, not the caller-owned input.
+        # Publish it before the verbose helper's ordinary prologue.
+        if pcc_re_publish_copy(working, projection_output) < 0:
             return -1
-        store_i64(projection_token_slot, 0, projection_token)
-        verbose_token: int = _normalize_verbose_pattern(load_ptr(projection_output, 0), verbose_output)
-        if verbose_token < 0:
+        if _normalize_verbose_pattern(load_ptr(projection_output, 0), verbose_output) < 0:
             return -1
-        store_i64(verbose_token_slot, 0, verbose_token)
         if py_err_occurred() != 0:
             return 0
         working: str = pcc_gc_retain(load_ptr(verbose_output, 0))
     # Publish an independent output owner before compiler-generated cleanup.
-    # The raw bridge registers a borrowed slot before any poll and returns a
-    # counted output lease that survives compiler-generated return cleanup.
+    # The raw bridge registers a borrowed slot before any poll and copies an
+    # output owner that survives compiler-generated return cleanup.
     normalized: tuple[str, int] = (working, flags & 26)
-    return pcc_re_publish_copy_lease(normalized, output)
+    return pcc_re_publish_copy(normalized, output)
 
 
 

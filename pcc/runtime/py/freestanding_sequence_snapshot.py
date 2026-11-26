@@ -29,27 +29,28 @@ pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_list_lock = extern("pcc_list_lock", (c_ptr,), c_void)
 pcc_list_unlock = extern("pcc_list_unlock", (c_ptr,), c_void)
-pcc_gc_root_copy_lease_prepare_locked = extern(
-    "pcc_gc_root_copy_lease_prepare_locked", (c_ptr, c_ptr, c_int64, c_ptr), c_int64
+pcc_gc_root_copy_prepare_locked = extern(
+    "pcc_gc_root_copy_prepare_locked", (c_ptr, c_ptr, c_int64, c_ptr), c_int64
 )
 
-_SEQUENCE_SNAPSHOT_PLAN_BYTES: i64 = 256
+_SEQUENCE_SNAPSHOT_PLAN_BYTES: i64 = 128
 
 
 @c_abi_export("pcc_list_snapshot_commit_slots")
 def pcc_list_snapshot_commit_slots(
-    source_slot: c_ptr, children: c_ptr, length: i64,
-    plans: c_ptr, tokens: c_ptr,
+    source_slot: c_ptr, children: c_ptr, length: i64, plans: c_ptr,
 ) -> i64:
     """Copy a consistent list into distinct registered empty owning roots.
 
-    The source list and its payload are leased. children names a registered
-    owning root array of length slots; plan/token storage is zero initialized.
+    The caller owns the source list. children names a registered owning
+    root array of length slots; plan storage (128 bytes each) is zero
+    initialized.
     An extra registered borrowed slot follows that array. It temporarily
     describes one still-owned source item and is cleared before unlocking.
     Source fields themselves are never passed to a borrowed-slot resolver.
     No source owner is healed or disposed here. Root copy plans are finished
-    after outermost unlock, before any child root/token is retired.
+    after outermost unlock, before any child root is retired. No lease is
+    taken (the one collector).
     """
     status: i64 = -1
     locked = load_ptr(source_slot, 0)
@@ -58,7 +59,7 @@ def pcc_list_snapshot_commit_slots(
     borrowed = ptr_add(children, length * abi_constant("object.pointer.size"))
     if ptr_is_null(source) == 0 and is_tagged_int(source) == 0 and length >= 0 and ptr_is_null(children) == 0:
         if load_i32(source, abi_constant("object.header.type_tag_offset")) == abi_constant("object.type.list"):
-            if length == 0 or (ptr_is_null(children) == 0 and ptr_is_null(plans) == 0 and ptr_is_null(tokens) == 0):
+            if length == 0 or (ptr_is_null(children) == 0 and ptr_is_null(plans) == 0):
                 status = -2
                 if load_i64(source, abi_constant("object.list.length_offset")) == length:
                     items = load_ptr(source, abi_constant("object.list.items_offset"))
@@ -73,15 +74,13 @@ def pcc_list_snapshot_commit_slots(
                             status = -1
                         else:
                             store_ptr(borrowed, 0, load_ptr(source_field, 0))
-                            token: i64 = pcc_gc_root_copy_lease_prepare_locked(
+                            copied: i64 = pcc_gc_root_copy_prepare_locked(
                                 destination, borrowed, 1,
                                 ptr_add(plans, index * _SEQUENCE_SNAPSHOT_PLAN_BYTES),
                             )
                             store_ptr(borrowed, 0, null())
-                            if token < 0:
+                            if copied < 0:
                                 status = -1
-                            else:
-                                store_i64(tokens, index * abi_constant("object.pointer.size"), token)
                         index += 1
     pcc_list_unlock(locked)
     return status

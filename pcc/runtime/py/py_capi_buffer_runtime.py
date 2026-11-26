@@ -14,10 +14,8 @@ PyMemoryViewObject: base@16, owned Py_buffer allocation@24.
 The owned allocation is 96 bytes: the public 80-byte Py_buffer followed by
 inline shape@80 and strides@88 words.  Py_buffer.obj is a derived borrowed
 alias of the memoryview's owned base reference; the GC visits base@16 and the
-refresh hook rewrites obj/buf after relocation.
-On GC3, internal@72 points at a private exporter root/lease record while the
-cache exists. It protects the raw payload across budgeted promotion and
-explicit forwarding; the record never roots the memoryview itself.
+refresh hook rewrites obj/buf. The opaque internal@72 word stays NULL: the
+one collector never moves the payload, so no exporter record exists.
 
 Owned surface (stable C ABI names):
 
@@ -89,34 +87,15 @@ pcc_gc_memoryview_initialize_owned_buffer = extern(
 pcc_gc_memoryview_refresh_owned_buffer = extern(
     "pcc_gc_memoryview_refresh_owned_buffer", (c_ptr,), c_int64
 )
-pcc_gc_scheduler_root_register_handle = extern(
-    "pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr
-)
-pcc_gc_scheduler_root_unregister_handle = extern(
-    "pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void
-)
 pcc_gc_note_frame_enter_local_checked = extern(
     "pcc_gc_note_frame_enter_local_checked", (c_ptr, c_ptr), c_int64
 )
 pcc_gc_note_frame_leave_local = extern("pcc_gc_note_frame_leave_local", (c_ptr,), c_void)
 pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
 pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
-pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
-pcc_gc_root_copy_borrowed_lease = extern(
-    "pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64
-)
-pcc_gc_root_copy_owned_prepare_locked = extern(
-    "pcc_gc_root_copy_owned_prepare_locked", (c_ptr, c_ptr, c_ptr), c_int64
-)
-pcc_gc_store_root_plan_finish = extern("pcc_gc_store_root_plan_finish", (c_ptr,), c_void)
-pcc_gc_root_move = extern("pcc_gc_root_move", (c_ptr, c_ptr), c_int64)
-pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_gc_resolve_borrowed_root_slot_unlocked = extern(
     "pcc_gc_resolve_borrowed_root_slot_unlocked", (c_ptr, c_int64), c_ptr
 )
-pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
-pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
-pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 
 define_global_ptr_null("pcc_capi_buffer_lease_head")
 
@@ -130,20 +109,9 @@ _GET_NO_ROOTS = -3
 define_global_i32("pcc_capi_buffer_get_borrowed_map", -2)
 
 # The public Py_buffer and its inline shape/stride stay exactly 96 bytes.
-# Only its opaque internal word points at this independently owned record.
+# Its opaque internal word stays NULL (no exporter record).
 _OWNED_BUFFER_INTERNAL = 72
 _OWNED_BUFFER_BYTES = 96
-_EXPORT_OWNER = 0
-_EXPORT_TOKEN = 8
-_EXPORT_HANDLE = 16
-_EXPORT_BYTES = 24
-_VIEW_CURRENT = 0
-_VIEW_NEXT = 8
-_VIEW_ROOT_BYTES = 16
-_VIEW_BORROWED_BYTES = 8
-_VIEW_COPY_PLAN_BYTES = 128
-define_global_i32("pcc_memoryview_buffer_borrowed_map", -1)
-define_global_i32("pcc_memoryview_buffer_owned_map", 2)
 
 
 def _type_error(message) -> None:
@@ -361,186 +329,14 @@ def PyMemoryView_FromMemory(mem, size: int, flags: int) -> c_ptr:
 # --- pcc_PyMemoryView_GET_BASE ---------------------------------------
 
 
-def _memoryview_drop_root(slot, token: int) -> None:
-    if token >= 0:
-        if pcc_gc_foreign_lease_release(slot, token) != 0:
-            pcc_platform_abort()
-            return
-    pcc_gc_store_root(slot, null())
-
-
-def _memoryview_free_exporter(meta) -> None:
-    if ptr_is_null(meta):
-        return
-    handle = load_ptr(meta, _EXPORT_HANDLE)
-    if not ptr_is_null(handle):
-        _memoryview_drop_root(ptr_add(meta, _EXPORT_OWNER), load_i64(meta, _EXPORT_TOKEN))
-        store_i64(meta, _EXPORT_TOKEN, -1)
-        store_ptr(meta, _EXPORT_HANDLE, null())
-        pcc_gc_scheduler_root_unregister_handle(handle)
-    PyMem_Free(meta)
-
-
 @c_abi_typed_export("pcc_memoryview_free_owned_buffer", "void", ("ptr",))
 def pcc_memoryview_free_owned_buffer(buffer_view) -> None:
     # Only the memoryview-owned cache uses this record. PyObject_GetBuffer
     # has a different internal layout and must still use PyBuffer_Release.
     if ptr_is_null(buffer_view):
         return
-    meta = load_ptr(buffer_view, _OWNED_BUFFER_INTERNAL)
     store_ptr(buffer_view, _OWNED_BUFFER_INTERNAL, null())
-    _memoryview_free_exporter(meta)
     PyMem_Free(buffer_view)
-
-
-def _memoryview_lease_exporter_locked(meta, current) -> int:
-    # Consume the caller's graph lock. Enter this frame only after locking:
-    # a branch-local alloca in the outer function would expose dirty plan
-    # words at its earlier no-park exit, even on a cache hit. Prepare clears
-    # the full plan before any failure return or the first parking unlock.
-    plan = stack_alloc(_VIEW_COPY_PLAN_BYTES)
-    status: int = pcc_gc_root_copy_owned_prepare_locked(
-        ptr_add(meta, _EXPORT_OWNER), current, plan
-    )
-    if status == 0:
-        token: int = pcc_gc_foreign_lease_acquire(ptr_add(meta, _EXPORT_OWNER))
-        store_i64(meta, _EXPORT_TOKEN, token)
-        if token < 0:
-            status = -1
-    pcc_py_gc_minor_graph_unlock()
-    pcc_gc_store_root_plan_finish(plan)
-    return status
-
-
-def _memoryview_gc3_owned_buffer(obj) -> c_ptr:
-    # Keep the original view rooted through allocation, lease acquisition,
-    # CAS-loser cleanup and return. A checked registration cannot silently fail.
-    borrowed = stack_alloc(_VIEW_BORROWED_BYTES)
-    store_ptr(borrowed, 0, obj)
-    roots = stack_alloc(_VIEW_ROOT_BYTES)
-    memset(roots, 0, _VIEW_ROOT_BYTES)
-    current = ptr_add(roots, _VIEW_CURRENT)
-    next_slot = ptr_add(roots, _VIEW_NEXT)
-    borrowed_registered: int = 0
-    roots_registered: int = 0
-    roots_ready: int = 0
-    status: int = 0
-    pcc_thread_no_park_enter()
-    if pcc_gc_note_frame_enter_local_checked(
-        global_addr("pcc_memoryview_buffer_borrowed_map"), borrowed
-    ) == 1:
-        borrowed_registered = 1
-    else:
-        status = -1
-    if status == 0:
-        if pcc_gc_note_frame_enter_local_checked(
-            global_addr("pcc_memoryview_buffer_owned_map"), roots
-        ) == 1:
-            roots_registered = 1
-            roots_ready = 1
-        else:
-            status = -1
-    pcc_thread_no_park_exit()
-
-    result = null()
-    candidate = null()
-    meta = null()
-    current_token: int = -1
-    next_token: int = -1
-    base_depth: int = 0
-    if status == 0:
-        bits: int = atomic_load_i64(load_ptr(borrowed, 0), 24, "acquire")
-        if bits != 0:
-            pcc_gc_memoryview_refresh_owned_buffer(load_ptr(borrowed, 0))
-            result = int_to_ptr(bits)
-        else:
-            candidate = PyMem_Malloc(_OWNED_BUFFER_BYTES)
-            if ptr_is_null(candidate):
-                status = -1
-            else:
-                memset(candidate, 0, _OWNED_BUFFER_BYTES)
-                meta = PyMem_Malloc(_EXPORT_BYTES)
-                if ptr_is_null(meta):
-                    status = -1
-                else:
-                    memset(meta, 0, _EXPORT_BYTES)
-                    store_i64(meta, _EXPORT_TOKEN, -1)
-                    handle = pcc_gc_scheduler_root_register_handle(ptr_add(meta, _EXPORT_OWNER))
-                    store_ptr(meta, _EXPORT_HANDLE, handle)
-                    if ptr_is_null(handle):
-                        status = -1
-            if status == 0:
-                current_token = pcc_gc_root_copy_borrowed_lease(current, borrowed)
-                if current_token < 0:
-                    status = -1
-            while status == 0 and load_i32(load_ptr(current, 0), 8) == PY_TYPE_MEMORYVIEW:
-                # The current owner's address lease protects the real base
-                # field through this retain, including a parking graph lock.
-                next_token = pcc_gc_root_copy_lease(
-                    next_slot, ptr_add(load_ptr(current, 0), 16)
-                )
-                if next_token < 0:
-                    status = -1
-                elif ptr_is_null(load_ptr(next_slot, 0)):
-                    status = -3 if base_depth == 0 else -2
-                elif is_tagged_int(load_ptr(next_slot, 0)):
-                    status = -2
-                else:
-                    _memoryview_drop_root(current, current_token)
-                    current_token = -1
-                    if pcc_gc_root_move(current, next_slot) != 0:
-                        status = -1
-                    else:
-                        current_token = next_token
-                        next_token = -1
-                        base_depth = base_depth + 1
-            if status == 0:
-                tag: int = load_i32(load_ptr(current, 0), 8)
-                if tag != PY_TYPE_BYTES and tag != PY_TYPE_BYTEARRAY:
-                    status = -2
-            if status == 0:
-                # Copy ownership without a source-derived token, then acquire
-                # the persistent lease THROUGH THE HEAP SLOT. A stack source
-                # can receive conservative token 0, which expires on return.
-                pcc_py_gc_minor_graph_lock()
-                status = _memoryview_lease_exporter_locked(meta, current)
-            if status == 0:
-                if pcc_gc_memoryview_initialize_owned_buffer(load_ptr(borrowed, 0), candidate) == 0:
-                    status = -2
-                else:
-                    store_ptr(candidate, _OWNED_BUFFER_INTERNAL, meta)
-                    meta = null()
-                    installed: int = atomic_cas_i64(
-                        load_ptr(borrowed, 0), 24, 0, ptr_to_int(candidate),
-                        "acq_rel", "acquire",
-                    )
-                    if installed == 0:
-                        result = candidate
-                        candidate = null()
-                    else:
-                        result = int_to_ptr(installed)
-
-    # Every losing candidate releases only its own independent leaf owner.
-    # This works after GC sweep has already cleared every view.base slot.
-    pcc_memoryview_free_owned_buffer(candidate)
-    _memoryview_free_exporter(meta)
-    if roots_ready != 0:
-        _memoryview_drop_root(next_slot, next_token)
-        _memoryview_drop_root(current, current_token)
-    store_ptr(borrowed, 0, null())
-    if roots_registered != 0:
-        pcc_gc_note_frame_leave_local(roots)
-    if borrowed_registered != 0:
-        pcc_gc_note_frame_leave_local(borrowed)
-    if status != 0:
-        if status == -2:
-            _type_error(cstr("memoryview base does not support buffer protocol"))
-        elif status == -3:
-            _runtime_error(cstr("memoryview has no base object"))
-        else:
-            _runtime_error(cstr("cannot retain memoryview buffer exporter"))
-        return null()
-    return result
 
 
 def _memoryview_owned_buffer(obj) -> c_ptr:

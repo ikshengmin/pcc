@@ -2,7 +2,7 @@
 
 Every managed body writes its final NEW
 result into the provided owning slot, preserves TLS errors, retires every
-other temporary/lease and returns 0; the entry takes the result slot. Callers are registered PCC threads and
+other temporary and returns 0; the entry takes the result slot. Callers are registered PCC threads and
 hold no graph/container/scheduler lock or inherited no-park region. No raw argument may cross an entry poll.
 """
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
@@ -138,16 +138,17 @@ def py_re_fullmatch_flags(pattern: c_ptr, text: c_ptr, flags: int) -> c_ptr:
     return _re_guarded(pattern, text, flags, 0)
 
 
-pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_root_copy_borrowed = extern("pcc_gc_root_copy_borrowed", (c_ptr, c_ptr), c_int64)
 define_global_i32("pcc_re_publish_borrowed_map", -1)
 
 
-@c_abi_export("pcc_re_publish_copy_lease")
-def pcc_re_publish_copy_lease(value: c_ptr, output: c_ptr) -> int:
-    """Copy a live source into a registered empty output; never mutate pin bits.
+@c_abi_export("pcc_re_publish_copy")
+def pcc_re_publish_copy(value: c_ptr, output: c_ptr) -> int:
+    """Copy a live source into a registered empty output: a status only.
 
     The source's caller-owned lifetime spans this call. Entry has no held locks
     or inherited no-park. Negative copy status leaves output unchanged/empty.
+    The one collector takes no lease.
     """
     if pcc_thread_no_park_depth() != 0:
         pcc_platform_abort()
@@ -159,6 +160,6 @@ def pcc_re_publish_copy_lease(value: c_ptr, output: c_ptr) -> int:
         pcc_platform_abort()
         return -1
     pcc_thread_no_park_exit()
-    token: int = pcc_gc_root_copy_borrowed_lease(output, borrowed)
+    status: int = pcc_gc_root_copy_borrowed(output, borrowed)
     pcc_gc_note_frame_leave(borrowed)
-    return token
+    return status

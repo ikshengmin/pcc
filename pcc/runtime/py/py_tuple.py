@@ -121,15 +121,12 @@ pcc_gc_retain_plan_finish = extern("pcc_gc_retain_plan_finish", (c_ptr,), c_void
 
 
 
-pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
-pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 pcc_gc_resolve_root_slot_unlocked = extern("pcc_gc_resolve_root_slot_unlocked", (c_ptr, c_int64), c_ptr)
 pcc_gc_note_store = extern("pcc_gc_note_store", (), c_void)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
 py_runtime_error_if_unset = extern("py_runtime_error_if_unset", (c_ptr, c_ptr), c_void)
-pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 
 
 def _debug_bad_container(o, code: int) -> None:
@@ -231,17 +228,13 @@ def py_tuple_new(n: int):
 define_global_i32("pcc_tuple_construction_error_map", 1)
 
 
-def _tuple_owned_construction_failed(output, token: i64) -> i64:
+def _tuple_owned_construction_failed(output) -> i64:
     error = stack_alloc(C_POINTER_SIZE)
     store_ptr(error, 0, null())
     pcc_gc_frame_enter(global_addr("pcc_tuple_construction_error_map"), error)
     if py_err_occurred() == 0:
         py_raise_owned(py_exc_new(19, cstr("tuple: out of memory")))
     py_tls_exc_swap_slot(error)
-    if token >= 0:
-        if pcc_gc_foreign_lease_release(output, token) < 0:
-            pcc_platform_abort()
-            return -1
     pcc_gc_store_root(output, null())
     py_clear_exception()
     py_tls_exc_swap_slot(error)
@@ -249,15 +242,15 @@ def _tuple_owned_construction_failed(output, token: i64) -> i64:
     return -1
 
 
-@c_abi_export("pcc_tuple_from_owned_roots_lease")
-def pcc_tuple_from_owned_roots_lease(sources, count: i64, output) -> i64:
-    """Move nonempty distinct registered, unleased roots into a fresh tuple.
+@c_abi_export("py_tuple_from_owned_roots")
+def py_tuple_from_owned_roots(sources, count: i64, output) -> i64:
+    """Move nonempty distinct registered roots into a fresh tuple: 0 or -1.
 
     The address array and output root remain stable and registered for this
     call. Each consumed source becomes empty. Output owns every transferred
     child even on failure; caller cleanup retains all unconsumed sources.
-    Success returns the output address lease; its caller must retire it.
-    This construction-only ABI never mutates an existing/shared tuple.
+    No lease is taken (the one collector). This construction-only ABI never
+    mutates an existing/shared tuple.
     """
     if ptr_is_null(output) != 0 or count <= 0 or count > 134217728:
         py_runtime_error_if_unset(cstr("py_tuple_from_owned_roots"), cstr("invalid tuple construction roots"))
@@ -266,13 +259,10 @@ def pcc_tuple_from_owned_roots_lease(sources, count: i64, output) -> i64:
         py_runtime_error_if_unset(cstr("py_tuple_from_owned_roots"), cstr("tuple construction requires empty output"))
         return -1
     # py_tuple_new initializes every slot before returning; publish its NEW
-    # owner directly before the first parking/lease operation.
+    # owner directly before the first parking operation.
     store_ptr(output, 0, py_tuple_new(count))
     if ptr_is_null(load_ptr(output, 0)) != 0:
-        return _tuple_owned_construction_failed(output, -1)
-    token: i64 = i64(pcc_gc_foreign_lease_acquire(output))
-    if token < 0:
-        return _tuple_owned_construction_failed(output, token)
+        return _tuple_owned_construction_failed(output)
     stride: i64 = i64(C_POINTER_SIZE)
     items_offset: i64 = i64(PYTUPLEOBJECT_ITEMS_OFFSET)
     backend: i64 = i64(pcc_gc_backend())
@@ -289,8 +279,8 @@ def pcc_tuple_from_owned_roots_lease(sources, count: i64, output) -> i64:
             source = load_ptr(sources, index * stride)
             if backend == 0 and load_i32(global_addr("pcc_gc_read_barrier_enabled"), 0) == 0:
                 # Match the existing pcc_gc_load_ptr disabled-barrier path.
-                # The source is an owning registered root; the output lease
-                # reserves the backend mode. No header/type trust is inferred.
+                # The source is an owning registered root; the output slot
+                # owns the tuple. No header/type trust is inferred.
                 value = load_ptr(source, 0)
             else:
                 value = pcc_gc_resolve_root_slot_unlocked(source, 0)
@@ -307,18 +297,6 @@ def pcc_tuple_from_owned_roots_lease(sources, count: i64, output) -> i64:
     owner = load_ptr(output, 0)
     if needs_track != 0:
         py_gc_track(owner)
-    return token
-
-
-@c_abi_export("py_tuple_from_owned_roots")
-def py_tuple_from_owned_roots(sources, count: i64, output) -> i64:
-    """Consume input owners and return an unleased owned output on success."""
-    token: i64 = pcc_tuple_from_owned_roots_lease(sources, count, output)
-    if token < 0:
-        return -1
-    if pcc_gc_foreign_lease_release(output, token) < 0:
-        pcc_platform_abort()
-        return -1
     return 0
 
 

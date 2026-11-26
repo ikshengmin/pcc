@@ -120,15 +120,15 @@ def py_class_namespace_commit_locked(context: c_ptr, dictionary: c_ptr) -> None:
 
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
-pcc_gc_root_copy_lease_prepare_locked = extern(
-    "pcc_gc_root_copy_lease_prepare_locked", (c_ptr, c_ptr, c_int64, c_ptr), c_int64
+pcc_gc_root_copy_prepare_locked = extern(
+    "pcc_gc_root_copy_prepare_locked", (c_ptr, c_ptr, c_int64, c_ptr), c_int64
 )
 pcc_gc_store_ptr_plan_commit_locked = extern(
     "pcc_gc_store_ptr_plan_commit_locked", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64
 )
 
 # Owning namespace selection and publish-if-empty installation.
-# The caller registers and leases every managed input/output slot. These
+# The caller registers every managed input/output slot. These
 # entries own the complete graph transaction so their scalar status returns
 # cannot introduce managed arithmetic between lock and unlock in a caller.
 
@@ -144,36 +144,34 @@ def _class_namespace_source_locked(class_slot: c_ptr) -> c_ptr:
 
 
 @c_abi_export("pcc_class_namespace_copy_locked")
-def _class_namespace_copy_locked(source: c_ptr, output: c_ptr, token_slot: c_ptr, plan: c_ptr, prepared_slot: c_ptr) -> i64:
+def _class_namespace_copy_locked(source: c_ptr, output: c_ptr, plan: c_ptr, prepared_slot: c_ptr) -> i64:
     if ptr_is_null(load_ptr(source, 0)) != 0:
         return 0
     store_i64(prepared_slot, 0, 1)
-    token: i64 = pcc_gc_root_copy_lease_prepare_locked(output, source, 0, plan)
-    if token < 0:
+    if pcc_gc_root_copy_prepare_locked(output, source, 0, plan) < 0:
         return -2
-    store_i64(token_slot, 0, token)
     return 1
 
 
 @c_abi_export("pcc_class_namespace_acquire_slots")
-def pcc_class_namespace_acquire_slots(class_slot: c_ptr, output: c_ptr, token_slot: c_ptr, plan: c_ptr, prepared_slot: c_ptr) -> i64:
-    """Select the live owning namespace slot; caller finishes a prepared plan."""
+def pcc_class_namespace_acquire_slots(class_slot: c_ptr, output: c_ptr, plan: c_ptr, prepared_slot: c_ptr) -> i64:
+    """Select the live owning namespace slot; caller finishes a prepared plan128."""
     store_i64(prepared_slot, 0, 0)
     pcc_py_gc_minor_graph_lock()
     source = _class_namespace_source_locked(class_slot)
     status: i64 = -1
     if ptr_is_null(source) == 0:
-        status = _class_namespace_copy_locked(source, output, token_slot, plan, prepared_slot)
+        status = _class_namespace_copy_locked(source, output, plan, prepared_slot)
     pcc_py_gc_minor_graph_unlock()
     return status
 
 
 @c_abi_export("pcc_class_namespace_install_slots")
-def pcc_class_namespace_install_slots(class_slot: c_ptr, created_slot: c_ptr, output: c_ptr, token_slot: c_ptr, write_plan: c_ptr, copy_plan: c_ptr, prepared_slot: c_ptr) -> i64:
+def pcc_class_namespace_install_slots(class_slot: c_ptr, created_slot: c_ptr, output: c_ptr, write_plan: c_ptr, copy_plan: c_ptr, prepared_slot: c_ptr) -> i64:
     """Publish if empty and select that namespace in one graph transaction.
 
     write_plan was initialized outside the lock. The candidate dictionary is
-    already owned/address-leased. Losing a creation race preserves the winning
+    already owned by its slot. Losing a creation race preserves the winning
     namespace; no earlier unchecked empty observation authorizes replacement.
     """
     store_i64(prepared_slot, 0, 0)
@@ -191,7 +189,7 @@ def pcc_class_namespace_install_slots(class_slot: c_ptr, created_slot: c_ptr, ou
                         write_plan, load_ptr(class_slot, 0), source, created,
                     )
         if ready != 0:
-            status = _class_namespace_copy_locked(source, output, token_slot, copy_plan, prepared_slot)
+            status = _class_namespace_copy_locked(source, output, copy_plan, prepared_slot)
     pcc_py_gc_minor_graph_unlock()
     return status
 

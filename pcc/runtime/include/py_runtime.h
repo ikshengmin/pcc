@@ -449,6 +449,12 @@ int64_t pcc_gc_root_copy_local(PyObject **destination, PyObject **source,
  * failed store, with both owners unchanged. No Python exception changes. */
 int64_t pcc_gc_root_copy(PyObject **destination, PyObject **source);
 int64_t pcc_gc_root_copy_borrowed(PyObject **destination, PyObject **source);
+/* The one collector's split copy inside an existing transaction (the lock
+ * the lease form required). plan128 is writable 128-byte storage; finish it
+ * with pcc_gc_store_root_plan_finish after the OUTERMOST unlock, on success
+ * and failure alike. Status only, with pcc_gc_root_copy's codes. */
+int64_t pcc_gc_root_copy_prepare_locked(PyObject **destination, PyObject **source,
+                                        int64_t source_borrowed, void *plan128);
 /* Split form for atomic lookup/selection callers already holding graph lock.
  * Runtime configuration is complete; plan256 is writable 256-byte storage.
  * Prepare initializes it and never runs deferred refcount/log work. Always
@@ -1226,10 +1232,8 @@ void      py_dict_update(PyObject *dst, PyObject *src);
 
 /* ---- Tuple ------------------------------------------------------------- */
 PyObject *py_tuple_new(int64_t n);
-/* Consume distinct, registered unleased roots into a fresh tuple output. */
+/* Consume distinct, registered roots into a fresh tuple output: 0 or -1. */
 int64_t py_tuple_from_owned_roots(void *sources, int64_t count, void *output);
-/* As above, but return the output lease token; the caller must release it. */
-int64_t pcc_tuple_from_owned_roots_lease(void *sources, int64_t count, void *output);
 PyObject *py_tuple_from_static_items(PyObject *const *items, int64_t count);
 PyObject *py_tuple_from_list(PyObject *lst);         /* new tuple from list elems */
 PyObject *py_tuple_from_splat(PyObject *seq);        /* new tuple from tuple/list/len+getitem seq */

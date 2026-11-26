@@ -1,7 +1,7 @@
 """Shared Match/Pattern class publication into registered owning slots.
 
 Each class has exactly one cache, root handle and mutex. Their common factory
-publishes a single winner and returns an independently owned counted lease.
+publishes a single winner and copies it into the caller's owning slot.
 """
 __pcc_runtime_port__ = True
 
@@ -34,9 +34,7 @@ pcc_mutex_unlock = extern("pcc_mutex_unlock", (c_ptr,), c_int64)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_gc_scheduler_root_register_handle = extern("pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr)
 pcc_gc_publish_owned_root = extern("pcc_gc_publish_owned_root", (c_ptr,), c_int64)
-pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
-pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
-pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_root_copy = extern("pcc_gc_root_copy", (c_ptr, c_ptr), c_int64)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 
@@ -72,23 +70,18 @@ def _regex_class_unlock(mutex: c_ptr) -> None:
         pcc_platform_abort()
 
 
-def _regex_class_discard(result: c_ptr, token: int) -> None:
-    if token >= 0:
-        if pcc_gc_foreign_lease_release(result, token) != 0:
-            pcc_platform_abort()
-            return
+def _regex_class_discard(result: c_ptr) -> None:
     pcc_gc_store_root(result, null())
 
 
-def _regex_class_copy_lease(result: c_ptr, source: c_ptr, handle_slot: c_ptr, mutex_bits: c_ptr, name: c_ptr) -> int:
-    """Fill a fresh registered owning slot; return its counted address lease.
+def _regex_class_copy(result: c_ptr, source: c_ptr, handle_slot: c_ptr, mutex_bits: c_ptr, name: c_ptr) -> int:
+    """Fill a fresh registered owning slot with the class: a status, 0 or -1.
 
-    The caller keeps the slot registered and empty on entry, holds no graph,
-    container or scheduler lock, and releases the returned token through this
-    same slot before dropping the owner. Negative status leaves result empty,
+    The caller keeps the slot registered and empty on entry and holds no
+    graph, container or scheduler lock. Negative status leaves result empty,
     except invalid nonempty input (which is left untouched). No raw class
     pointer crosses the factory's ordinary managed prologue or its return.
-    The class remains movable; every consumer needs the returned lease.
+    The one collector takes no lease.
     """
     if ptr_is_null(result) != 0:
         return _regex_class_error(name, cstr("missing registered result slot"))
@@ -104,10 +97,9 @@ def _regex_class_copy_lease(result: c_ptr, source: c_ptr, handle_slot: c_ptr, mu
         cached = 1
     _regex_class_unlock(mutex)
     if cached != 0:
-        copied: int = pcc_gc_root_copy_lease(result, source)
-        if copied < 0:
+        if pcc_gc_root_copy(result, source) < 0:
             return _regex_class_error(name, cstr("cached owner copy failed"))
-        return copied
+        return 0
 
     # Construct outside the publication mutex. A loser must remain collectible:
     # py_class_new_builtin would immortalize it before the winner is known.
@@ -115,55 +107,46 @@ def _regex_class_copy_lease(result: c_ptr, source: c_ptr, handle_slot: c_ptr, mu
     if ptr_is_null(load_ptr(result, 0)) != 0:
         return _regex_class_error(name, cstr("class allocation failed"))
     if pcc_gc_publish_owned_root(result) < 0:
-        _regex_class_discard(result, -1)
+        _regex_class_discard(result)
         return _regex_class_error(name, cstr("class root publication failed"))
-    token: int = pcc_gc_foreign_lease_acquire(result)
-    if token < 0:
-        _regex_class_discard(result, -1)
-        return _regex_class_error(name, cstr("class address lease failed"))
     if pcc_mutex_lock(mutex) != 0:
-        _regex_class_discard(result, token)
+        _regex_class_discard(result)
         return _regex_class_error(name, cstr("publication mutex acquisition failed"))
     if ptr_is_null(pcc_gc_load_ptr(null(), source)) == 0:
         _regex_class_unlock(mutex)
-        _regex_class_discard(result, token)
-        copied = pcc_gc_root_copy_lease(result, source)
-        if copied < 0:
+        _regex_class_discard(result)
+        if pcc_gc_root_copy(result, source) < 0:
             return _regex_class_error(name, cstr("winner owner copy failed"))
-        return copied
+        return 0
 
     if ptr_is_null(load_ptr(handle_slot, 0)) != 0:
         handle: c_ptr = pcc_gc_scheduler_root_register_handle(source)
         if ptr_is_null(handle) != 0:
             _regex_class_unlock(mutex)
-            _regex_class_discard(result, token)
+            _regex_class_discard(result)
             return _regex_class_error(name, cstr("global root registration failed"))
         store_ptr(handle_slot, 0, handle)
-    global_token: int = pcc_gc_root_copy_lease(source, result)
-    if global_token < 0:
+    if pcc_gc_root_copy(source, result) < 0:
         _regex_class_unlock(mutex)
-        _regex_class_discard(result, token)
+        _regex_class_discard(result)
         return _regex_class_error(name, cstr("global owner publication failed"))
     # Only the published winner acquires builtin-type lifetime semantics.
-    # Its result/global leases guard this raw header across untracking.
+    # Its result and global owners keep this raw header alive across untracking.
     py_gc_untrack(load_ptr(result, 0))
     atomic_rmw_i32("or", load_ptr(result, 0), PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_IMMORTAL, "relaxed")
-    if pcc_gc_foreign_lease_release(source, global_token) != 0:
-        pcc_platform_abort()
-        return -1
     _regex_class_unlock(mutex)
-    return token
+    return 0
 
 
-@c_abi_export("pcc_re_match_class_copy_lease")
-def pcc_re_match_class_copy_lease(result: c_ptr) -> int:
-    return _regex_class_copy_lease(result, global_addr("pcc_re_match_class"),
+@c_abi_export("pcc_re_match_class_copy")
+def pcc_re_match_class_copy(result: c_ptr) -> int:
+    return _regex_class_copy(result, global_addr("pcc_re_match_class"),
         global_addr("pcc_re_match_class_root_handle"),
         global_addr("pcc_re_match_class_mutex_bits"), cstr("re.Match"))
 
 
-@c_abi_export("pcc_re_pattern_class_copy_lease")
-def pcc_re_pattern_class_copy_lease(result: c_ptr) -> int:
-    return _regex_class_copy_lease(result, global_addr("pcc_re_pattern_class"),
+@c_abi_export("pcc_re_pattern_class_copy")
+def pcc_re_pattern_class_copy(result: c_ptr) -> int:
+    return _regex_class_copy(result, global_addr("pcc_re_pattern_class"),
         global_addr("pcc_re_pattern_class_root_handle"),
         global_addr("pcc_re_pattern_class_mutex_bits"), cstr("re.Pattern"))

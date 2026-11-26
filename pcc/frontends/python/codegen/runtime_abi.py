@@ -113,6 +113,7 @@ def _runtime_signatures_part_1():
     # The one collector's root copies: a status, no lease token.
     "pcc_gc_root_copy": (_I64, [_PTR, _PTR], False),
     "pcc_gc_root_copy_borrowed": (_I64, [_PTR, _PTR], False),
+    "pcc_gc_root_copy_prepare_locked": (_I64, [_PTR, _PTR, _I64, _PTR], False),
     "pcc_gc_root_copy_lease_prepare_locked": (_I64, [_PTR, _PTR, _I64, _PTR], False),
     "pcc_gc_root_copy_lease_finish": (_VOID, [_PTR], False),
     "pcc_gc_object_is_address_pinned": (_I64, [_PYOBJ], False),
@@ -2122,6 +2123,7 @@ def _cross_object_signatures_part_3():
     "pcc_gc_root_copy_borrowed_lease": (("c_ptr", "c_ptr"), "c_int64"),
     "pcc_gc_root_copy": (("c_ptr", "c_ptr"), "c_int64"),
     "pcc_gc_root_copy_borrowed": (("c_ptr", "c_ptr"), "c_int64"),
+    "pcc_gc_root_copy_prepare_locked": (("c_ptr", "c_ptr", "c_int64", "c_ptr"), "c_int64"),
     "pcc_gc_root_copy_lease_prepare_locked": (("c_ptr", "c_ptr", "c_int64", "c_ptr"), "c_int64"),
     "pcc_gc_root_copy_lease_finish": (("c_ptr",), "c_void"),
     "pcc_gc_object_is_address_pinned": (("c_ptr",), "c_int64"),

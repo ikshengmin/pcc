@@ -1499,6 +1499,36 @@ def pcc_gc_root_copy_borrowed(destination, source) -> int:
     return _gc_root_copy_local_locked(destination, source, 1)
 
 
+@c_abi_export("pcc_gc_root_copy_prepare_locked")
+def pcc_gc_root_copy_prepare_locked(destination, source, source_borrowed: int, plan) -> int:
+    """The one collector's split root copy, inside an existing transaction.
+
+    pcc_gc_root_copy_lease_prepare_locked without the address lease: the
+    caller holds the same lock the lease form required and keeps both slots
+    valid. plan has 128 writable bytes; finish it with
+    pcc_gc_store_root_plan_finish after the outermost unlock, on success and
+    failure alike. A status only: 0, -1 invalid slots, -4 a nonempty
+    destination or a failed store, with both owners unchanged.
+    """
+    pcc_gc_store_root_plan_init(plan, _gc_backend_fast())
+    if ptr_is_null(destination) != 0 or ptr_is_null(source) != 0:
+        return -1
+    if ptr_eq(destination, source) != 0:
+        return -1
+    if source_borrowed != 0 and source_borrowed != 1:
+        return -1
+    if ptr_is_null(load_ptr(destination, 0)) == 0:
+        return -4
+    value = null()
+    if source_borrowed == 0:
+        value = load_ptr(source, 0)
+    else:
+        value = pcc_gc_load_borrowed_ptr(null(), source)
+    if pcc_gc_store_root_plan_commit_locked(plan, destination, value) == 0:
+        return -4
+    return 0
+
+
 @c_abi_export("pcc_gc_root_copy_lease_prepare_locked")
 def pcc_gc_root_copy_lease_prepare_locked(destination, source, source_borrowed: int, plan) -> int:
     """Publish a copied owner/lease inside an existing graph transaction.
