@@ -1468,13 +1468,48 @@ in the relevant section or issue and removes the entry.
    3/5; control -2.66%), CPU86.682->90.154us (control89.525),
    RSS25,370,624->25,464,832B. Equivalent control drift, no validated
    gain; not merged, no candidate source/diagnostic code published.
-   NEXT: choose a larger structural lifecycle unit, starting with actual
-   native handler allocation/free type/tag and size attribution (38.45
-   allocations/request previously) or repeated frame ownership traffic
-   eliminated by a sound move/lifetime proof, not another per-call guard.
-   Measure count and single-operation cost before modifying callbacks,
-   lock ordering or lifetime protocol; keep native A/B and race/audit
-   gates. Don't repeat this guard candidate without new evidence.
+   Native managed allocation/free attribution (Codex, Linux, exact
+   source 2cc0e6fb, gateway b1490486). Diagnostic-only atomics at actual
+   pcc_gc_alloc attempts/success and both pcc_gc_free_object_memory
+   release-to-allocator paths; type tag 0..255, overflow and separate
+   inline GEN flag bucket, requested header/body bytes and size bands.
+   Stop after carrier pool shutdown before result formatting and compare
+   attempt sum and histogram to authoritative snapshot telemetry.
+   Native sanity exact list and inline-GEN allocate/free increments, both
+   sums equal. Instrumented static ELF
+   f9a1f60e93dc4030906190a271395d8a0c1ecc0dd983f81ae99ede63534e744c.
+   All 10 alternating C20 rounds10/50 pairs delta800 reconciled exact
+   snapshot, successful==attempts, exact gateway payload. w1 all five
+   repeats 38.45 allocations, 2754.4 requested managed bytes, 37.45
+   terminal fast frees, 0 other free/request. w4 medians equal, observed
+   allocation scheduling variation <=0.0025/request. Not raw malloc
+   payload or throughput. The benchmark retains one latency float per
+   request through the snapshot; all other median managed types free
+   at the same rate as allocated.
+   Per-request type (count, requested bytes): list (7.10,284.0), tuple
+   (6.10,235.6), float (6,144), inline GEN frames (4.10,732.4), non-inline
+   GEN (4.05,226.8), iterator (3.05,97.6), virtual thread (3,600), dict
+   (2,112), dynamic class tag248 (1.05,84), str (1,127), bytes (1,111).
+   List+tuple 34.3% of allocation count; GEN+inline GEN+virtual thread
+   29.0% of count and 56.6% of requested bytes. <=64-byte objects
+   28.3/38.45 (73.6%). No slow free path in this workload. Diagnostic
+   instrumentation restored; no timing or production change claimed.
+   Next high-value structural candidate: the 4.05 ordinary GEN objects
+   at 56 bytes, distinct from 4.10 inline frames. The only source owner
+   is py_gen_new, called by py_gen_completed, inline-factory fallback
+   and non-inline codegen. Gateway source fork (2 inner +1 batch) and
+   close (1 inner +1/20 batch) have the immediate completed branch;
+   these source counts predict 4.05 but do not prove dynamic attribution.
+   First attribute py_gen_completed vs py_gen_from_inline_frame fallback
+   and actual callers, then measure real completed create/take/release
+   primitive cost and ceiling. If justified, design a private proven
+   immediate-result/real-continuation handoff for closed-world factory
+   calls eliminating temporary wrapper and associated ownership work,
+   preserving public generator representation and pending error,
+   cancellation, finalization and carrier handoff semantics. No
+   package-specific shortcuts, no unsound result tagging; test exact
+   failure and deferred branches, audit and concurrent gates. If below
+   floor, move to actual allocation owners of list/tuple/iterator.
    Exact proven retain candidate (Codex, Linux): symmetrical early return
    in `_gc_retain` for the same SSA proof used by `_gc_release`,
    preserving exact identity and ptr type, with unknown same-spelling
@@ -2409,7 +2444,6 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - J2s staged Mach-O relocation replay after canonical immutable-row count proof (macho_host_prepare only, disjoint from stackmaps, worker gates and codegen): Codex, Linux, 2026-11-26T17:24Z, area stage1-link
-   - Native handler allocation/free type and size attribution: Codex, Linux, 2026-11-26T17:12Z, area runtime-gc
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
