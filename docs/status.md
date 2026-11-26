@@ -574,7 +574,7 @@ in the relevant section or issue and removes the entry.
    under the unchanged 90 s / 1 GiB guard. Hosted verification pending.
 
    Claims:
-   - none
+   - #20 x86 constant GEP register-home witness: Codex, Linux, 2026-11-26T03:02Z, area backend (x86 register homes and its tests only; separate from AArch64 selection)
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
