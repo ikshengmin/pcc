@@ -1738,6 +1738,32 @@ in the relevant section or issue and removes the entry.
        564bac71a (the pool stops re-deciding an unchanged declined
        admission), a35adce4c (six Stage1 frontend workers, six backend
        jobs). Unmeasured as a whole: no Stage1 has run with all four.
+       Measured without a Stage1 (codegen workers replayed from that run's
+       manifests with the direct-indexed capture off): the self backend
+       takes about 200 us per IR line, linear in module size (class_gen:
+       706k lines, 10 s frontend, about 125 s backend), so Stage1 is about
+       43M IR lines, 65 per source line. Two host-side candidates showed
+       no gain on two replayed modules (three runs each, objects
+       identical) and were not merged: reading arena lengths directly
+       instead of `len()`, and tuple-based CompilerInt records. Across
+       class_gen, c_codegen, cli_bootstrap, type_infer and four smaller
+       modules (`pcc_perf.py ir`), per-call-site error paths are 25-30% of
+       IR lines: a cleanup chain of `py_cleanup_one_root_preserving_exception`
+       + `pcc_gc_frame_leave_lifo_local_mapped` per live temporary (5.2%),
+       `py_current_exception` + `py_exc_append_frame_source` per site
+       (5.0%), the exception-preserving call-slot cleanup (6.7%),
+       `py_err_occurred` checks (3.0%), raise sequences (2.6%). The chains
+       exist because each temporary root slot enters and leaves its own
+       LIFO frame, so error edges from different sites see different
+       frame stacks and cannot share a landing. Next (J2 (e), redesigned):
+       register a function's temporary slots once at entry (they are
+       already nulled at entry and after use) so every point has one root
+       state, then give each function one error landing that a site
+       enters with its line number. Separately, `_pcc_py_module_init_<mod>`
+       is dead (nothing calls it, see its docstring) and duplicates every
+       class definition: 21% of `pcc.frontends.python.py_ast`'s IR, 0-4%
+       of the larger modules; about ten tests read it as the class-init
+       IR and would move to `_pcc_py_module_top_<mod>`.
    J3. TaskScope (5x CPython), `time.perf_counter` (7x), `str.encode` (5x).
    A1. Darwin thread-local access inline (TSD slot through `tpidrro_el0`,
        startup check, fallback to the call): the resolver is 0.65 us per
