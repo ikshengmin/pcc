@@ -166,9 +166,10 @@ head `6cbafc4a`, pending behind the prior useful run. Since that exact
 checkpoint, substantial Stage2 lazy summary (`9f101283`) and sparse
 class preload (`7d172a8a`), shared generator save (`7e3d8d1e`), and C++
 stdlib surface (`e3b0440f`) have landed with focused evidence. This
-non-skip receipt queues the new integrated source alongside the older
-comparison (maintainer allows accumulating CI; no current useful run
-canceled). Do not claim any hosted lane green from focused tests. The latest completed
+non-skip receipt queued the new integrated source in
+[run 45862787448](https://github.com/ikshengmin/pcc/actions/runs/45862787448),
+head `c20c2c01`, alongside the older comparison (maintainer allows
+accumulating CI; no current useful run canceled). Do not claim any hosted lane green from focused tests. The latest completed
 [checkpoint comparison](investigations/checkpoint-validation-45427972345.md)
 keeps that baseline: candidate `7ec14d388` has exact test regressions
 [#19](https://github.com/ikshengmin/pcc/issues/19) and
@@ -1407,6 +1408,34 @@ in the relevant section or issue and removes the entry.
        calls, and the diagnostics-log call `py_obj_getattr` makes while the
        log is off; about 1.2 us of json's 6.8 (self-time guess). Parts in
        `py_list.py` wait for the (d) 4b claim.
+   Actual known-RC source attribution (Codex, Linux, same native handler
+   and gateway identities as below): diagnostic site-tagged wrappers
+   preserve original retain/release category gates; 13 sites x7 counters,
+   5 C20 10/50 alternating delta800 pairs. Site totals exactly equal
+   global known entries every run, w1 270.80125 all five pairs.
+   `py_gen_frame_set` inline retain 92.5/request: NULL27.5, tagged5.2,
+   immortal58.75, actual1.05; inline old release92.5: NULL58.75,
+   immortal33.75, actual0. `py_gen_frame_move` old release10.5:
+   NULL5.35, immortal5.15, actual0; same-value release19.85 all immortal.
+   Factory retain4.1 all actual; other compiler/unclassified51.35125
+   (tagged5.00125, immortal16.15, actual30.2, terminal1). All audited
+   get/list-frame and known root-store/take sites zero in this workload.
+   Thus inline set+move: 215.35 total, 214.3 no-op (91.0% of all
+   235.45 known no-op entries); w4 set medians91.76 each, old move28.00
+   (NULL22.92), same-value move19.40 all immortal; actual set retain
+   1.05, all set releases and moves no count changes. Runtime diagnostic
+   binary SHA4e2d2bde745c729bac18f0fad19148ec4433452b47bce11f1cca176ad324c111.
+   Source instrumentation restored, no diagnostic timing or code published.
+   Next actual runtime unit: preserve diagnostic/provenance mode in
+   `py_gen_frame_set/move` (and only proven inline frame), avoid known
+   calls on NULL/tagged and on admitted immortal values with the same
+   `pcc_gc_known_ref_checks` gate; -1 or enabled sends original path.
+   Move's same-value branch releases the same pointer as old by proof,
+   so only drop old's one surplus owner, with null/tagged skip. Keep
+   publish-before-terminal-release, callback, weakref/resurrection and
+   cross-carrier frame semantics. First measure null/tagged and admitted
+   immortal costs with real handler/primitive controls, then 5 native
+   alternating A/B and exact counts/output, no throughput extrapolation.
    Exact proven retain candidate (Codex, Linux): symmetrical early return
    in `_gc_retain` for the same SSA proof used by `_gc_release`,
    preserving exact identity and ptr type, with unknown same-spelling
@@ -2305,7 +2334,6 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
-   - Known RC no-op attribution by generator frame get/move/set and root-store source site (diagnostic only): Codex, Linux, 2026-11-26T16:53Z, area runtime-gc
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
