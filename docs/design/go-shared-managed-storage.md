@@ -322,3 +322,42 @@ execution passed as above; Linux AArch64, Darwin ARM64 and Windows x86-64
 native execution are **UNRUN**, not inferred from the object receipts.
 The next acceptance evidence is paired ordinary native handler QPS/CPU/RSS
 against the exact pre-tag source, not a change in declared language support.
+
+## Ordinary Linux native-handler A/B (performance gate not released)
+
+Frozen pre-tag source `7763efd4` (base binary SHA-256
+`135ed295823122b28d04ae87395da63e7e3b2a02cd47fa3f6383f1765d78f504`)
+versus combined lifecycle source `534b4e9e` (candidate SHA-256
+`a3c58352b90b6cbc977cf34d0196bf3e64631e46f3b2e6a9a4b8bc738fa4d816`).
+Their production diff consists only of #13 runtime/ABI owners; both use the
+same unchanged handler source and gateway `b1490486a993c9528dcbfeecf499daba18ae0ef1`.
+Candidate was compiled with the strictly admitted 193-member runtime,
+self backend/scaffold on, threads enabled and atomic refcount; build guard
+99.25 s/792,993,792 B peak. Timing was serialized after other builds and
+benchmarks. Each worker count ran five alternating base/candidate/control
+triples of 100,000 requests (concurrency 100, 1,000 rounds); the unchanged
+base executable is the control, and each count used identical affinity
+(w1 one CPU, w4 five CPUs including the initiating thread). Each arm had a
+warmup; requests, allocations, processor time and RSS are actual receipts.
+
+| Linux x86-64 metric | w1 base / candidate / control | w4 base / candidate / control |
+| --- | ---: | ---: |
+| Median QPS | 19,336 / 19,016 / 19,033 | 39,205 / 37,642 / 37,420 |
+| Candidate vs base | -1.66% (1/5 wins) | -3.99% (2/5 wins) |
+| Median CPU µs/request | 52.002 / 52.888 / 52.685 | 95.073 / 99.958 / 100.180 |
+| Candidate CPU change | +1.70% (1/5 wins) | +5.14% (2/5 wins) |
+| Control noise, QPS / CPU (median absolute paired ratio) | 1.69% / 2.08% | 7.72% / 9.25% |
+| Allocation counts (median each arm) | 3,833,841 | 3,833,847 |
+| Peak RSS (median each arm) | 42,332,160 B | 42,332,160 B |
+| Max-STW µs (median) | 2,081 / 1,999 / 1,938 | 1,804 / 1,916 / 2,028 |
+
+w1 is within control noise, and w4 is **inconclusive**: the control drift
+itself exceeds the 5% threshold. Candidate vs control median QPS is -0.09%
+(w1), +0.60% (w4); median CPU +0.38%, -0.22%, respectively. These are
+context, not a replacement for the alternating paired verdict. The matching
+allocation/RSS receipts and near-control medians show no clear penalty,
+but cannot prove w4 non-regression with that wide noise. Raw local receipt
+SHA-256 `067d6f3d1aaa2aadf8fc5ff7671fb7f3f058cb1907397ffd80b2f99effc27d41`.
+No gate release or language admission follows; repeat on a stable host and
+complete the required macOS/platform validation before calling the collector
+interface stable.

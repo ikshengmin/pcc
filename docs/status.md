@@ -2636,7 +2636,6 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Stage1 Linux x64 function emission register-copy/frame repeated scans: Codex, Linux, 2026-11-26T18:08Z, area backend-x64-function
-   - #13 final small/raw lifecycle cross-target owned ABI and paired Linux QPS non-regression: Codex, Linux, 2026-11-26T17:59Z, area runtime-gc-described-layout
    - Closed-world continuation factory immediate result handoff proof and narrow candidate: Codex, Linux, 2026-11-26T17:39Z, area runtime-codegen-factory
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
@@ -2732,10 +2731,22 @@ in the relevant section or issue and removes the entry.
    arguments/results (LLP64 included), and unique constructor/visitor/
    dealloc cross-object relocation owners. 3 focused checks passed under
    90s/1GiB guard (33.91s,130,854,912 B). Native execution there UNRUN.
-   Linux ordinary paired QPS/CPU/RSS A/B against pre-tag 7763efd4 pending
-   exclusive timing; claim remains active. Next: platform native and
-   collector-interface review before generic Go/Java lowering or
-   unchanged upstream acceptance. C++
+   Actual exclusive Linux QPS/CPU/RSS A/B frozen pre-tag 7763efd4 vs
+   combined lifecycle 534b4e9e, same gateway b1490486 and handler bytes;
+   five alternating base/candidate/unchanged-base-control triples each
+   w1/w4, 100,000 timed requests per arm. w1 median QPS 19,336→19,016
+   (-1.66%, 1/5), control 19,033, paired noise 1.69%; CPU 52.002→52.888
+   us/req (+1.70%), control 52.685, noise 2.08%: within noise. w4 QPS
+   39,205→37,642 (-3.99%, 2/5), control 37,420, noise 7.72%; CPU
+   95.073→99.958 (+5.14%), control 100.180, noise 9.25%: inconclusive.
+   RSS medians all 42,332,160 B; allocation medians exactly equal;
+   max-STW median w1 2081→1999 us/control1938, w4 1804→1916/control2028.
+   No clear penalty relative to control, but w4 performance non-regression
+   is NOT established; no collector-interface stability or frontend
+   admission. See shared storage design for frozen hashes, receipt and
+   control details. Next: quiet stable repeat + required platform native
+   and macOS A/B before generic Go/Java lowering or unchanged upstream
+   acceptance. C++
    [#14](https://github.com/ikshengmin/pcc/issues/14):
    implicit/explicit destructor exception specifications and the non-throwing
    override rule now select ordinary versus effect-gated D1 destruction.
