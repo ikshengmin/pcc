@@ -3152,8 +3152,26 @@ in the relevant section or issue and removes the entry.
    qualification claimed. Next: host worker A/B and hosted checkpoint
    receipts; then profile remaining full export/AST worker owners.
 
+   Compact class preload host worker A/B follow-up (16f2386b):
+   source-matched actual pcc0 host worker body with phase timers,
+   same full22,772,804B vs compact1,988,766B graph/8-root manifest as
+   native A/B. Exclusive quiet five alternating fresh process pairs:
+   median full CPU.879472 ->.331257s (-62.33%,5/5); wall.879994 ->
+   .331633s (-62.31%,5/5), peak RSS148,448 ->33,684KiB (-77.31%,5/5).
+   Decoder wall.476158 ->.056555s (-88.12%,5/5), global preload
+   .136883 ->.027568s, root loop.105920 ->.110014s neutral (2/5).
+   Unchanged full zero-root control CPU1.087209s (range.905555–
+   1.169006s; noisy but primary gain far beyond control drift), RSS
+   148,444KiB. All output bytes exact SHA256
+   1a984f6a4e875793febbe097c32528708930c1a5c8f30bd4fa1270d34fb5111c.
+   Guard COMPLETE11.86s/164,339,712B. Both host and native worker
+   improvements established; whole Stage1/Stage2 remains unqualified
+   until hosted receipts include production16f2386b.
+   Next: profile remaining actual export/AST worker owners; use CI
+   phase receipts to choose the next structural target.
+
    Claims:
-   - Stage1 host compact class preload worker A/B: Codex, Linux, 2026-11-26T17:32Z, area selfhost
+   - none
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
