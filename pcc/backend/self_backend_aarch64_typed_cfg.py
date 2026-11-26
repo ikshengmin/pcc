@@ -5,6 +5,7 @@ Event indices, including blanks and directives, intentionally define the old
 """
 from __future__ import annotations
 
+from .self_backend_aarch64_fragments import EMISSION_RECORD_LABEL
 from .self_backend_aarch64_semantics import (
     TOKEN_REGISTER, TOKEN_SYMBOL,
     REGISTER_WSP, REGISTER_XZR, REGISTER_WZR,
@@ -48,7 +49,10 @@ def _local(ctx, record_id):
         cache = ctx.local_labels
         if record_id in cache:
             return cache[record_id]
-        decoded = _decode_local(ctx, record_id)
+        # The shared context has already validated this immutable record;
+        # only the family lane is needed to rule out a label.
+        family = ctx.fragments.records.get_unchecked(record_id * 4 + 1)
+        decoded = _decode_local(ctx, record_id) if family == EMISSION_RECORD_LABEL else None
         cache[record_id] = decoded
         return decoded
     return _decode_local(ctx, record_id)

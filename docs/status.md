@@ -2170,13 +2170,28 @@ in the relevant section or issue and removes the entry.
    noisy, no native Mac claim). Both exact output records match and assemble;
    615 focused typed tests pass, changed module emits x86 Linux IR. Work-count
    witness reduces 1000 invariant operand constructions to 1. Pass-only
-   host cross-target gains, whole-stage CI pending. Next: re-profile the
-   remaining frontend/backend owners on a current module and equal-ceiling
+   host cross-target gains, whole-stage CI pending. Current source `bc8f04f6` host cross-target indexed
+   worker_resource_plan IR SHA256
+   `c1b90e8aea46568b070c7957789825c6fb7d7c8fe74b7afd356d633df521c36e`:
+   parse 2.51 CPU s, emit 14.91 CPU s; inclusive prepare 5.10 wall s,
+   function emit 5.67 wall s; largest typed children trampoline 0.898,
+   publish 0.660, adjacent store/load forward 0.573, validation 0.489,
+   memory pairing 0.412 s. No additive wall/CPU or stage-speed claim.
+   A cached-opcode prefilter was rejected (2/5; control drift). The shared
+   immutable context can read only the family lane to reject non-labels
+   before decoding full records; debug/foreign context retains checks.
+   Actual 203,963 pre-trampoline events, restore all four decode-cache
+   snapshots before every arm (35,880 preexisting opcode entries; other
+   three empty): 0.72547 -> 0.61191 CPU s (-15.7%, 5/5), control 0.05689 ->
+   0.05479 s. Exact record/word/token outputs agree; assembled. 616
+   focused typed tests passed; old implementation fails new work-count
+   witness; changed module emits x86 Linux IR. Whole-stage CI pending.
+   Next: typed publish and remaining high-share owners, equal-ceiling
    Stage2/3 CI.
    [Phase investigation](investigations/stage2-worker-budget-parity-45643044565.md).
 
    Claims:
-   - Current Stage1/Stage2 indexed backend profile and highest unclaimed owner: Codex, Linux, 2026-11-26T14:02Z, area backend
+   - none
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its

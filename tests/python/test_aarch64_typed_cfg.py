@@ -221,3 +221,32 @@ def test_trampoline_nontrivial_body_stops_after_second_instruction():
     records += [ctx.add("  nop", "nop") for _ in range(1000)]
     assert typed.thread_trampoline_branches_records(ctx, records) == records
     assert ctx.empty_reads == 3
+
+
+def test_shared_local_label_decode_uses_only_family_lane_for_instruction(monkeypatch):
+    monkeypatch.delenv("PCC_DEBUG_AARCH64_VERIFY_EACH", raising=False)
+    from pcc.backend.self_backend_aarch64_fragments import AArch64EmissionFragments
+    from pcc.backend.self_backend_aarch64_typed_pass_context import TypedPassContext
+
+    fragments = AArch64EmissionFragments(capture_semantics=True)
+    try:
+        ctx = TypedPassContext(fragments, fragments.semantics)
+        instruction = ctx.emit("nop", [])
+        span = fragments.new_fragment()
+        fragments.append_label(span, "L_target")
+        label_id = fragments.symbol_ids["L_target"]
+        ctx = TypedPassContext(fragments, fragments.semantics)
+        reads = []
+        original = ctx.label
+
+        def count(record):
+            reads.append(record)
+            return original(record)
+
+        monkeypatch.setattr(ctx, "label", count)
+        assert typed._local(ctx, instruction) is None
+        label_record = ctx.read_span(span)[0]
+        assert typed._local(ctx, label_record) == label_id
+        assert reads == [label_record]
+    finally:
+        fragments.close()
