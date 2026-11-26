@@ -387,6 +387,47 @@ intact. This non-skip status-only commit queues the next distinct
 source snapshot, no worker/deadline/resource gate changes, no
 cancellation or rerun.
 
+As of 2026-11-26T22:27Z a newly distinct cumulative exact source
+snapshot at production head de4eb2b1 follows the pending prior
+non-skip run [45900488816 (#643)](https://github.com/ikshengmin/pcc/actions/runs/45900488816),
+head 7fcbb3948fa161dd2e3672d82eaeef0bfde188fe. First-parent ancestry
+is verified through all six subsequent accepted units:
+raw machine method ABI 7d3c7540 (actual baseline37->75, candidate37 exact,
+native signed/unsigned boundaries and ordinary control, host110,
+three contextual625/zero fallback);
+retired direct libpython package test c963ef85 (focused2, no route
+restoration/cache admission), explicit legacy ABI label model4a6f8f30
+(focused8), atomic unsupported package mode rejection3c33b911
+(host/native-source54 pass, no invalid acquisition/build/install/cache
+or native claim, four strict contextual625/zero fallback, current actual
+pcc1 fixture UNRUN); real four-platform worker-prior stale bounded
+root-cleanup model5f49dbca (baseline1F17P->24/24, actual runtime helper1–5
+and reverse caller cleanup/stackmaps, six-root inline, adjacent exact
+baseline4F108P->3F115P; no hosted acceptance yet). Stage1 ARM typed
+single-run host snapshot de4eb2b1 accepted only structural memory:
+actual captured read_span projected transient24,338,752->12,169,320B,
+108 focused, changed contextual626/zero fallback, exact large/small
+PCO; formal small CPU neutral and RSS noninferior, no whole-stage speed
+or high-water improvement claim. No rejected Stage2 signature candidate
+or current unaccepted GC dictionary owner included.
+
+Latest #638 run45868668374 clean9223aca1 actual Stage1 identity all
+625/625: Linux x64 compile1189.280s / peak2,799,013,888B (artifact
+15153817780), Linux ARM64 1588.248s / 4,607,479,808B (15153818646),
+Windows 1238.509s / 3,655,790,592B (15155040498), Mac3314.551s /
+entry3349.806s, peak RSS unavailable in profile (15156391872, cap is
+not peak). All exact bundle and receipt hashes checked. Full-bootstrap
+owners x64/ARM/Win hit unchanged1800s timeout; comparable partial
+native Stage2 x64 peak2,778,996,736B at sample1783.604s, four codegen
+modules complete, unsafe_lowering still running; Windows partial peak
+1,910,099,968B at1775.078s, three modules complete, class_gen started.
+No completed Stage2 wall/RSS <= Stage1 or six-worker300s acceptance.
+All four #638 worker-prior maxfail artifacts reproduce one stale
+three-root test, now fixed5f49dbca; no resource relaxation. Prior
+#643 exact pending run count one; production parent de4eb2b had no
+workflow run before this distinct normal non-skip checkpoint. Existing
+useful queued/active runs preserved, no rerun or cancellation.
+
 Do not claim any hosted lane green from focused tests. The latest completed
 [checkpoint comparison](investigations/checkpoint-validation-45427972345.md)
 keeps that baseline: candidate `7ec14d388` has exact test regressions
