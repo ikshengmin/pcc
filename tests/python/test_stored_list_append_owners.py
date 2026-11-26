@@ -1,4 +1,4 @@
-"""Execute stored append's actual runtime bodies with relocation and failures."""
+"""Execute stored append's actual runtime bodies at collection points and failures."""
 from __future__ import annotations
 
 import ast

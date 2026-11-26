@@ -1,4 +1,4 @@
-"""Execute actual generic bitwise owner bodies with moving roots and failures."""
+"""Execute actual generic bitwise owner bodies at collection points and failures."""
 from __future__ import annotations
 
 import ast
@@ -293,18 +293,6 @@ def test_temporary_operand_disposal_preserves_result_or_callback_exception(failu
     assert model.pending == (None if failure is None else 'callback-error')
     if result is not None:
         assert result.identity == b.identity
-    model.check(result, baseline)
-
-
-def test_result_alias_preserves_an_existing_external_pin():
-    model = BitwiseMemory()
-    a = model.new(ABI['PY_TYPE_INSTANCE'], 'left')
-    b = model.new(ABI['PY_TYPE_INSTANCE'], 'right')
-    model.object(b)['pinned'] = True
-    baseline = {identity: obj['refs'] for identity, obj in model.objects.items()}
-    result = model.env['_py_obj_bitwise_dispatch'](a, b, 1)
-    assert result.identity == b.identity and model.object(result)['pinned']
-    model.object(result)['pinned'] = False
     model.check(result, baseline)
 
 

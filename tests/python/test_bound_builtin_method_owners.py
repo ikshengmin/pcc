@@ -1,4 +1,4 @@
-"""Execute the dict/list bound-method runtime bodies with relocation and failures."""
+"""Execute the dict/list bound-method runtime bodies at collection points and failures."""
 from __future__ import annotations
 
 import pytest

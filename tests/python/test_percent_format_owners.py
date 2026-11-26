@@ -261,7 +261,7 @@ class PercentMemory:
             return value
         def take_pinned(slot, prior):
             # The legacy take, for users of this model whose runtime module
-            # has not dropped its pins yet (py_obj_ops_dispatch, item 2 (d)).
+            # has not dropped its pins yet (py_class, item 2 (d) U5).
             value = self.load(slot)
             if value is not None:
                 self.object(value)['pinned'] = bool(prior)

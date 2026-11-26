@@ -61,6 +61,7 @@ class StringMemory(Memory):
             "pcc_gc_note_relocation_read":lambda obj:obj,
             "pcc_capi_is_cext_type_tag":lambda tag:0,
             "pcc_gc_pin":self.pin, "pcc_gc_take_pinned_slot":self.take,
+            "pcc_gc_take_slot":self.take_slot,
             "py_tuple_new":self.new_tuple, "py_tuple_len":lambda obj:self.read(obj,16),
             "py_tuple_set_item":self.tuple_set,
             "py_incref":self.retain, "py_decref":self.release_value,
@@ -144,7 +145,17 @@ class StringMemory(Memory):
             obj.leases += 1
             obj.fields[12] = (obj.fields.get(12) or 0) | 64
 
+    def take_slot(self, slot):
+        # pcc_gc_take_slot: the slot's owner moves to the caller; nothing
+        # was pinned, so no lease is returned.
+        value = self.read(slot, 0)
+        self.write(slot, 0, None)
+        if isinstance(value, Object):
+            assert value.alive
+        return value
+
     def take(self, slot, prior):
+        # The legacy take, for py_class until it drops its pins (item 2 (d) U5).
         value = self.read(slot, 0)
         self.write(slot, 0, None)
         if isinstance(value, Object):
