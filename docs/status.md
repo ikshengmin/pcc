@@ -2628,9 +2628,26 @@ in the relevant section or issue and removes the entry.
 5. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:
-   Linux first for NumPy, any for the value model. Next: not yet assessed in
-   this order; read those sections and issues and fix the first observed
-   blocker.
+   Linux first for NumPy, any for the value model. NumPy generated-input
+   frontier (after item 4 ctype.h): unmodified NumPy _core/meson.build lines
+   550–564 owns config.h and _numpyconfig.h through stock configure_file;
+   cdata is determined by actual target sizeof (including complex, wchar_t,
+   off_t and Python C-ABI types), mandatory math/complex/stdlib symbol
+   probes, long-double object-format, endian, visibility, selected threading
+   and source ABI/API versions. No static guessed header qualifies.
+   The host-only PCC Meson adapter explicitly has C/C++/ar providers only;
+   stock NumPy project declares Cython >=3.0.6 before these probes.
+   The adapter also rejects implicit named-library discovery (-lm), debug
+   mode and Ninja dependency generation. Native package build declares
+   OWNED-CYTHON-UNAVAILABLE and OWNED-MESON-GRAPH-REQUIRED; Cython is not
+   vendored or installed on this probe host. The existing CI NumPy lane is
+   explicitly host-PCC source-only, with unchanged C/C++ TUs and no native
+   Stage1 dependency, and must remain red on missing generated inputs.
+   Next independent native work: source-pin and qualify Cython and Meson
+   execution using the admitted owned compiler, bind real Python C-API and
+   native math/ABI checks, and consume the generated out-of-source header
+   overlay with authenticated provenance. Do not insert untracked headers
+   into the locked source or convert the existing host failure to UNRUN.
 
    Claims:
    - none
