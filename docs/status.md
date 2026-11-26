@@ -2635,6 +2635,7 @@ in the relevant section or issue and removes the entry.
    on 2026-11-26.
 
    Claims:
+   - #13 described-layout ordinary allocation primitive and long w4 non-regression retest: Codex, Linux, 2026-11-26T18:17Z, area runtime-gc-described-layout
    - Stage1 Linux x64 function emission register-copy/frame repeated scans: Codex, Linux, 2026-11-26T18:08Z, area backend-x64-function
    - Closed-world continuation factory immediate result handoff proof and narrow candidate: Codex, Linux, 2026-11-26T17:39Z, area runtime-codegen-factory
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
