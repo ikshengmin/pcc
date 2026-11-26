@@ -430,10 +430,16 @@ def _grow_if_needed(l, want: int):
         retargeted: int = 1
         # Still GC0 under the lock (checked above).
         memmove(new_items, old_items, old_length * 8)
+        # The old inline tail remains inside the live list, but it no
+        # longer owns these references. Clear it under the transaction.
+        old_inline: int = ptr_eq(old_items, ptr_add(l, PYLISTOBJECT_SIZE))
         store_ptr(l, PYLISTOBJECT_ITEMS_OFFSET, new_items)
         store_i64(l, PYLISTOBJECT_CAPACITY_OFFSET, cap)
+        if old_inline != 0:
+            memset(old_items, 0, 4 * C_POINTER_SIZE)
         _list_unlock(locked)
-        free(old_items)
+        if old_inline == 0:
+            free(old_items)
         free(slot_pairs)
         if ptr_is_null(owner_handle) == 0:
             pcc_gc_native_root_unbind(owner_handle)
@@ -497,17 +503,31 @@ def _list_allocate_unpublished(output, requested: i64) -> i64:
     On failure the caller preserves its exception while retiring the
     partial owner.
     """
-    store_ptr(output, 0, pcc_gc_alloc(PYLISTOBJECT_SIZE, PY_TYPE_LIST, 0))
+    cap: i64 = requested
+    if cap < 4:
+        cap = 4
+    # A nonmoving container can own its initial four slots in the same
+    # allocation. The public header/length/capacity/item-pointer ABI stays
+    # identical; only this fresh owner's payload points at its zero-filled
+    # tail. A future relocating container must continue to use separate
+    # storage until it can retarget this self-relative pointer.
+    inline: int = 0
+    object_size: int = PYLISTOBJECT_SIZE
+    if cap == 4 and load_i32(global_addr("pcc_gc_list_container_mode"), 0) != 0:
+        inline = 1
+        object_size = object_size + 4 * C_POINTER_SIZE
+    store_ptr(output, 0, pcc_gc_alloc(object_size, PY_TYPE_LIST, 0))
     if ptr_is_null(load_ptr(output, 0)) != 0:
         return -1
     # Initialize the collector-visible shape before the first parking call.
     l = load_ptr(output, 0)
     store_i64(l, PYLISTOBJECT_LENGTH_OFFSET, 0)
-    cap: i64 = requested
-    if cap < 4:
-        cap = 4
     store_ptr(l, PYLISTOBJECT_ITEMS_OFFSET, null())
     store_i64(l, PYLISTOBJECT_CAPACITY_OFFSET, cap)
+    if inline != 0:
+        # pcc_gc_alloc zeroes the entire requested object extent.
+        store_ptr(l, PYLISTOBJECT_ITEMS_OFFSET, ptr_add(l, PYLISTOBJECT_SIZE))
+        return 0
     stride: i64 = i64(C_POINTER_SIZE)
     items = malloc(cap * stride)
     if ptr_is_null(items):
@@ -804,13 +824,17 @@ def _append_grow_gc0(list_slot, item_slot, old_items, old_capacity: int) -> int:
         return 0
     memmove(new_items, old_items, length * C_POINTER_SIZE)
     memset(ptr_add(new_items, length * C_POINTER_SIZE), 0, (new_capacity - length) * C_POINTER_SIZE)
+    old_inline: int = ptr_eq(old_items, ptr_add(lst, PYLISTOBJECT_SIZE))
     store_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET, new_items)
     store_i64(lst, PYLISTOBJECT_CAPACITY_OFFSET, new_capacity)
+    if old_inline != 0:
+        memset(old_items, 0, 4 * C_POINTER_SIZE)
     result: int = pcc_gc_init_admitted_ptr_locked(ptr_add(new_items, length * C_POINTER_SIZE), item_slot)
     if result != 0:
         store_i64(lst, PYLISTOBJECT_LENGTH_OFFSET, length + 1)
     _list_unlock(locked)
-    free(old_items)
+    if old_inline == 0:
+        free(old_items)
     return result
 
 

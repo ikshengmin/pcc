@@ -7,7 +7,7 @@ archive member so that ordinary list users do not pay for it.
 
 __pcc_runtime_port__ = True
 
-from pcc.runtime.py.py_abi_constants import PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_TUPLE
+from pcc.runtime.py.py_abi_constants import PYLISTOBJECT_SIZE, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_TUPLE
 
 from pcc.extern import c_abi_export, c_int32, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
@@ -578,9 +578,12 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
                 pcc_platform_abort()
                 return -1
             i = i + 1
+        old_inline: int = ptr_eq(old_items, ptr_add(lst, PYLISTOBJECT_SIZE))
         store_ptr(lst, 32, new_items)
         store_i64(lst, 24, new_capacity)
         store_i64(lst, 16, new_len)
+        if old_inline != 0:
+            memset(old_items, 0, 32)
         pcc_list_unlock(locked)
 
         i = 0
@@ -591,7 +594,8 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
         while i < old_len:
             pcc_gc_store_ptr_plan_finish(ptr_add(old_plans, i * 128))
             i = i + 1
-        free(old_items)
+        if old_inline == 0:
+            free(old_items)
         free(slot_pairs)
         free(new_plans)
         free(old_plans)

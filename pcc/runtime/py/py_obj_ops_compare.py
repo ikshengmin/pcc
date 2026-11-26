@@ -26,6 +26,7 @@ __pcc_runtime_port__ = True
 from pcc.runtime.py.py_abi_constants import (
     PYLISTOBJECT_CAPACITY_OFFSET,
     PYLISTOBJECT_LENGTH_OFFSET,
+    PYLISTOBJECT_SIZE,
 )
 from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void, c_double
 from pcc.runtime.py.py_abi_constants import PY_TYPE_ELLIPSIS, PY_TYPE_NOTIMPLEMENTED
@@ -2215,9 +2216,13 @@ def _sorted_reorder_values(values, pairs, scratch, count: int, capacity: int) ->
     while index < count:
         new_slot = ptr_add(scratch, index * _SORT_BYTES)
         index = index + 1
+    old_inline: int = ptr_eq(old_items, ptr_add(owner, PYLISTOBJECT_SIZE))
     store_ptr(owner, PYLISTOBJECT_ITEMS_OFFSET, scratch)
+    if old_inline != 0:
+        memset(old_items, 0, 4 * C_POINTER_SIZE)
     pcc_py_gc_minor_graph_unlock()
-    free(old_items)
+    if old_inline == 0:
+        free(old_items)
     return 0
 
 

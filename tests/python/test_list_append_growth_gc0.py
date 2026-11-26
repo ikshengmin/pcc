@@ -31,12 +31,13 @@ RUNTIME = Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_list.py"
 class ListMemory:
     """Word memory: lists are dicts of fields, item arrays are Python lists."""
 
-    def __init__(self, capacity, length):
+    def __init__(self, capacity, length, inline=False):
         self.locks = 0
         self.depth = 0
         self.freed = []
         self.buffers = {}
         self.items = self.buffer(capacity)
+        self.inline_items = self.items if inline else None
         for index in range(length):
             self.items[index] = ("item", index)
         self.list = {abi.PYLISTOBJECT_ITEMS_OFFSET: ("buffer", id(self.items)),
@@ -69,6 +70,11 @@ class ListMemory:
                 raise AssertionError(base)
 
         def ptr_add(base, offset):
+            if base == "list":
+                assert offset == abi.PYLISTOBJECT_SIZE
+                if memory.inline_items is not None:
+                    return ("buffer", id(memory.inline_items))
+                return ("not-the-external-buffer", id(memory.list))
             assert base[0] == "buffer"
             return ("cell", base[1], offset)
 
@@ -84,7 +90,7 @@ class ListMemory:
 
         def memset(destination, value, size):
             cells = memory.buffers[destination[1]]
-            start = destination[2] // 8
+            start = destination[2] // 8 if len(destination) == 3 else 0
             for index in range(start, start + size // 8):
                 cells[index] = None
 
@@ -150,6 +156,18 @@ def test_full_list_doubles_and_appends_in_two_transactions():
     assert memory.list[abi.PYLISTOBJECT_CAPACITY_OFFSET] == 8
     assert memory.contents() == [("item", 0), ("item", 1), ("item", 2), ("item", 3), ("item", "new")]
     assert memory.freed == [old]
+
+
+def test_full_inline_list_moves_owners_without_freeing_its_interior():
+    memory = ListMemory(capacity=4, length=4, inline=True)
+    old = memory.list[abi.PYLISTOBJECT_ITEMS_OFFSET]
+    namespace = memory.namespace()
+    assert namespace["_append_existing_capacity_gc0"](memory.list_slot, memory.item_slot) == 1
+    assert memory.locks == 2 and memory.depth == 0
+    assert memory.list[abi.PYLISTOBJECT_CAPACITY_OFFSET] == 8
+    assert memory.contents() == [("item", 0), ("item", 1), ("item", 2), ("item", 3), ("item", "new")]
+    assert memory.freed == []
+    assert memory.buffers[old[1]] == [None] * 4
 
 
 def test_a_list_changed_during_allocation_leaves_the_general_path():

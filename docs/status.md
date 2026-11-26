@@ -3814,9 +3814,64 @@ in the relevant section or issue and removes the entry.
    costs, then shape/ownership proof before choosing a layout or
    pre-sizing candidate; no unsafe blanket lock/provenance removal.
 
+   Nonmoving list inline four-slot storage (Codex/Linux, exact source
+   23892fb0). Actual list initial capacity4 owner7.1/request,227.2
+   requested raw bytes; measured shape-driven nonmoving container
+   can own zeroed initial four pointers in its object tail. Public
+   header/length/capacity/items-pointer ABI unchanged, future moving
+   mode retains separate storage. Growth/append/slice/sorted owner
+   transitions retarget and clear retired inline tail under existing
+   transaction; never free self-relative storage; ordinary external
+   payload release unchanged, terminal dealloc retires owner once.
+   Exact actual count diagnostic raw17.57625->10.47625/request,
+   managed35.45 unchanged, total requested4965.12B unchanged,
+   total usable +227.2B (object class tradeoff); no blanket allocator
+   bypass. Diagnostic sources restored before native production build.
+   Exact native C inline storage/retarget/C contract, 4-carrier
+   concurrent list programs, 777 cycle collection, terminal weak
+   callbacks both probe0/2, known/provenance audits exact, including
+   w4 1000 requests metric28=0. Baseline C contract expected non-inline
+   succeeds both probes and expected-inline fails layout rc4;
+   all native cost sanity counts1/2/4/5/9 n100 exact. 87 focused
+   tests pass (1 deselected); broad old allocation/source models same
+   34 failures/17 passed/1 deselected on exact baseline and candidate,
+   no false broad pass. Candidate/base ELF SHA256 respectively
+   f9a0b4dae24226abe281f6c922e28a339c0c2503423c797225f822ce87a19451
+   9eacb5967461e443714c7df1272a89cc9efeedbc1310f93246bd2b2016545d27.
+   Five quiet native owner 300k-loop alternating triples per count,
+   unchanged control, median base->candidate ns and paired
+   normalized reduction/wins/max control: count1 533.95->459.50
+   (12.393%,5/5,4.949%), count2 620.25->547.18
+   (12.213%,5/5,4.825%), count4 809.19->762.30
+   (5.979%,4/5,2.289%), count5 1049.93->1010.56
+   (5.379%,4/5,4.169%), count9 1608.25->1551.91
+   (1.229%,3/5,6.458%, neutral). All75 exact checksum.
+   Actual handler C100*2000 five alternating triples per worker,
+   same-base controls, exact requests. w1 QPS17621.07->17776.39
+   (+0.88%,4/5), paired norm+0.951% vs max control1.357%, directional
+   only; CPU56.8773->56.3993us normalized -1.639%4/5 beyond max
+   control1.152%; allocations exact, RSS36,728,832->36,597,760B,
+   norm -0.357%5/5 beyond control0.011%; STW norm+4.947%
+   within control8.186% median/45.46% max. w4 QPS40054.27->
+   40174.26 norm -1.428%2/5 vs max control6.79%; CPU92.226->
+   91.925us norm+0.824%2/5 vs max8.93%, neutral/inconclusive;
+   RSS41,431,040->41,517,056B norm+0.124% within control
+   0.168% median/0.355% max; STW norm -3.818% within control.
+   Separate exact C100*500 latency five triples: w1 p99
+   6.016->5.377ms control4.989, norm -9.387%4/5 vs control
+   median/max17.071/40.65%; RSS norm -0.338%5/5, STW norm
+   -10.324% within max65.64%; w4 p99 1.262->1.359ms control
+   1.376, norm+2.296% within control9.033/11.308%; RSS norm
+   +0.118% within control0.456/0.648%, STW norm+1.544%
+   within controls. No reproducible RSS/p99/STW regression beyond
+   controls. Admit measured small-list native owner and modest w1
+   CPU/RSS reduction, throughput directional only, w4 neutral.
+   No whole Stage1/Stage2 or hosted CI pass claim. Next attribute
+   remaining list growth, dict raw storage and continuation node
+   ownership cost before selecting the next structural reduction.
+
    Claims:
    - Stage1 ARM typed validation successful scalar provenance owner: Codex, Linux, 2026-11-26T20:40Z, area backend-aarch64-validate
-   - Actual raw allocator callsite and slab lifecycle attribution: Codex, Linux, 2026-11-26T20:17Z, area runtime-gc-raw-allocation
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets

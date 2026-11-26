@@ -22,7 +22,7 @@ def _listsort_layout():
 
 class SortModel(_ExtensionModel):
     def __init__(self, values, *, key=False, compare=False, reverse=False, relocate=False,
-                 failure=None, key_alias=False, payload_capacity_slack=0):
+                 failure=None, key_alias=False, payload_capacity_slack=0, inline_work_payload=False):
         super().__init__(None, relocate, False)
         self.failure, self.reverse, self.key_alias = failure, reverse, key_alias
         self.key_calls = self.compare_calls = self.allocations = self.list_allocations = 0
@@ -33,6 +33,7 @@ class SortModel(_ExtensionModel):
         self.work_list = None
         self.work_length_reads = 0
         self.payload_capacity_slack = payload_capacity_slack
+        self.inline_work_payload = inline_work_payload
         self.freed = set()
         self.source[0].payload = []
         for index, value in enumerate(values):
@@ -51,7 +52,8 @@ class SortModel(_ExtensionModel):
             '_SORT_RIGHT': 8, '_SORT_REVERSE': 9, '_SORT_ERROR': 10, '_SORT_COUNT': 11, '_SORT_BYTES': 8,
             'PYLISTOBJECT_LENGTH_OFFSET': 16,
             'PYLISTOBJECT_CAPACITY_OFFSET': 24,
-            'PYLISTOBJECT_ITEMS_OFFSET': 32,
+            'PYLISTOBJECT_ITEMS_OFFSET': 32, 'PYLISTOBJECT_SIZE': 40, 'C_POINTER_SIZE': 8,
+            'ptr_eq': lambda a, b: int(a == b), 'ptr_add': self.pointer_add,
             'pcc_py_gc_minor_graph_lock': self.lock,
             'pcc_py_gc_minor_graph_unlock': self.unlock,
             'pcc_gc_load_ptr': self.gc_load,
@@ -107,6 +109,12 @@ class SortModel(_ExtensionModel):
         self.next_address += ((size + 7) // 8) * 8 + 64
         return address
 
+    def pointer_add(self, base, offset):
+        if isinstance(base, tuple):
+            assert offset == 40
+            return getattr(self.check(base)[0], 'inline_payload_base', -1)
+        return base + offset
+
     def load(self, base, offset):
         if isinstance(base, tuple):
             obj = self.check(base)[0]
@@ -122,6 +130,8 @@ class SortModel(_ExtensionModel):
                 if not hasattr(obj, 'capacity') or obj.capacity < capacity:
                     obj.capacity = capacity
                     obj.payload_base = self.alloc(capacity * 8)
+                    if self.inline_work_payload and obj is self.work_list and capacity == 4:
+                        obj.inline_payload_base = obj.payload_base
                 if offset == 24:
                     return obj.capacity
                 if obj is self.work_list and self.failure == 'missing-payload':
@@ -411,4 +421,18 @@ def test_sorted_publishes_owned_payload_before_old_backing_free(relocate):
     assert model.events.index(('payload-publish', old, new)) < model.events.index(('free', old))
     assert old in model.freed and new not in model.freed
     assert all(model.load(new, i * 8) is None for i in range(count, capacity))
+    assert model.depth == 0
+
+
+def test_sorted_retires_inline_payload_only_after_publishing_new_owner():
+    model = SortModel([3, 1, 2], inline_work_payload=True)
+    assert model.run() == 0
+    result = model.load(model.external, 24)[0]
+    assert [v[0].value for v in result.payload] == [1, 2, 3]
+    assert len(model.payload_swaps) == 1
+    old, new, count, capacity = model.payload_swaps[0]
+    assert old == result.inline_payload_base and old not in model.freed
+    assert new == result.payload_base and new not in model.freed
+    assert count == 3 and capacity == 4
+    assert all(model.load(old, i * 8) is None for i in range(4))
     assert model.depth == 0
