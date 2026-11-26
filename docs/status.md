@@ -1644,8 +1644,14 @@ in the relevant section or issue and removes the entry.
        `_exception_selection_owner_slot`) is released about 40 times, and
        each of the 73 park points saves 90 to 142 slots with
        `py_gen_frame_move` (9852 calls), which is also per-park run time.
-       Next: attribute the release sites to their emitters, then share one
-       cleanup per scope and save only the slots live across a park.
+       Attributed by wrapping the emitter during a full compile: all 21935
+       come from `_emit_owned_local_cleanup`, 16494 from
+       `_emit_generator_yield_value` (every park releases every owned local
+       inline) and 5296 from `_emit_generator_finish` (every generator
+       return does the same). Ordinary returns already share one exit
+       (`shared_exit_leaves`); generator parks and returns do not.
+       Next: (a) generator parks and returns share one owned-local cleanup
+       per function; (b) a park saves only the slots live across it.
    J3. TaskScope (5x CPython), `time.perf_counter` (7x), `str.encode` (5x).
    A1. Darwin thread-local access inline (TSD slot through `tpidrro_el0`,
        startup check, fallback to the call): the resolver is 0.65 us per
@@ -1701,7 +1707,7 @@ in the relevant section or issue and removes the entry.
    on 2026-11-26.
 
    Claims:
-   - none
+   - J2 (a) generator parks and returns share one owned-local cleanup: Claude, macOS, 2026-11-26T04:20Z, area runtime-codegen (`pcc/frontends/python/codegen/generator_lowering.py`, `ownership_lowering.py` and their tests only; no file in common with item 2 (d) U7-U14, which change the runtime, `runtime_abi.py`, the fused-protocol pass and `scripts/pcc_perf.py`)
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
