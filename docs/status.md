@@ -3060,11 +3060,61 @@ in the relevant section or issue and removes the entry.
        Largest c_codegen backend61.162s, class_gen58.074s, type_infer50.051,
        cli_bootstrap46.520, cpp.parser44.524. This snapshot predates the
        recent major route optimizations.
-       Next (latest actual Linux CI codegen priority): (1) larger common
-       indexed fact/emission owner (profile 2,643 frozen scalar value
-       constructors and 719 stable text hash samples before route change;
-       distinguish remaining fact generation from eliminated route work);
-       (2) J2 (e) one error
+       Host verifier successful scalar facts (Codex, Linux, 2026-11-26,
+       base b81247f7): current c_codegen direct-indexed verifier-only
+       profile (1,039 funcs,95,041 blocks,358,843 instructions,176,450
+       values,6,059 types) CPU5.726 s diagnostic,1,401 samples: frozen
+       record constructors662 (47.3%), ordinary uses838 (59.8%).
+       Definition/type checks repeatedly create two frozen records and
+       retrieve value names on success only for errors; storage-only type
+       header constructors111 samples. CPython exact owned scalar planes
+       now prove successful type/dominance checks without snapshots or
+       successful diagnostic name reads; complete exact list/window and
+       original accessors required. Every unsuccessful/ambiguous/malformed
+       proof falls to original diagnostics, including valid pointer alias
+       matching and x86_fp80 storage rules. Native unboxed valueclass route
+       unchanged; no verifier thinning or new acceptance. Seven focused
+       positive/negative exact diagnostic/guard tests plus existing frozen
+       scalar reference unchanged,280 total focused tests pass. Current
+       strict625-source contextual capture unchanged c_codegen/worker
+       PIDX hashes; changed verifier126 funcs/15,277 blocks/63,173 insns,
+       zero fallback/no libpython, actual native object emitted
+       2,253,888 bytes sha256
+       c6abadae525e3a7fa47945b42cc5566555be823f6dabb759d783d01b1d3c3d42.
+       Actual fresh-decode c_codegen verifier owner five quiet alternating
+       triples/same-base control: CPU5.178 ->4.483s (-13.428%,5/5),
+       control5.184, normalized -13.065%5/5 vs drift0.985%; wall
+       normalized -12.785%5/5 vs drift0.578%; RSS266,168 ->266,184 KiB,
+       control266,168, normalized -0.003%, neutral. All15 exact
+       authoritative value/type/definition/CFG plane digests sha256
+       dbbe9100f642800e64edd3fd816ca4d7d502fafbb64cd3f03448dc88839e2e5d.
+       Actual full c_codegen ELF exact 13,508,968 bytes sha256
+       8b6b5c7627edd2d289dd507d7d6522cabc7aaf26f421bf184c08a962cbba2277.
+       Five quiet actual full worker_resource_plan triples: verifier phase
+       wall0.67648 ->0.58982s (-12.811%,5/5), control0.67328,
+       normalized -13.471%5/5 vs drift7.148%. Total backend+obj
+       CPU5.228 ->5.191s (-0.702%,3/5), control5.273, normalized
+       -1.211%3/5 vs drift1.115%; full CPU normalized -1.043%3/5,
+       wall -0.897%3/5; unchanged function emit normalized +2.087%
+       within drift2.242%; RSS normalized -0.015%3/5. All15 exact ELF
+       1,739,176 bytes sha256
+       42d60bb810624c8f1b6ac655d6a554ee98a09c32b709acebeb5c974a1b2b58cc.
+       Full worker neutral, no whole Stage1/native compiler speed claim.
+       Latest verified c20c2c01 ARM Stage1 1,614.150s/4.912GB, Windows
+       1,804.974s/3.753GB; both625 modules/4 workers. ARM safe workers
+       1,464.626s, backend4,578.613 worker-s, dominant backend finalize
+       1,766.932 (prepare1,652.249), function emit1,281.335, stack-map
+       422.797, verify250.379. ARM prepare coarse children: trampoline
+       branches254.303, typed publish207.005, typed validate188.361,
+       adjacent stack forwarding167.018, pair64bit131.431 worker-s.
+       Windows safe workers1,633.741s, backend4,097.461, function
+       emit2,427.939, stack-map857.304, verify478.381. These snapshots
+       predate recent optimizations; no causal platform comparison.
+       Next (latest actual Stage1 codegen priority): (1) ARM typed
+       finalize/prepare repeated read/write span/publication work, guided
+       by the measured dominant child phases and preserving private/public
+       snapshot contracts; then remaining common indexed fact/emission
+       owner; (2) J2 (e) one error
        landing per function after registering temporaries once, measured
        against the actual CI block inventory; (3) the allocation model
        toward LLVM parity, then remove passes that no longer fire;
@@ -3284,7 +3334,6 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Actual managed provenance and container lock attribution by owner: Codex, Linux, 2026-11-26T19:43Z, area runtime-gc-provenance
-   - Stage1 indexed verifier repeated definition facts and success-only scalar projection: Codex, Linux, 2026-11-26T19:35Z, area backend-verifier
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets

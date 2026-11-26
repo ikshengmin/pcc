@@ -12,6 +12,8 @@ accepted instruction set.  Check names are stable so a malformed program is
 reported at this boundary instead of becoming a target-specific miscompile.
 """
 
+import sys
+
 from . import BackendUnavailable
 from .self_backend_analysis import (
     is_local_value_ref,
@@ -72,7 +74,27 @@ from .self_backend_kernel import (
 from .self_backend_value_arena import (
     CompilerInt2,
     CompilerInt4,
+    CompilerIntArena,
 )
+
+
+# CPython's frozen record snapshots allocate Python objects. Native pcc
+# uses unboxed valueclasses; leave its existing authoritative path intact.
+_HOST_SCALAR_VERIFIER = sys.implementation.name == "cpython"
+_ORIGINAL_VALUE_HEADER = getattr(IndexedFunctionKernel, "value_header", None)
+_ORIGINAL_DEFINITION_POSITION = getattr(IndexedFunctionKernel, "definition_position", None)
+_ORIGINAL_VALUE_NAME = getattr(IndexedFunctionKernel, "value_name", None)
+_ORIGINAL_TYPE_HEADER = getattr(IndexedFunctionKernel, "type_header", None)
+_ORIGINAL_ARENA_GET = getattr(CompilerIntArena, "get_unchecked", None)
+_ORIGINAL_ARENA_GET4 = getattr(CompilerIntArena, "get4_unchecked", None)
+
+
+def _host_exact_scalar_list(arena):
+    if (type(arena) is CompilerIntArena and arena._address == 0
+            and not arena._closed and type(arena._values) is list
+            and len(arena._values) == arena._length):
+        return arena._values
+    return None
 
 
 def _stable_text_key(text: str) -> int:
@@ -135,6 +157,19 @@ def _types_match(left: TypeDesc, right: TypeDesc) -> bool:
 
 
 def _storage_only_float_type_id(kernel: IndexedFunctionKernel, type_id: int) -> bool:
+    if (_HOST_SCALAR_VERIFIER and type(kernel) is IndexedFunctionKernel
+            and type(type_id) is int and type_id >= 0
+            and IndexedFunctionKernel.type_header is _ORIGINAL_TYPE_HEADER
+            and CompilerIntArena.get4_unchecked is _ORIGINAL_ARENA_GET4):
+        scalars = _host_exact_scalar_list(kernel.type_scalars)
+        start = type_id * 12
+        if scalars is not None and start + 3 < len(scalars):
+            kind = scalars[start]
+            if type(kind) is int:
+                if kind in (TYPE_KIND_VOID, TYPE_KIND_INT, TYPE_KIND_PTR):
+                    return False
+                if kind == TYPE_KIND_FP and type(scalars[start + 1]) is int:
+                    return scalars[start + 1] == 80
     header: CompilerInt4 = kernel.type_header(type_id)
     if header.first == TYPE_KIND_FP:
         return header.second == 80
@@ -323,6 +358,61 @@ def _definition_by_id(
     header: CompilerInt4 = kernel.value_header(value_id)
     # type id, definition block, definition position, present flag.
     return CompilerInt4(header.second, header.first, position, 1)
+
+
+_ORIGINAL_DEFINITION_BY_ID = _definition_by_id
+_ORIGINAL_TYPE_IDS_MATCH = _type_ids_match
+
+
+def _host_definition_planes(kernel, definitions):
+    """Live exact host lists after definitions have been published.
+
+    No new table or per-value snapshot is retained. Malformed/incomplete
+    windows, custom owners or replaced accessors keep the canonical route.
+    """
+    if (type(kernel) is not IndexedFunctionKernel or definitions is not kernel
+            or IndexedFunctionKernel.value_header is not _ORIGINAL_VALUE_HEADER
+            or IndexedFunctionKernel.definition_position is not _ORIGINAL_DEFINITION_POSITION
+            or IndexedFunctionKernel.value_name is not _ORIGINAL_VALUE_NAME
+            or CompilerIntArena.get_unchecked is not _ORIGINAL_ARENA_GET
+            or CompilerIntArena.get4_unchecked is not _ORIGINAL_ARENA_GET4
+            or _definition_by_id is not _ORIGINAL_DEFINITION_BY_ID):
+        return None
+    headers = _host_exact_scalar_list(kernel.value_scalars)
+    positions = _host_exact_scalar_list(kernel.definition_positions)
+    names = kernel.value_names
+    if (headers is None or positions is None
+            or (type(names) is not list and type(names) is not tuple)
+            or len(headers) != len(names) * 8 or len(positions) != len(names)):
+        return None
+    return headers, positions
+
+
+def _host_definition_type_matches(kernel, definitions, value_id: int,
+                                  expected_type_id: int) -> bool:
+    # Only exact proven success is elided. Same IDs and valid opaque/typed
+    # pointer aliases use the canonical type matcher; undefined operands,
+    # malformed rows and any mismatch retain the original checker.
+    if (type(value_id) is not int or value_id < 0
+            or type(expected_type_id) is not int
+            or _type_ids_match is not _ORIGINAL_TYPE_IDS_MATCH):
+        return False
+    planes = _host_definition_planes(kernel, definitions)
+    if planes is None:
+        return False
+    headers, positions = planes
+    if value_id >= len(positions):
+        return False
+    position = positions[value_id]
+    actual_type = headers[value_id * 8 + 1]
+    if type(position) is not int or position == -3 or type(actual_type) is not int:
+        return False
+    if actual_type == expected_type_id:
+        return True
+    if (actual_type < 0 or expected_type_id < 0
+            or actual_type >= len(kernel.types) or expected_type_id >= len(kernel.types)):
+        return False
+    return _type_ids_match(kernel, actual_type, expected_type_id)
 
 
 def _instruction_result_type_parts(kind_id: int, data: tuple) -> TypeDesc | None:
@@ -723,6 +813,10 @@ def _require_local_type_ref(
     _require_executable_type_id(func, kernel, expected_type_id, context)
     if value_ref < 0:
         return
+    if _HOST_SCALAR_VERIFIER and _host_definition_type_matches(
+        kernel, definitions, value_ref, expected_type_id,
+    ):
+        return
     definition: CompilerInt4 = _definition_by_id(
         kernel, definitions, value_ref
     )
@@ -986,6 +1080,29 @@ def _definition_dominates_use(
     if definition.second == block_index:
         return definition.third < position
     return _block_dominates(dominators, definition.second, block_index)
+
+
+_ORIGINAL_DEFINITION_DOMINATES = _definition_dominates_use
+_ORIGINAL_BLOCK_DOMINATES = _block_dominates
+
+
+def _host_definition_dominates(planes, value_id: int, block_index: int,
+                               position: int, dominators) -> bool:
+    headers, positions = planes
+    if type(value_id) is not int or value_id < 0 or value_id >= len(positions):
+        return False
+    definition_position = positions[value_id]
+    definition_block = headers[value_id * 8]
+    if (type(definition_position) is not int or definition_position == -3
+            or type(definition_block) is not int):
+        return False
+    if definition_block < 0:
+        return True
+    if definition_block == block_index:
+        return definition_position < position
+    if definition_block >= len(dominators[0]):
+        return False
+    return _block_dominates(dominators, definition_block, block_index)
 
 
 def _verify_call_instruction_types_indexed(
@@ -1271,6 +1388,13 @@ def _verify_ordinary_uses(
     dominators: tuple[list[int], list[int]],
 ) -> None:
     kernel = get_indexed_function_kernel(func)
+    definition_planes = None
+    if (_HOST_SCALAR_VERIFIER
+            and _definition_dominates_use is _ORIGINAL_DEFINITION_DOMINATES
+            and _block_dominates is _ORIGINAL_BLOCK_DOMINATES
+            and type(dominators) is tuple and len(dominators) == 2
+            and type(dominators[0]) is list and type(dominators[1]) is list):
+        definition_planes = _host_definition_planes(kernel, definitions)
     for block_index, block_name in enumerate(kernel.block_names):
         block_fact: CompilerInt4 = kernel.block_fact(block_index)
         position = 0
@@ -1339,6 +1463,11 @@ def _verify_ordinary_uses(
                     value_id = kernel.instruction_overflow_use_ids.get_unchecked(
                         overflow_start + use_index - 1
                     )
+                if definition_planes is not None and _host_definition_dominates(
+                    definition_planes, value_id, block_index, position, dominators,
+                ):
+                    use_index += 1
+                    continue
                 value = kernel.value_name(value_id)
                 definition = _definition_by_id(kernel, definitions, value_id)
                 if definition.fourth == 0:
@@ -1364,6 +1493,11 @@ def _verify_ordinary_uses(
         term_use_index = 0
         while term_use_index < block_fact.third:
             value_id = block_fact.fourth
+            if definition_planes is not None and _host_definition_dominates(
+                definition_planes, value_id, block_index, term_position, dominators,
+            ):
+                term_use_index += 1
+                continue
             value = kernel.value_name(value_id)
             definition = _definition_by_id(kernel, definitions, value_id)
             if definition.fourth == 0:
