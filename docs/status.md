@@ -2836,7 +2836,7 @@ in the relevant section or issue and removes the entry.
    dependency/order semantics, and verify hosted Stage2 owner receipts.
 
    Claims:
-   - none
+   - Stage2 native summary and sparse preload owner A/B: Codex, Linux, 2026-11-26T17:00Z, area selfhost
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
