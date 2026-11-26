@@ -1114,7 +1114,7 @@ in the relevant section or issue and removes the entry.
    native runtime/hosted CI acceptance claim.
 
    Claims:
-   - none
+   - Darwin ARM64 indexed handoff exact prerequisite and dedicated gate contract: Codex, Linux collection, 2026-11-26T20:09Z, area ci-indexed-handoff-host-gate
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
