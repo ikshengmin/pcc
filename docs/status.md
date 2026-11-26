@@ -2888,8 +2888,54 @@ in the relevant section or issue and removes the entry.
    Next: measure remaining repeated class reconstruction with exact
    dependency/order semantics, and verify hosted Stage2 owner receipts.
 
+   Native summary transport A/B follow-up (9f101283): same prior
+   source-owned 58-module static x64 ELF, exact actual 8-module stdlib
+   tail shard and manifest, legacy eager vs new indexed lazy reader.
+   Both arms share the candidate analyzer accessor (transport-only
+   A/B, host A/B previously compared old/new analyzer). Five alternating
+   fresh processes in exclusive quiet window: median CPU3.514695 ->
+   2.232185s (-36.49%,5/5), wall3.556249 ->2.279282s; peak RSS86,936 ->
+   51,488KiB (-40.77%,5/5). Unchanged one-module eager control CPU1.961691s,
+   RSS78,112KiB. All summary bytes exact CPython SHA256
+   1ea4a6a319beff1aadeb2cfdd810718570094a3a5496d2718545e8eeacd6d16c.
+   Guard COMPLETE38.62s/100,167,680B. Native worker-owner evidence only,
+   not whole Stage2 timing.
+
+   Native sparse class preload delta A/B follow-up (7d172a8a): latest
+   source-owned runtime at 7a0912e2 built114.11s/403,599,360B, current
+   192-member provenance valid. Same static x64 pcc0+self ELF, 68 actual
+   source modules/227,398,471B IR, built255.16s/1,674,592,256B, exact
+   legacy root function body vs production current function, shared
+   production worker body with branch and root-loop wall timer.
+   Five alternating fresh processes in exclusive quiet window,
+   full frozen actual22,772,804B class wire, same eight sensitive roots:
+   median full CPU14.976491 ->14.705130s (-1.81%,4/5), full wall15.053773
+   ->14.765579s (-1.91%,4/5), peak RSS440,016 ->439,908KiB (2/5, neutral).
+   Root-loop wall1.757219 ->1.540174s (-12.35%,4/5); unchanged same
+   graph zero-root control CPU13.308307s (range13.235272–14.062969s),
+   RSS439,532KiB. Full CPU change lies within control drift; no robust
+   whole-worker speedup claim. Native B/C exact host result bytes
+   SHA256 1a984f6a4e875793febbe097c32528708930c1a5c8f30bd4fa1270d34fb5111c
+   in all ten runs. Guard COMPLETE218.29s/463,347,712B. The dominant
+   remaining cost is repeated whole class-export decode/global prep,
+   not the sparse delta loop. No Stage2 parity or full CI qualification.
+
+   Next independent preload transport target (source/byte accounting,
+   not yet a production optimization): private worker class resolver
+   reads kind/class_name/owning_module/valueclass/base_names/field_types/
+   field_names plus complete module/class inventory. Preserve existing
+   public preload_class_export_surface full-record contract; restrict any
+   field projection to the owned private worker wire and prove exact
+   per-root order/aliases/cycles. The frozen actual 668-module class wire
+   22,772,804B ->1,988,766B (-91.27%); method metadata alone20,049,466B.
+   Compact fixture and full graph global preload/sensitivity/index,
+   11 real selected root deltas byte-identical in host check. Next unit
+   should verify all sensitive roots, native full/compact worker pairs
+   and real integration tests before production push; no current speed
+   claim from these bytes alone.
+
    Claims:
-   - Stage2 native summary and sparse preload owner A/B: Codex, Linux, 2026-11-26T17:00Z, area selfhost
+   - none
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
