@@ -3965,6 +3965,7 @@ in the relevant section or issue and removes the entry.
    ownership cost before selecting the next structural reduction.
 
    Claims:
+   - Generic dictionary raw table coallocation: Codex, Linux, 2026-11-26T22:10Z, area runtime-gc-dict-storage
    - Stage1 ARM typed read_span private list ownership transfer: Codex, Linux, 2026-11-26T21:47Z, area backend-aarch64-typed-readspan
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
