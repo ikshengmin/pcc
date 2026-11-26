@@ -2945,16 +2945,15 @@ class GeneratorLoweringMixin:
         21935 release sequences). Each exit now does its own part and
         branches here; the exit releases the union of the exits' owned locals
         once, each by its runtime flag, after the body is complete. A park
-        exit carries its state, the slot of the yielded owner to take (or
-        null) and otherwise the value to return. Returns None where an exit
-        keeps its inline cleanup: a function with owned valueclass payload
-        roots, or unless ``PCC_GENERATOR_SHARED_EXIT=1``. Off by default:
-        Stage1's direct indexed capture rejected a shared exit's phi
-        (`phi-predecessors`, excess edges, in
-        ``pcc.backend.native_object._iter_raw_relocations``); the text path
-        and the handler program verify and run.
+        stores its state, the slot of the yielded owner to take (or null) and
+        otherwise the value to return in entry slots the exit reads; no phi
+        names the parks, so nothing depends on which block a park's branch
+        ends up in (Stage1's direct capture rejected the first, phi-based
+        exits). Returns None where an exit keeps its inline cleanup: a
+        function with owned valueclass payload roots, or
+        ``PCC_GENERATOR_SHARED_EXIT=0``.
         """
-        if str(os.environ.get("PCC_GENERATOR_SHARED_EXIT", "0") or "0").strip() != "1":
+        if str(os.environ.get("PCC_GENERATOR_SHARED_EXIT", "1") or "1").strip() == "0":
             return None
         fn = self.current_function
         records = self._fn_valueclass_payload_root_slots.get(fn.name, ())
@@ -2969,19 +2968,20 @@ class GeneratorLoweringMixin:
         if kind == "park":
             label = "gen.shared.exit"
         block = fn.append_basic_block(name=self._fresh(label))
-        saved_block = self.builder._block
-        self.builder.position_at_end(block)
         shared = {
             "kind": kind,
             "block": block,
-            "value": self.builder.phi(_CSTR, name=self._fresh("gen.exit.value")),
+            "value": self._alloca_in_entry(
+                _CSTR, name=self._fresh("gen.exit.value"), init_null=True,
+            ),
             "owned": {},
             "rooted": {},
         }
         if kind == "park":
-            shared["state"] = self.builder.phi(_I64, name=self._fresh("gen.exit.state"))
-            shared["take"] = self.builder.phi(_CSTR, name=self._fresh("gen.exit.take"))
-        self.builder.position_at_end(saved_block)
+            shared["state"] = self._alloca_in_entry(_I64, name=self._fresh("gen.exit.state"))
+            shared["take"] = self._alloca_in_entry(
+                _CSTR, name=self._fresh("gen.exit.take"), init_null=True,
+            )
         exits[kind] = shared
         return shared
 
@@ -3012,18 +3012,24 @@ class GeneratorLoweringMixin:
             for root_entry in shared["rooted"].values():
                 self._emit_cleanup_root_clear(root_entry[1], root_entry[2])
             self._emit_exit_frame_leaves()
+            # The exit's value slot is a plain entry cell: clear it after the
+            # read so the returned frame keeps no stale object address.
+            value = self.builder.load(shared["value"], name=self._fresh("gen.exit.value.load"))
+            self.builder.store(ir.Constant(_CSTR, None), shared["value"])
             if kind == "finish":
-                self.builder.ret(shared["value"])
+                self.builder.ret(value)
                 continue
+            state = self.builder.load(shared["state"], name=self._fresh("gen.exit.state.load"))
             self.builder.call(
                 self.runtime["py_gen_set_state"],
-                [self._generator_current_object(ctx), shared["state"]],
+                [self._generator_current_object(ctx), state],
             )
+            take_slot = self.builder.load(shared["take"], name=self._fresh("gen.exit.take.load"))
             # A null slot takes nothing (pcc_gc_take_slot returns null): that
             # park returns its value instead.
             taken = self.builder.call(
                 self.runtime["pcc_gc_take_slot"],
-                [shared["take"]],
+                [take_slot],
                 name=self._fresh("gen.yield.owner"),
             )
             self._return_handoff_sites.append((
@@ -3031,11 +3037,11 @@ class GeneratorLoweringMixin:
                 self.builder._block._instrs[-1],
             ))
             no_take = self.builder.icmp_unsigned(
-                "==", shared["take"], ir.Constant(_CSTR, None),
+                "==", take_slot, ir.Constant(_CSTR, None),
                 name=self._fresh("gen.exit.no.take"),
             )
             result = self.builder.select(
-                no_take, shared["value"], taken, name=self._fresh("gen.exit.result"),
+                no_take, value, taken, name=self._fresh("gen.exit.result"),
             )
             self.builder.ret(result)
 
@@ -3178,7 +3184,7 @@ class GeneratorLoweringMixin:
             self.builder.ret(result)
             return
         self._generator_shared_exit_merge(shared, None)
-        shared["value"].add_incoming(result, self.builder._block)
+        self.builder.store(result, shared["value"])
         self.builder.branch(shared["block"])
 
     def _emit_generator_return(self, stmt: Return) -> None:
@@ -3290,17 +3296,13 @@ class GeneratorLoweringMixin:
                 if result_flag is not None:
                     self.builder.store(ir.Constant(_I1, 0), result_flag)
             self._emit_generator_add_case(state_id, cont_bb)
-            take_slot = None
+            self.builder.store(ir.Constant(_I64, state_id), shared["state"])
             if result_slot is not None:
-                take_slot = self._as_gc_ptr(result_slot)
-            park_block = self.builder._block
-            shared["state"].add_incoming(ir.Constant(_I64, state_id), park_block)
-            if take_slot is not None:
-                shared["take"].add_incoming(take_slot, park_block)
-                shared["value"].add_incoming(ir.Constant(_CSTR, None), park_block)
+                self.builder.store(self._as_gc_ptr(result_slot), shared["take"])
+                self.builder.store(ir.Constant(_CSTR, None), shared["value"])
             else:
-                shared["take"].add_incoming(ir.Constant(_CSTR, None), park_block)
-                shared["value"].add_incoming(value, park_block)
+                self.builder.store(ir.Constant(_CSTR, None), shared["take"])
+                self.builder.store(value, shared["value"])
             self.builder.branch(shared["block"])
             self.builder.position_at_end(cont_bb)
         else:

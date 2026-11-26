@@ -47,6 +47,16 @@ _OPTIONAL_IMPORT_MISSING_NONE = "pcc.optional_import_missing.None"
 
 
 
+# Selection labels whose slot holds a value only from its creation to its
+# clear a few instructions later, with no statement in between: one slot per
+# function serves every site. A generator's handled-exception resume, except
+# class evaluation and its replacement exception made one hidden owned local
+# per site (210 in pcc_gateway.server._proxy_exchange_attempt), each
+# registered, released and left at every exit. "except.match" and the handler
+# bindings stay per site: a handler body can nest another try.
+_REUSABLE_SELECTION_LABELS = ("handled.resume.pending", "except.class", "except.class.replacement")
+
+
 class ExceptionLoweringMixin:
     def _begin_handled_exception_scope(self, exception_slot):
         node = self._alloca_in_entry(
@@ -1253,8 +1263,38 @@ class ExceptionLoweringMixin:
         exit. Clearing the slot is the final use of its object, so cleanup never
         consumes an SSA pointer after a root-unregister or unpin safepoint.
         """
+        reusable = (
+            owner_name is None
+            and self.current_func_def is not None
+            and label in _REUSABLE_SELECTION_LABELS
+        )
+        by_label = None
+        if reusable:
+            by_label = self._selection_slots_by_function.get(id(self.current_function))
+            if by_label is None:
+                by_label = {}
+                self._selection_slots_by_function[id(self.current_function)] = by_label
+            cached = by_label.get(label)
+            if cached is not None:
+                # The previous selection with this label cleared the slot
+                # before any statement could start another (see
+                # _REUSABLE_SELECTION_LABELS); on an exceptional path it may
+                # still own a value, which this root store releases.
+                hidden = cached[0]
+                slot = cached[1]
+                self._owned_local_names.add(hidden)
+                self._owned_local_has_value.add(hidden)
+                owned_flag = self._ensure_owned_local_flag(hidden, slot)
+                self.builder.store(ir.Constant(_I1, 1), owned_flag)
+                self.builder.call(
+                    self.runtime["pcc_gc_store_root"],
+                    [self._as_gc_ptr(slot), value],
+                )
+                return slot
         hidden = owner_name or self._fresh(label + ".owner")
         slot = self._alloca_in_entry(_CSTR, name=self._fresh(label + ".slot"))
+        if by_label is not None:
+            by_label[label] = (hidden, slot)
         self._store_entry_initializer(slot, ir.Constant(_CSTR, None))
         self.env[hidden] = (slot, _CSTR, DynType(name="dyn"))
         self._ensure_local_gc_frame_root(hidden, slot, _CSTR, self._gc_one_slot_frame_map())

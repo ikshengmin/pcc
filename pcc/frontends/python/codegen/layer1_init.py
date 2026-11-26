@@ -199,6 +199,8 @@ class Layer1InitMixin:
         # target) reads a payload index; the module tables below map that
         # index to the raise site's (line, source text).
         self._direct_frame_landings: dict[int, dict[str, tuple]] = {}
+        # One reusable exception-selection slot per (function, label).
+        self._selection_slots_by_function: dict[int, dict[str, tuple]] = {}
         self._tb_index_lines: list[int] = []
         self._tb_index_sources: list = []
         self._tb_index_by_file: dict[str, dict[int, int]] = {}

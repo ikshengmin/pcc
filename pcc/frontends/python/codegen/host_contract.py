@@ -86,6 +86,7 @@ L1_CODEGEN_HOST_ATTRS = (
     "_entry_inline_edge_anchor_function",
     "_entry_inline_edge_anchor_record",
     "_direct_frame_landings",
+    "_selection_slots_by_function",
     "_tb_index_lines",
     "_tb_index_sources",
     "_tb_index_by_file",
