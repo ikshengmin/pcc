@@ -3244,8 +3244,53 @@ in the relevant section or issue and removes the entry.
    Next: profile remaining actual export/AST worker owners; use CI
    phase receipts to choose the next structural target.
 
+   Stage2 remaining export/AST owner attribution (no source change):
+   old Linux x64 hosted artifact15134943149 directly logged export
+   manifest-end -> worker collect-start260.309s. Admission events:
+   245 complete export workers/624 modules; worker-span256.346s,
+   sum of per-worker admission wall956.168s, nested module phase
+   244.344s (parse112.335/lift108.041), imports2.294s, remaining
+   709.530s aggregate contains AST write/metadata/exports/admission,
+   not a separately instrumented phase. Old Stage1 same624 modules
+   78 tasks/30.835s span/sum122.477s; latest 6cbafc4a hosted Stage1
+   79 tasks/625 modules span25.694s/sum102.344s, module32.501s,
+   remaining68.228s aggregate. Latest Stage1 export62.352s,
+   summary15.780s, preload18.709s. Old Stage2 c_parsetab export
+   worker32.231s (module10.698, remainder21.522s), class_gen17.020s
+   (module4.725, remainder12.289s).
+   Direct actual AST codec attribution, source-owned runtime at
+   4e95bb7f built111.12s/412,794,880B, current193-member provenance.
+   Native pcc0+self static x64 ELF26 modules/40,827,401B IR, built
+   34.77s/588,972,032B. Same exact production v1 AST codec bodies
+   with phase timers, two fresh runs in exclusive quiet window each
+   of frozen actual 625-source graph's c_parsetab/class_gen/pipeline
+   sidecars. All six roundtrips byte-identical to originals.
+   c_parsetab17,852,685B (149,944 nodes): reader component medians
+   text1.375511 + JSON decode7.058334 + AST reconstruction2.023277
+   =10.457122s; writer AST projection1.747628 + JSON encode2.810122
+   + write .072156 =4.629906s. Whole process CPU15.760982s,
+   RSS419,678KiB.
+   class_gen11,209,510B (89,142 nodes): reader .744313+3.978986+
+   1.238580=5.961879s; writer .945821+1.886369+.053093=2.885283s;
+   CPU9.260428s/RSS263,308KiB.
+   pipeline3,591,026B (28,816 nodes): reader .205294+1.666853+
+   .435316=2.307464s; writer .280810+.633064+.016783=.930658s;
+   CPU3.394190s/RSS100,046KiB. Guard COMPLETE57.38s/445,071,360B.
+   AST writer is only part of old export worker remainder; JSON
+   decode dominates independently measured reader used by summary
+   and codegen workers. Prototype byte-accounting (not production
+   performance): positional tagged nodes plus interned SourceSpan
+   file table gives same raw values with payload c_parsetab5,408,703B
+   (-69.70%), class_gen3,338,419B (-70.22%), pipeline1,143,892B
+   (-68.15%); 49,982/30,995/9,892 repeated source paths respectively.
+   Next independent owner: versioned compact AST writer/reader with
+   strict tag/arity/location validation, legacy v1 compatibility,
+   generic opaque fields preserved, exact AST/downstream output and
+   actual native five-pair read/write validation. No whole Stage2
+   inference from these isolated attribution phases.
+
    Claims:
-   - Stage2 remaining export and AST actual owner attribution: Codex, Linux, 2026-11-26T17:34Z, area selfhost
+   - none
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
