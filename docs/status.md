@@ -836,8 +836,37 @@ in the relevant section or issue and removes the entry.
    witnesses, no test deletion or gate change. Native execution not
    inferred from source model; no optimization claim.
 
+   Native resource-driver stale cardinality: existing loop executes
+   only collector0 and all six cases, but old final assertion demanded
+   5×6 receipts. Test-first exact six rows failed (1 fail/5 negative
+   passes). Shared single-collector tuple now drives the unchanged
+   complete case loop and exact ordered (collector,case) inventory
+   verification. Seven focused inventory cases pass, including missing,
+   duplicate, old collector, Boolean collector, extra and reordered
+   rejection; original native node name and all six real driver
+   owner/child/diagnostic/return checks preserved. Whole affected
+   ordinary file 92 PASS including six real CPython scenarios, two
+   native integration nodes UNRUN, guard28.12s/403972096 B under
+   unchanged90s/1GiB. No native/host-oracle acceptance inferred.
+   Next exact run45862787448/c20c2c01 first-page 30 jobs observed
+   20 green/9 red/1 active. All four worker-prior artifacts
+   15147002533 Linux x64,15145543606 ARM64,15145659838 Windows,
+   15146574584 macOS fail the same stale scalar arena length model
+   already fixed by later bd763672 (not in this checkpoint).
+   NumPy15146792931: original C missing _numpyconfig.h, C++ string.h
+   (later fixed b53d7e49; current generated config frontier remains).
+   orjson15145689415 original C yyjson object326912 B PASS; Rust
+   pyo3_build_config and cfg_attr remain real unsupported gates.
+   Go coverage15145834503 878 PASS/2 FAIL: unchanged unsafe import
+   src/errors/join.go:8:2 and math/bits whole dependency closure.
+   Java integration15146744195 1255/4 (two JDK-only, two shared
+   nominal reference-storage gaps), reference15146948372 204/4
+   JDK-only. C++ reference15147168994 1417/9 explicit G++ oracle
+   failures, including array-padding oracle returned1 expected42.
+   No waiver or claim of current integrated hosted pass.
+
    Claims:
-   - native resource-driver exact single-collector six-case execution receipt cardinality: Codex, Linux, 2026-11-26T19:10Z, area ci-resource-cardinality
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and

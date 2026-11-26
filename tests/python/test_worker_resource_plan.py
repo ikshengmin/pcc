@@ -1397,6 +1397,39 @@ RESOURCE_PORTABLE_CASES = (
 )
 RESOURCE_LINUX_HANDLE_CASES = ("handles",)
 RESOURCE_DRIVER_CASES = RESOURCE_PORTABLE_CASES + RESOURCE_LINUX_HANDLE_CASES
+RESOURCE_DRIVER_COLLECTORS = (0,)
+
+
+def _require_resource_execution_inventory(executions):
+    # Each row has already passed the real driver owner/child/output checks.
+    # Require the complete ordered case inventory, not an old GC0-4 count.
+    expected = [(collector, case) for collector in RESOURCE_DRIVER_COLLECTORS
+                for case in RESOURCE_DRIVER_CASES]
+    assert all(type(row["requested_collector"]) is int for row in executions)
+    assert [(row["requested_collector"], row["case"]) for row in executions] == expected
+
+
+@pytest.mark.parametrize("variant", ("complete", "missing", "duplicate", "wrong-collector", "bool-collector", "extra", "reordered"))
+def test_resource_execution_inventory_requires_single_collector_exact_cases(variant):
+    """Inventory logic only, never a substitute for the actual native receipts."""
+    rows = [{"case": case, "requested_collector": 0} for case in RESOURCE_DRIVER_CASES]
+    if variant == "missing":
+        rows.pop()
+    elif variant == "duplicate":
+        rows[-1] = dict(rows[0])
+    elif variant == "wrong-collector":
+        rows[1]["requested_collector"] = 4
+    elif variant == "bool-collector":
+        rows[1]["requested_collector"] = False
+    elif variant == "extra":
+        rows.append(dict(rows[0]))
+    elif variant == "reordered":
+        rows[0], rows[1] = rows[1], rows[0]
+    if variant == "complete":
+        _require_resource_execution_inventory(rows)
+    else:
+        with pytest.raises(AssertionError):
+            _require_resource_execution_inventory(rows)
 
 
 def _resource_driver_environment(owner, collector):
@@ -1605,8 +1638,9 @@ def test_resource_acceptance_growth_uses_child_not_retired_parent_peak(tmp_path)
 def test_resource_acceptance_driver_native_five_collectors(
     tmp_path, explicit_owned_runtime, python_program_compiler, request, capfd,
 ):
-    """Compile once, then execute real native policy/handles on all five GCs.
+    """Compile once, then execute all six real resource cases on one collector.
 
+    The historical test name stays stable for the exact CI node inventory.
     Requires an explicitly selected source-matched runtime; the maintained
     fixture forbids provisioning a runtime or a compiler. The Linux-only
     moved-group no-signal witness is recorded separately from shared policy.
@@ -1653,7 +1687,7 @@ def test_resource_acceptance_driver_native_five_collectors(
     receipt["binary_sha256"] = hashlib.sha256(binary.read_bytes()).hexdigest()
     receipt["status"] = "RUNNING"
     save()
-    for collector in (0,):
+    for collector in RESOURCE_DRIVER_COLLECTORS:
         for case in RESOURCE_DRIVER_CASES:
             try:
                 record = _execute_resource_driver(
@@ -1670,7 +1704,7 @@ def test_resource_acceptance_driver_native_five_collectors(
                 raise
             receipt["executions"].append(record)
             save()
-    assert len(receipt["executions"]) == 5 * len(RESOURCE_DRIVER_CASES)
+    _require_resource_execution_inventory(receipt["executions"])
     receipt["status"] = "PASS"
     save()
 
