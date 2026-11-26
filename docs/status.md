@@ -178,15 +178,6 @@ Stage1 on either platform; Linux x86-64 and Windows did. No fixed point proved.
 answers here or in chat; the agent that next takes the unit records the answer
 in the relevant section or issue and removes the entry.
 
-- Item 2 (d) against item 3 (c) J1 (asked by Claude, 2026-11-26). J1's
-  claim (17:53Z) names `py_class`, `py_obj_ops_dispatch` and
-  `freestanding_gc_root_operations`; the (d) plan needs them for U4's
-  second module, U5 and U11 (the take protocol and its ABI). Options:
-  (d) waits until J1 releases them; or J1 adds the take-protocol removal
-  in those two modules to its own changes. Claude's recommendation: (d)
-  waits; it continues with U2, U3, U4's `py_func` and the 4c files outside
-  J1's list.
-
 - Item 1, issues #9, #4 and #8 (asked by Claude, 2026-11-24). They describe
   collectors 1-4, which no longer exist: #9 weak callbacks and finalizers
   under acyclic resurrection on GC1-4, #4 a GC3 timeout with four carriers,
@@ -890,10 +881,10 @@ in the relevant section or issue and removes the entry.
    new failing node; after integrating the generator re-entrance change
    (`5c4d10927`, py_gen merged by hand), the 24 generator test files have
    none against `94f786b16`. Not run: the heavy
-   files over the 2.5 GiB cap, integration, pcc1 and Linux. Waiting on
-   (c) J1: U4's `py_obj_ops_dispatch` and U5's `py_class`.
-   Remaining 4b: `py_obj_ops_dispatch` and `py_class`, both claimed by
-   (c) J1.
+   files over the 2.5 GiB cap, integration, pcc1 and Linux.
+   Remaining 4b: `py_obj_ops_dispatch` and `py_class`. (c) J1 merged and
+   released them (no J1 claim line on 2026-11-26T01:46Z), which settles the
+   waiting-list question about the overlap.
    Correction: `pcc_gc_backend4_auto_step_pending` is the one collector's
    live automatic-collection request (young and full collections are
    scheduled through it), not a leftover; it may only be renamed, before
@@ -901,9 +892,8 @@ in the relevant section or issue and removes the entry.
    Next for (d): the plan Claude runs without asking between units
    (the user, 2026-11-26: "你这么继续继续的有点需要我参与。能plan一下吗").
    Done: steps 1, 2 (pins outside the take protocol), 4a, 4b batches 1-2,
-   U1, U2, U3 and U4's `py_func`. U4's `py_obj_ops_dispatch`, U5 and U11's edits of
-   `freestanding_gc_root_operations` wait while (c) J1 claims those files
-   (see "Waiting on maintainer").
+   U1, U2, U3 and U4's `py_func`. U4's `py_obj_ops_dispatch` and U5 are
+   next, now that (c) J1 released their files.
    Units, in order, each one claim, commit and push (runtime first, then
    its test models, then the status result):
    (U1) 4b batch 3: py_obj, py_coroutine, py_obj_ops_compare, py_tempfile
@@ -1071,7 +1061,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (d) plan U1-U14 (the units under "Next for (d)", in order; not py_class, py_obj_ops_dispatch or freestanding_gc_root_operations while (c) J1 claims them): Claude, macOS, 2026-11-25T21:09Z, area runtime-codegen
+   - (d) plan U1-U14 (the units under "Next for (d)", in order): Claude, macOS, 2026-11-26T01:48Z, area runtime-codegen
 
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
