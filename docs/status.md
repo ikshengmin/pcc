@@ -216,7 +216,16 @@ ARM64 owner artifact15143715322 1800.2300s/outer peak4783247360B;
 full artifact15142914311 sampled compiler tree through1781.758s
 peak4278870016B (below Stage1 4676341760B, but incomplete).
 Windows owner artifact15143139129 existing watchdog timed out
-1800.074s; peak compiler-tree receipt not yet retrieved.
+1800.074s. Full bootstrap artifact15144830770 now retrieved: exact
+source6cbafc4a, Stage1 PE shared1738.978787s/3730415616B (imported
+Stage1 progress carries zero compile cost, canary compile21.0919s
+passed); no Stage2 terminal receipt and no Stage3. Stage2 8000 samples
+through1769.9650857s partial peak2660990976B, last1403752448B/two
+processes. Complete export247/247 batches, summary79/79, preload43
+retire including calibration; only two codegen starts, one retired
+(c_parsetab), c_codegen still underway (indexed capture476958 records,
+95041 blocks, 358849 instructions, no fallback). Partial memory is
+below Stage1 but incomplete; no Stage2<=Stage1 acceptance.
 Latest x64 Stage2 actual export659.022s (prior789.855), summary202.441,
 preload220.162; ARM export356.308s, summary99.855, preload117.749.
 Both Linux lanes only completed three frontend codegen modules before
@@ -742,8 +751,31 @@ in the relevant section or issue and removes the entry.
    empty-PATH CLI and corpus inventory), 89.33 s, 272,707,584 B peak
    under the unchanged 90 s / 1 GiB guard. Hosted verification pending.
 
+   Hosted source frontier, run 45856871699: ci-contracts integration
+   artifact15145256321 (six nodes) 3 PASS, 1 actual weakset_order pcc1
+   WorkerMemoryError (available174772224 B; measured213622784 B), 2
+   interrupted; 90.2558s TIMEOUT, peak978374656 B, unchanged 90s/1GiB.
+   Shared reference artifact15144478141: 3 PASS, JSON pcc1 one true
+   worker error available154288128 B vs actual215617536 B; completed
+   23.8976s/1000853504 B. Shared integration artifact15144448317
+   lane271: 152 PASS, 7 true test failures, 7 interrupted, 6 prerequisite
+   UNRUN, 99 not attempted. Batch001 four actual WorkerMemoryError;
+   batch002 two CPython scratch reference imports fail
+   `ModuleNotFoundError: No module named 'pcc'`, one finalizer worker
+   admission error, guard MEMORY_LIMIT1108127744 B vs1GiB.
+   Scratch fixture only: real copied production writer's CPython child
+   starts outside checkout with inherited PYTHONPATH absent. Local
+   test-first exact same error; now bind checkout root explicitly only
+   for CPython reference, same as sibling native batch fixture. Unchanged
+   actual extracted source returns all nine semantic rows/empty stderr
+   from external tmp cwd with no inherited PYTHONPATH; four affected
+   ordinary scratch/batch modules 188 PASS, four native integration
+   nodes deselected/UNRUN (3.32s). No native compiler/admission path,
+   resource/worker/timeout/guard/expected-output change. Other memory
+   failures remain unresolved. Hosted verification pending.
+
    Claims:
-   - shared stack-map scratch CPython reference explicit checkout import root (hosted 15144448317): Codex, Linux, 2026-11-26T18:28Z, area ci-shared-scratch-reference
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and

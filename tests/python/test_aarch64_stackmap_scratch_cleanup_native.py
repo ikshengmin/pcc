@@ -36,6 +36,7 @@ from tests.python.test_aarch64_stackmap_scratch_cleanup import (
 )
 
 
+_ROOT = Path(__file__).resolve().parents[2]
 _PACKED_METHODS = (
     "__init__", "__len__", "append", "scalar", "span", "label",
     "exceptional_block", "location_scalar", "location_group", "location_group_key",
@@ -520,6 +521,30 @@ def _route_receipts(path, offset, test_name):
     return records
 
 
+def _run_cpython_reference(source):
+    return subprocess.run(
+        [sys.executable, str(source)], capture_output=True, text=True, timeout=20,
+        env=dict(os.environ, PYTHONPATH=str(_ROOT), PCC_EXPECT_NATIVE_ARENAS="0"),
+    )
+
+
+def test_cpython_scratch_reference_uses_checkout_import_root(tmp_path, monkeypatch):
+    """Uninstalled source checkout, outside cwd, no inherited PYTHONPATH."""
+    oracle = _run(monkeypatch, legacy=True)
+    assert oracle["error"] is None
+    expected = oracle["result"]
+    relocations = tuple((item.offset, item.symbol, item.type, item.pcrel, item.length)
+                        for item in expected.relocations)
+    source = tmp_path / "stackmap_scratch_native.py"
+    source.write_text(_copied_source(expected.data, relocations))
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    monkeypatch.chdir(tmp_path)
+    reference = _run_cpython_reference(source)
+    assert reference.returncode == 0, (reference.stdout, reference.stderr)
+    assert reference.stderr == ""
+    assert len(_semantic_rows(reference.stdout)) == 9
+
+
 @pytest.mark.integration
 def test_exact_writer_releases_native_scratch_under_all_collectors(
     tmp_path, monkeypatch, python_program_compiler, pcc_runtime_archive, request,
@@ -555,10 +580,7 @@ def test_exact_writer_releases_native_scratch_under_all_collectors(
         "gc_runs": [],
     }
     receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
-    reference = subprocess.run(
-        [sys.executable, str(source)], capture_output=True, text=True, timeout=20,
-        env=dict(os.environ, PCC_EXPECT_NATIVE_ARENAS="0"),
-    )
+    reference = _run_cpython_reference(source)
     (tmp_path / "cpython.stdout").write_text(reference.stdout)
     (tmp_path / "cpython.stderr").write_text(reference.stderr)
     receipt["cpython_reference"] = {"returncode": reference.returncode, "stdout": reference.stdout,
