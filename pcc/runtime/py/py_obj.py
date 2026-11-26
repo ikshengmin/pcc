@@ -1412,6 +1412,93 @@ def _gc_root_copy_local_locked(destination, source, source_borrowed: int) -> int
     return status
 
 
+@c_abi_export("pcc_gc_root_copy")
+def pcc_gc_root_copy(destination, source) -> int:
+    """Retain an authoritative root into an empty root: a status, no lease.
+
+    The one collector's root copy. Destination is an already registered,
+    empty owning root. Source is an owning root, or a traced owning slot
+    (a module global, a heap field) whose container the caller keeps alive.
+    Both addresses stay valid throughout. Success adds one destination owner
+    and returns 0; nothing is leased, so nothing is released afterwards. A
+    negative result leaves both owners unchanged: -1 invalid slots or a
+    terminal object, -4 a nonempty destination or a failed store. No Python
+    exception is changed. Caller holds no outer graph transaction.
+    """
+    if ptr_is_null(destination) != 0 or ptr_is_null(source) != 0:
+        return -1
+    if ptr_eq(destination, source) != 0:
+        return -1
+    # py_incref's gate (one thread, or atomic counts) with the log off: a
+    # NULL, tagged, immortal or ordinary live object needs one reference and
+    # a plain store. Other tags, dying counts and the diagnostic paths take
+    # the graph transaction below.
+    if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0:
+        atomic: int = load_i32(global_addr("pcc_gc_refcount_atomic"), 0)
+        if atomic != 0 or load_i32(global_addr("pcc_gc_refcount_fast"), 0) != 0:
+            if ptr_is_null(load_ptr(destination, 0)) == 0:
+                return -4
+            value = load_ptr(source, 0)
+            if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
+                store_ptr(destination, 0, value)
+                return 0
+            tag: int = load_i32(value, PYOBJECTHEADER_TYPE_TAG_OFFSET)
+            if (
+                (tag >= PY_TYPE_NONE and tag < PY_TYPE_CONTINUATION)
+                or tag == PY_TYPE_CPY_HANDLE
+                or (tag >= PY_TYPE_USER and tag < PY_TYPE_CEXT_TAG_BASE)
+            ):
+                if (load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_IMMORTAL) != 0:
+                    store_ptr(destination, 0, value)
+                    return 0
+                if atomic != 0:
+                    if atomic_load_i64(value, PYOBJECTHEADER_REFCOUNT_OFFSET, "relaxed") >= 0:
+                        atomic_rmw_i64("add", value, PYOBJECTHEADER_REFCOUNT_OFFSET, 1, "relaxed")
+                        store_ptr(destination, 0, value)
+                        return 0
+                else:
+                    count: int = load_i64(value, PYOBJECTHEADER_REFCOUNT_OFFSET)
+                    if count >= 0:
+                        store_i64(value, PYOBJECTHEADER_REFCOUNT_OFFSET, count + 1)
+                        store_ptr(destination, 0, value)
+                        return 0
+    _gc_backend_fast()
+    pcc_py_gc_minor_graph_lock()
+    return _gc_root_copy_local_locked(destination, source, 0)
+
+
+@c_abi_export("pcc_gc_root_copy_borrowed")
+def pcc_gc_root_copy_borrowed(destination, source) -> int:
+    """As pcc_gc_root_copy, from an authoritative borrowed slot.
+
+    Source is a registered borrowed root, or traced borrowed metadata whose
+    container the caller keeps alive; its actual owner stays live for the
+    call, and reading it transfers no reference. Destination gains one owner.
+    Status only, with pcc_gc_root_copy's codes; nothing is leased.
+    """
+    if ptr_is_null(destination) != 0 or ptr_is_null(source) != 0:
+        return -1
+    if ptr_eq(destination, source) != 0:
+        return -1
+    if (
+        load_i32(global_addr('pcc_gc_config_initialized'), 0) != 0
+        and load_i32(global_addr('pcc_diagnostics_runtime_log_fast_state'), 0) == 0
+    ):
+        # The one collector neither moves nor traces roots concurrently (its
+        # cycle collection stops the world), and roots have no barrier: one
+        # owner and a plain store. No graph lock, so threads do not serialize.
+        if ptr_is_null(load_ptr(destination, 0)) == 0:
+            return -4
+        copied = load_ptr(source, 0)
+        if is_tagged_int(copied) == 0 and ptr_is_null(copied) == 0:
+            py_incref(copied)
+        store_ptr(destination, 0, copied)
+        return 0
+    _gc_backend_fast()
+    pcc_py_gc_minor_graph_lock()
+    return _gc_root_copy_local_locked(destination, source, 1)
+
+
 @c_abi_export("pcc_gc_root_copy_lease_prepare_locked")
 def pcc_gc_root_copy_lease_prepare_locked(destination, source, source_borrowed: int, plan) -> int:
     """Publish a copied owner/lease inside an existing graph transaction.

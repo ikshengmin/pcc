@@ -440,6 +440,15 @@ int64_t   pcc_gc_root_copy_borrowed_lease(PyObject **destination, PyObject **sou
  * Returns zero on success; later raw-address consumers acquire their own lease. */
 int64_t pcc_gc_root_copy_local(PyObject **destination, PyObject **source,
                               int64_t source_borrowed);
+/* The one collector's root copies. Retain source's value into a distinct,
+ * empty, registered destination and return a status only: no lease token
+ * exists and nothing is released afterwards. Source is an owning root or a
+ * traced owning slot whose container the caller keeps alive; for _borrowed,
+ * an authoritative borrowed root whose owner stays live. 0 on success; -1
+ * invalid slots or a terminal object, -4 a nonempty destination or a
+ * failed store, with both owners unchanged. No Python exception changes. */
+int64_t pcc_gc_root_copy(PyObject **destination, PyObject **source);
+int64_t pcc_gc_root_copy_borrowed(PyObject **destination, PyObject **source);
 /* Split form for atomic lookup/selection callers already holding graph lock.
  * Runtime configuration is complete; plan256 is writable 256-byte storage.
  * Prepare initializes it and never runs deferred refcount/log work. Always
