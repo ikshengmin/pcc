@@ -34,6 +34,15 @@ from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
 from pcc.frontends.python.codegen.vthread_effect_analysis import (
     vthread_proven_direct_name_call,
 )
+from pcc.frontends.python.codegen.vthread_tcp_frame import (
+    TCP_ARGUMENTS,
+    TCP_DEADLINE,
+    TCP_FIELDS,
+    TCP_GENERATION,
+    TCP_PROGRESS,
+    TCPRetryFrame,
+    prepare_tcp_retry_frame,
+)
 
 _I8 = ir.IntType(8)
 _I32 = ir.IntType(32)
@@ -918,6 +927,15 @@ class NativeVirtualThreadLoweringMixin:
         initial_progress: int,
     ) -> ir.Value:
         """Evaluate one TCP call once and publish relocatable retry state."""
+        ctx = self._generator_ctx_stack[-1]
+        if TCP_ARGUMENTS[0] in ctx["frame_slots"] and not self._has_starred_unpack(args):
+            function = _spill_function(self)
+            lexical = function is not None and not any(
+                generator_expr_suspends(self, arg, function[0], function[1]) for arg in args
+            )
+            return prepare_tcp_retry_frame(
+                self, args, call_expr.span, timeout_index, initial_progress, lexical,
+            )
         args_root = self._emit_virtual_thread_dynamic_args_with_roots(args, ())
         timeout_ms = ir.Constant(_I64, -1)
         if timeout_index < len(args):
@@ -1038,6 +1056,8 @@ class NativeVirtualThreadLoweringMixin:
         frame_root: ir.Value,
         index: int,
     ) -> ir.Value:
+        if isinstance(frame_root, TCPRetryFrame):
+            return self._gc_retain(self.builder.load(frame_root.arguments[index]))
         args_obj = self._emit_virtual_thread_tcp_state_item(frame_root, 0)
         item = self.builder.call(
             self.runtime["py_tuple_get_known"],
@@ -1061,6 +1081,10 @@ class NativeVirtualThreadLoweringMixin:
         frame_root: ir.Value,
         index: int,
     ) -> ir.Value:
+        if isinstance(frame_root, TCPRetryFrame):
+            return self.builder.call(
+                self.runtime["py_int_value_i64"], [self.builder.load(frame_root.arguments[index])],
+            )
         return self._emit_virtual_thread_tcp_owned_i64(
             self._emit_virtual_thread_tcp_arg_item(frame_root, index)
         )
@@ -1070,6 +1094,8 @@ class NativeVirtualThreadLoweringMixin:
         frame_root: ir.Value,
         index: int,
     ) -> ir.Value:
+        if isinstance(frame_root, TCPRetryFrame):
+            return self.builder.load(frame_root.fields[TCP_FIELDS[index - 1]])
         return self._emit_virtual_thread_tcp_owned_i64(
             self._emit_virtual_thread_tcp_state_item(frame_root, index)
         )
@@ -1082,6 +1108,9 @@ class NativeVirtualThreadLoweringMixin:
         label: str,
         span,
     ) -> None:
+        if isinstance(frame_root, TCPRetryFrame):
+            self.builder.store(value, frame_root.fields[label])
+            return
         boxed = self.builder.call(
             self.runtime["py_int_from_i64"],
             [value],
@@ -1106,7 +1135,7 @@ class NativeVirtualThreadLoweringMixin:
         span,
     ) -> None:
         self._emit_virtual_thread_tcp_set_state_i64(
-            frame_root, 2, progress, "progress", span
+            frame_root, TCP_PROGRESS, progress, "progress", span
         )
 
     def _emit_virtual_thread_tcp_capture_generation(
@@ -1134,11 +1163,17 @@ class NativeVirtualThreadLoweringMixin:
         )
         self._emit_virtual_thread_rc_check(rc, "virtual thread TCP generation")
         self._emit_virtual_thread_tcp_set_state_i64(
-            frame_root, 3, generation, "generation", span
+            frame_root, TCP_GENERATION, generation, "generation", span
         )
         return generation
 
     def _emit_virtual_thread_tcp_clear_state(self, frame_root: ir.Value) -> None:
+        if isinstance(frame_root, TCPRetryFrame):
+            # Match retirement of the argument tuple on both completion and
+            # unwind. A last release may invoke a Python finalizer.
+            for slot in reversed(frame_root.arguments):
+                self.builder.call(self.runtime["pcc_gc_store_root"], [slot, self._emit_none_literal()])
+            return
         none_gv = declare_runtime_global(self.module, "py_None")
         none_obj = self.builder.load(
             none_gv,
@@ -1155,7 +1190,7 @@ class NativeVirtualThreadLoweringMixin:
         close_progress: bool,
     ) -> None:
         if close_progress:
-            fd = self._emit_virtual_thread_tcp_state_i64(frame_root, 2)
+            fd = self._emit_virtual_thread_tcp_state_i64(frame_root, TCP_PROGRESS)
             should_close = self.builder.icmp_signed(
                 ">=",
                 fd,
@@ -1421,7 +1456,7 @@ class NativeVirtualThreadLoweringMixin:
             self.builder.branch(loop_bb)
             self.builder.position_at_end(loop_bb)
             listener_fd = self._emit_virtual_thread_tcp_arg_i64(frame_root, 0)
-            generation = self._emit_virtual_thread_tcp_state_i64(frame_root, 3)
+            generation = self._emit_virtual_thread_tcp_state_i64(frame_root, TCP_GENERATION)
             status = self.builder.call(
                 self.runtime["py_virtual_thread_tcp_accept_observe"],
                 [listener_fd, generation, output_fd],
@@ -1442,7 +1477,7 @@ class NativeVirtualThreadLoweringMixin:
                 1,
                 "virtual thread TCP accept status",
             )
-            deadline = self._emit_virtual_thread_tcp_state_i64(frame_root, 1)
+            deadline = self._emit_virtual_thread_tcp_state_i64(frame_root, TCP_DEADLINE)
             self._emit_virtual_thread_tcp_park_retry(
                 listener_fd,
                 generation,
@@ -1554,8 +1589,8 @@ class NativeVirtualThreadLoweringMixin:
             self.builder.branch(loop_bb)
 
             self.builder.position_at_end(loop_bb)
-            current_fd = self._emit_virtual_thread_tcp_state_i64(frame_root, 2)
-            generation = self._emit_virtual_thread_tcp_state_i64(frame_root, 3)
+            current_fd = self._emit_virtual_thread_tcp_state_i64(frame_root, TCP_PROGRESS)
+            generation = self._emit_virtual_thread_tcp_state_i64(frame_root, TCP_GENERATION)
             status = self.builder.call(
                 self.runtime["py_virtual_thread_tcp_connect_observe"],
                 [current_fd, generation],
@@ -1576,7 +1611,7 @@ class NativeVirtualThreadLoweringMixin:
                 1,
                 "virtual thread TCP connect status",
             )
-            deadline = self._emit_virtual_thread_tcp_state_i64(frame_root, 1)
+            deadline = self._emit_virtual_thread_tcp_state_i64(frame_root, TCP_DEADLINE)
             self._emit_virtual_thread_tcp_park_retry(
                 current_fd,
                 generation,
@@ -1590,7 +1625,7 @@ class NativeVirtualThreadLoweringMixin:
             )
 
             self.builder.position_at_end(done_bb)
-            result = self._emit_virtual_thread_tcp_state_i64(frame_root, 2)
+            result = self._emit_virtual_thread_tcp_state_i64(frame_root, TCP_PROGRESS)
             self._emit_virtual_thread_tcp_clear_state(frame_root)
             return result
         finally:
@@ -1640,7 +1675,7 @@ class NativeVirtualThreadLoweringMixin:
             self.builder.position_at_end(loop_bb)
             fd = self._emit_virtual_thread_tcp_arg_i64(frame_root, 0)
             max_bytes = self._emit_virtual_thread_tcp_arg_i64(frame_root, 1)
-            generation = self._emit_virtual_thread_tcp_state_i64(frame_root, 3)
+            generation = self._emit_virtual_thread_tcp_state_i64(frame_root, TCP_GENERATION)
             result = self.builder.call(
                 self.runtime["py_virtual_thread_tcp_recv_observe"],
                 [fd, generation, max_bytes, output_status],
@@ -1669,7 +1704,7 @@ class NativeVirtualThreadLoweringMixin:
                 1,
                 "virtual thread TCP recv status",
             )
-            deadline = self._emit_virtual_thread_tcp_state_i64(frame_root, 1)
+            deadline = self._emit_virtual_thread_tcp_state_i64(frame_root, TCP_DEADLINE)
             self._emit_virtual_thread_tcp_park_retry(
                 fd,
                 generation,
@@ -1737,14 +1772,14 @@ class NativeVirtualThreadLoweringMixin:
             self.builder.branch(loop_bb)
             self.builder.position_at_end(loop_bb)
             fd = self._emit_virtual_thread_tcp_arg_i64(frame_root, 0)
-            generation = self._emit_virtual_thread_tcp_state_i64(frame_root, 3)
+            generation = self._emit_virtual_thread_tcp_state_i64(frame_root, TCP_GENERATION)
             data_obj = self._emit_virtual_thread_tcp_arg_item(frame_root, 1)
             data_len = self.builder.call(
                 self.runtime["py_bytes_len"],
                 [data_obj],
                 name=self._fresh("vthread.tcp.send.length"),
             )
-            offset = self._emit_virtual_thread_tcp_state_i64(frame_root, 2)
+            offset = self._emit_virtual_thread_tcp_state_i64(frame_root, TCP_PROGRESS)
             status = self.builder.call(
                 self.runtime["py_virtual_thread_tcp_send_observe"],
                 [fd, generation, data_obj, offset, output_count],
@@ -1792,7 +1827,7 @@ class NativeVirtualThreadLoweringMixin:
                 1,
                 "virtual thread TCP send status",
             )
-            deadline = self._emit_virtual_thread_tcp_state_i64(frame_root, 1)
+            deadline = self._emit_virtual_thread_tcp_state_i64(frame_root, TCP_DEADLINE)
             self._emit_virtual_thread_tcp_park_retry(
                 fd,
                 generation,

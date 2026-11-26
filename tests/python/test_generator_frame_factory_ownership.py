@@ -120,7 +120,9 @@ class InlineFrameFactoryModel(FrameFactoryModel):
             PYINLINEGENOBJECT_ITEMS_OFFSET=PYINLINEGENOBJECT_ITEMS_OFFSET,
             PYINLINEGENOBJECT_LENGTH_OFFSET=PYINLINEGENOBJECT_LENGTH_OFFSET,
         )
-        _functions(RUNTIME / 'py_gen.py', {'py_gen_inline_frame_new'}, self.ns)
+        _functions(RUNTIME / 'py_gen.py', {
+            'py_gen_inline_frame_new', 'py_gen_inline_frame_new_sized',
+        }, self.ns)
 
     def check_shape(self, obj):
         if self.backend != 0:
@@ -222,4 +224,29 @@ def test_inline_factory_invalid_size_never_registers_scratch_roots(count):
     model = InlineFrameFactoryModel(count)
     assert model.ns['py_gen_inline_frame_new'](count) is None
     assert model.pending == 'invalid generator frame size'
+    assert not model.local_events and not model.objects
+
+
+def test_inline_scalar_tail_is_outside_the_reference_count():
+    model = InlineFrameFactoryModel(5)
+    sizes = []
+    allocate = model.ns['pcc_gc_alloc']
+
+    def record_size(size, tag, flags):
+        sizes.append(size)
+        return allocate(size, tag, flags)
+
+    model.ns['pcc_gc_alloc'] = record_size
+    frame = model.ns['py_gen_inline_frame_new_sized'](2, 3)
+    assert sizes == [PYINLINEGENOBJECT_ITEMS_OFFSET + 2 * 8 + 3 * 8]
+    assert model.memory[frame + PYINLINEGENOBJECT_LENGTH_OFFSET] == 2
+    assert all(model.memory[frame + PYINLINEGENOBJECT_ITEMS_OFFSET + i * 8] == model.none
+               for i in range(2))
+
+
+@pytest.mark.parametrize("slots,words", ((1, -1), (-1, 1), (134217728, 1), (0, 134217729)))
+def test_inline_scalar_tail_checks_combined_size_before_allocation(slots, words):
+    model = InlineFrameFactoryModel(slots)
+    assert model.ns["py_gen_inline_frame_new_sized"](slots, words) is None
+    assert model.pending == "invalid generator frame size"
     assert not model.local_events and not model.objects

@@ -368,6 +368,24 @@ def py_gen_inline_frame_new(slot_count: i64):
     py_gc_track(gen)
     return _gen_frame_factory_finish(slots, 1)
 
+@c_abi_export("py_gen_inline_frame_new_sized")
+def py_gen_inline_frame_new_sized(slot_count: i64, scalar_words: i64):
+    """Reserve a private scalar suffix in addition to the traced frame prefix."""
+    if (
+        slot_count < 0 or scalar_words < 0 or scalar_words > 134217728
+        or slot_count > 134217728 - scalar_words
+    ):
+        return _require_result(null(), cstr("py_gen_inline_frame_new_sized"), cstr("invalid generator frame size"))
+    # The owned object ABI has eight-byte slots. The ordinary constructor
+    # initializes the whole allocation with immortal None and owns no extra
+    # element references. Shorten the traced prefix before the caller can
+    # store any native bits or publish this generator.
+    frame = py_gen_inline_frame_new(slot_count + scalar_words)
+    if ptr_is_null(frame) == 0:
+        store_i64(frame, PYINLINEGENOBJECT_LENGTH_OFFSET, slot_count)
+    return frame
+
+
 @c_abi_export("py_gen_frame_save")
 def py_gen_frame_save(frame, slot_addresses, slot_count: int) -> int:
     """Batch one GC0 save; other collectors keep the ordinary setter path."""

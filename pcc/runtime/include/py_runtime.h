@@ -1593,6 +1593,7 @@ int64_t   py_obj_is_slice(PyObject *o);
 PyObject *py_gen_frame_new(int64_t slot_count); /* fixed-size, None-filled list frame */
 /* GC0 private generator storage; other collectors return a list frame. */
 PyObject *py_gen_inline_frame_new(int64_t slot_count);
+PyObject *py_gen_inline_frame_new_sized(int64_t slot_count, int64_t scalar_words);
 PyObject *py_gen_from_inline_frame(void *resume, PyObject *frame);
 int64_t py_gen_frame_len(PyObject *frame);
 /* Compiler-private fixed-size frames: caller owns the frame, every slot is

@@ -864,6 +864,7 @@ def _runtime_signatures_part_21():
     # ---- Native generator objects ----------------------------------
     "py_gen_frame_new": (_PYOBJ, [_I64], False),
     "py_gen_inline_frame_new": (_PYOBJ, [_I64], False),
+    "py_gen_inline_frame_new_sized": (_PYOBJ, [_I64, _I64], False),
     "py_gen_from_inline_frame": (_PYOBJ, [_PTR, _PYOBJ], False),
     "py_gen_frame_len": (_I64, [_PYOBJ], False),
     }

@@ -1821,6 +1821,16 @@ in the relevant section or issue and removes the entry.
    (d) per-site attribute lookup caches.
    Area: the pcc area of the unit's files (`runtime-codegen`, `runtime-gc`,
    `backend`); a unit that changes only pcc-gateway holds none.
+   Public virtual-thread TCP, local work based on `ca5d198e6`: sequential
+   operations in an inline generator reuse its traced argument slots and
+   three private integer words. On the Mac, six alternating trials with a
+   separately built control measured 1.73x throughput for one-byte reads
+   of buffered loopback data (control floor 2.1%). A 16-byte echo exchange
+   used 6.2% fewer instructions; its throughput fell within control noise.
+   The gateway transport calls the platform socket operations directly.
+   Its request rate is a separate measurement. Focused host/self replay:
+   `uv run pytest -x -vv tests/python/test_virtual_thread_network.py::test_sequential_tcp_gc_matrix`
+   (one and four carriers). Native pcc1 qualification remains open.
    Mac attribution for (b) and (c): until
    [#17](https://github.com/ikshengmin/pcc/issues/17) every owned Mach-O
    executable carried the constant LC_UUID `11111111-…`, and `sample` (also

@@ -6,6 +6,7 @@ from tests.owned_ir_validation import verify_ir_text
 
 import os
 from pathlib import Path
+import re
 import socket
 import subprocess
 import textwrap
@@ -19,7 +20,7 @@ from pcc1_gate import find_current_pcc1
 REPO = Path(__file__).resolve().parents[2]
 
 
-def _tcp_source(port: int) -> str:
+def _tcp_source(port: int, exchange_carriers: int = 1) -> str:
     return textwrap.dedent(
         f'''
         import pcc.virtual_thread as vt
@@ -28,9 +29,13 @@ def _tcp_source(port: int) -> str:
         PORT = {port}
         MESSAGE = b"pcc-sequential-net"
         CLOSE_EVENTS = []
+        CANCEL_EVENTS = []
         scheduler_root_count = extern("pcc_gc_scheduler_root_count", (), c_int64)
+        node_pool_stat = extern("py_virtual_thread_node_pool_stat", (c_int64, c_int64), c_int64)
         timer_count = extern("py_virtual_thread_timer_count", (), c_int64)
         io_wait_count = extern("py_virtual_thread_io_wait_count", (), c_int64)
+        collect = extern("py_gc_collect", (), c_int64)
+        sleep_ns = extern("pcc_platform_sleep_ns", (c_int64,), c_int64)
 
         def recv_exact(fd: int, size: int) -> bytes:
             result = b""
@@ -45,6 +50,9 @@ def _tcp_source(port: int) -> str:
             peer = vt.tcp_accept(listener, 2000)
             payload = recv_exact(peer, len(MESSAGE))
             vt.tcp_send_all(peer, payload, 2000)
+            # The outer send's first argument is live while its second
+            # argument parks on the same frame's receive operation.
+            vt.tcp_send_all(peer, vt.tcp_recv(peer, 1, 2000), 2000)
             vt.tcp_close(peer)
             return len(payload)
 
@@ -52,7 +60,11 @@ def _tcp_source(port: int) -> str:
             fd = vt.tcp_connect("127.0.0.1", PORT, 2000)
             vt.tcp_send_all(fd, MESSAGE, 2000)
             echoed = recv_exact(fd, len(MESSAGE))
+            vt.tcp_send_all(fd, b"!", 2000)
+            trailer = vt.tcp_recv(fd, 1, 2000)
             vt.tcp_close(fd)
+            if echoed != MESSAGE or trailer != b"!":
+                return -1
             return len(echoed)
 
         def close_waiter(listener: int) -> int:
@@ -81,19 +93,46 @@ def _tcp_source(port: int) -> str:
             except OSError:
                 return 1
 
+        def cancel_leaf(listener: int, owner) -> int:
+            try:
+                peer = vt.tcp_accept(listener, 60000)
+                vt.tcp_close(peer)
+                return 20
+            finally:
+                CANCEL_EVENTS.append(1 if vt.current() is owner else -1)
+
+        def cancel_middle(listener: int, owner) -> int:
+            try:
+                return cancel_leaf(listener, owner)
+            finally:
+                CANCEL_EVENTS.append(2 if vt.current() is owner else -2)
+
         def cancel_waiter(listener: int) -> int:
-            peer = vt.tcp_accept(listener, 60000)
-            vt.tcp_close(peer)
-            return 20
+            owner = vt.current()
+            try:
+                return cancel_middle(listener, owner)
+            finally:
+                CANCEL_EVENTS.append(3 if vt.current() is owner else -3)
 
         def main() -> int:
-            root_baseline = scheduler_root_count()
+            # Each cached ready node keeps its empty slot registered. This
+            # program uses neither joins nor channels, the other such pools.
+            root_baseline = scheduler_root_count() - node_pool_stat(0, 2)
             timer_baseline = timer_count()
             io_baseline = io_wait_count()
             listener = vt.tcp_listen("127.0.0.1", PORT, 16)
             server_task = vt.spawn(server, listener)
             client_task = vt.spawn(client)
-            vt.run(1, 4096)
+            if {exchange_carriers} == 1:
+                vt.run(1, 4096)
+            else:
+                if vt.carrier_pool_start({exchange_carriers}) != {exchange_carriers}:
+                    return 28
+                try:
+                    while vt.outcome(server_task) == vt.OUTCOME_PENDING or vt.outcome(client_task) == vt.OUTCOME_PENDING:
+                        sleep_ns(1000000)
+                finally:
+                    vt.carrier_pool_stop()
             vt.tcp_close(listener)
             if vt.outcome(server_task) != vt.OUTCOME_RETURNED:
                 return 10
@@ -131,13 +170,16 @@ def _tcp_source(port: int) -> str:
             vt.run(1, 1)
             if io_wait_count() != io_baseline + 1:
                 return 26
+            collect()
             if not vt.cancel(cancel_task):
                 return 20
             vt.run(1, 64)
             vt.tcp_close(cancel_listener)
             if vt.outcome(cancel_task) != vt.OUTCOME_CANCELLED:
                 return 21
-            if scheduler_root_count() != root_baseline:
+            if CANCEL_EVENTS != [1, 2, 3]:
+                return 27
+            if scheduler_root_count() - node_pool_stat(0, 2) != root_baseline:
                 return 22
             if timer_count() != timer_baseline:
                 return 23
@@ -160,6 +202,37 @@ def _reserve_port() -> int:
 def _assert_echo(stdout: str) -> None:
     expected_backend = 1 if os.uname().sysname == "Darwin" else 2
     assert stdout.strip() == f"SEQUENTIAL_TCP_OK {expected_backend}"
+
+
+@pytest.mark.parametrize("inline", (True, False))
+def test_two_socket_reads_share_only_the_private_retry_state(tmp_path, monkeypatch, inline):
+    source = tmp_path / "retry.py"
+    source.write_text(textwrap.dedent("""\
+        import pcc.virtual_thread as vt
+        def reader(fd: int):
+            first = vt.tcp_recv(fd, 1)
+            second = vt.tcp_recv(fd, 2)
+            return first + second
+        task = vt.spawn(reader, -1)
+    """), encoding="utf-8")
+    monkeypatch.setenv("PCC_INLINE_GENERATOR_FRAMES", str(int(inline)))
+    monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
+    output = tmp_path / "retry.ll"
+    compile_python(str(source), str(output), emit_llvm_only=True, ir_scaffold_mode="on")
+    ir_text = output.read_text(encoding="utf-8")
+    verify_ir_text(ir_text)
+    body = re.search(r"^define [^\n]*reader__gen_resume\([^\n]*\n(.*?)^}", ir_text, re.M | re.S)
+    assert body is not None
+    resume = body[1]
+    assert resume.count("@py_virtual_thread_tcp_recv_observe(") == 2
+    assert len(re.findall(r"%tcp\.deadline[^ ]* = getelementptr", resume)) == int(inline)
+    assert ("@py_list_new(" in resume) == (not inline)
+    assert ("@py_tuple_new(" in resume) == (not inline)
+    if inline:
+        cleared = re.findall(
+            r"@pcc_gc_store_root\(ptr %\.tcp\.arg(\d+)\.addr[^,]*, ptr %none\.", resume,
+        )
+        assert cleared and cleared == ["1", "0"] * (len(cleared) // 2)
 
 
 def test_darwin_sequential_tcp_contract(tmp_path: Path, monkeypatch) -> None:
@@ -236,15 +309,17 @@ def test_darwin_sequential_tcp_contract(tmp_path: Path, monkeypatch) -> None:
     assert close_section.index("pcc_platform_close(") < close_section.index("py_virtual_thread_io_resource_operation_end()")
 
 
+@pytest.mark.parametrize("exchange_carriers", (1, 4))
 def test_sequential_tcp_gc_matrix(
     tmp_path: Path,
     monkeypatch,
     pcc_runtime_archive: Path,
+    exchange_carriers: int,
 ) -> None:
     """Compile once from current source and execute the flat API on GC0..4."""
     source = tmp_path / "sequential_tcp_gc.py"
     executable = tmp_path / "sequential_tcp_gc"
-    source.write_text(_tcp_source(_reserve_port()), encoding="utf-8")
+    source.write_text(_tcp_source(_reserve_port(), exchange_carriers), encoding="utf-8")
     monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(pcc_runtime_archive))
     compile_python(
         str(source),

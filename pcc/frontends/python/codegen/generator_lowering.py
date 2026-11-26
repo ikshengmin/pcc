@@ -59,6 +59,7 @@ from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.hoist_analysis import _dataclass_field_names as _ast_field_names
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
 from pcc.frontends.python.codegen.vthread_effect_analysis import vthread_delegate_frame_name, vthread_method_owner_for_funcdef, vthread_proven_direct_name_call, vthread_proven_export_method_call_key, vthread_proven_method_call_key, vthread_proven_suspension_call_key
+from pcc.frontends.python.codegen.vthread_tcp_frame import TCP_ARGUMENTS, TCP_FIELDS
 
 _I1 = ir.IntType(1)
 _I8 = ir.IntType(8)
@@ -2379,12 +2380,14 @@ class GeneratorLoweringMixin:
                     "pcc.virtual_thread.tcp_recv",
                     "pcc.virtual_thread.tcp_send_all",
                 ):
-                    # Sequential TCP evaluates its Python operands once, then
-                    # keeps them and operation progress in this traced hidden
-                    # frame slot while readiness parks the parent generator.
-                    hidden = vthread_delegate_frame_name(node, primitive_key)
-                    if hidden not in names:
-                        names.append(hidden)
+                    if _inline_generator_frames(self) and not self._has_starred_unpack(node.args):
+                        for name in TCP_ARGUMENTS[:len(node.args)]:
+                            if name not in names:
+                                names.append(name)
+                    else:
+                        hidden = vthread_delegate_frame_name(node, primitive_key)
+                        if hidden not in names:
+                            names.append(hidden)
                 elif self._vthread_dynamic_callback_call(node, fd):
                     hidden = vthread_delegate_frame_name(
                         node,
@@ -2582,7 +2585,13 @@ class GeneratorLoweringMixin:
         bulk_frame_init = str(
             os.environ.get("PCC_DISABLE_BULK_GENERATOR_FRAME_INIT", "0") or "0"
         ).strip().lower() not in ("1", "true", "yes", "on")
-        if bulk_frame_init:
+        if TCP_ARGUMENTS[0] in frame_names:
+            frame = self.builder.call(
+                self.runtime["py_gen_inline_frame_new_sized"],
+                [ir.Constant(_I64, len(frame_names)), ir.Constant(_I64, len(TCP_FIELDS))],
+                name=self._fresh("gen.frame"),
+            )
+        elif bulk_frame_init:
             frame = self.builder.call(
                 self.runtime["py_gen_inline_frame_new" if _inline_generator_frames(self) else "py_gen_frame_new"],
                 [ir.Constant(_I64, len(frame_names))],
