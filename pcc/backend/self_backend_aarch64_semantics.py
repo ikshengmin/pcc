@@ -7,6 +7,8 @@ Headers are indexed by encoded-record ID; operands contain only scalar tokens.
 
 from __future__ import annotations
 
+import os
+
 from .arm64_encode import EncodeError, _validate_text_fixup_word
 from .self_backend_value_arena import CompilerInt2, CompilerInt4, CompilerIntArena
 
@@ -330,6 +332,20 @@ def semantic_immediate_flags(token: CompilerInt4) -> int:
     raise EncodeError("AArch64 semantic operand is not an integer immediate")
 
 
+_VERIFY_EACH_ENV = "PCC_DEBUG_AARCH64_VERIFY_EACH"
+
+
+def aarch64_verify_each_enabled() -> bool:
+    """Debug switch: revalidate every operand on every read and the whole
+    module on every ``require_complete``, as Go's ``-d=ssa/check/on`` checks
+    after each pass and LLVM's ``-verify-machineinstrs`` does. Off by
+    default: operands are validated once, when their header is appended,
+    and ``require_complete`` checks only the records added since its last
+    complete pass."""
+    value = str(os.environ.get(_VERIFY_EACH_ENV, "") or "").strip().lower()
+    return value in ("1", "true", "yes", "on")
+
+
 class AArch64InstructionSemantics:
     """One optional scope-owned provenance sidecar, indexed by record ID.
 
@@ -348,6 +364,11 @@ class AArch64InstructionSemantics:
             self.headers.close()
             raise
         self.closed: bool = False
+        self.verify_each: bool = aarch64_verify_each_enabled()
+        # Records [0, complete_records) passed require_complete against at
+        # least complete_symbols symbols; arenas only grow or roll back.
+        self.complete_records: int = 0
+        self.complete_symbols: int = 0
 
     def token_count(self) -> int:
         return len(self.tokens) // 4
@@ -385,7 +406,10 @@ class AArch64InstructionSemantics:
             raise EncodeError("AArch64 instruction provenance is unproven")
         if header.third < 0 or header.fourth < 0 or header.third + header.fourth > self.token_count():
             raise EncodeError("AArch64 semantic operand span is invalid")
-        self._validate_tokens(header.third, header.fourth)
+        if self.verify_each:
+            # append_header validated these operands; recheck them only
+            # under the debug switch.
+            self._validate_tokens(header.third, header.fourth)
         return header
 
     def _validate_tokens(self, first: int, count: int) -> None:
@@ -506,8 +530,14 @@ class AArch64InstructionSemantics:
             raise RuntimeError("AArch64 instruction semantics are closed")
         if len(records) % 4 or len(self.tokens) % 4 or len(self.headers) != len(records) or symbol_count < 0:
             raise EncodeError("AArch64 provenance record IDs do not match encoded records")
+        record_count = len(records) // 4
         record_id = 0
-        while record_id < len(records) // 4:
+        if (not self.verify_each and self.complete_records <= record_count
+                and symbol_count >= self.complete_symbols):
+            # Earlier records are unchanged (arenas only grow or roll back
+            # past this point) and a larger symbol table keeps them valid.
+            record_id = self.complete_records
+        while record_id < record_count:
             encoded: CompilerInt4 = records.get4_unchecked(record_id)
             if encoded.second >= 0:
                 header: CompilerInt4 = self.require_header(record_id)
@@ -522,12 +552,16 @@ class AArch64InstructionSemantics:
                 if header.first != 0 or header.second != 0 or header.third != 0 or header.fourth != 0:
                     raise EncodeError("AArch64 event record has instruction provenance")
             record_id += 1
+        self.complete_records = record_count
+        self.complete_symbols = symbol_count
 
     def reset(self) -> None:
         if self.closed:
             raise RuntimeError("AArch64 instruction semantics are closed")
         self.headers.clear()
         self.tokens.clear()
+        self.complete_records = 0
+        self.complete_symbols = 0
 
     def close(self) -> None:
         if self.closed:
