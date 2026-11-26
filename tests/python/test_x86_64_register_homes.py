@@ -7,11 +7,14 @@ that reads its source first (mov, movzx, movsx, movsxd, lea; Intel SDM
 Vol. 2) and nothing reads the scratch register again before it is
 rewritten in the same block; labels, jumps and unmodeled instructions keep
 the copy. A getelementptr with constant indices is one lea of its total
-byte offset. Real-machine execution is the docker differential in
-tests/integration/test_self_backend_x86_64_linux.py.
+byte offset while its source is live. Last reads must retain the GC
+pointer-retirement side effect. Both forms execute as owned native images.
 """
 
+import platform
 import re
+import subprocess
+import sys
 
 import pytest
 
@@ -66,10 +69,72 @@ entry:
 '''
 
 
+# Keep the input pointer live across both GEPs. The last ordinary load
+# is the separate lifetime boundary at which the pointer home is retired.
+_LIVE_PROGRAM = _PROGRAM.replace(
+    "  ret i64 %sum",
+    "  %last = load i32, ptr %record, align 4\n"
+    "  %lastwide = zext i32 %last to i64\n"
+    "  %result = add i64 %sum, %lastwide\n"
+    "  ret i64 %result",
+)
+
+
 def test_constant_gep_is_one_lea_and_loads_land_in_place():
-    asm = emit_x86_64_linux_asm(_PROGRAM)
-    body = asm.split("field:", 1)[1]
-    # %pair is 24 bytes: element 1, field 2 (offset 16), element 3 = 46.
-    assert re.search(r"^  lea r11, \[\w+ \+ 46\]$", body, re.M), body
-    assert not re.search(r"^  lea r11, \[r11 \+ \d+\]$", body, re.M), body
-    assert not re.search(r"^  mov r(?:bx|12|13|14|15), r1[01]$", body, re.M), body
+    body = emit_x86_64_linux_asm(_LIVE_PROGRAM).split("field:", 1)[1]
+    # The live pointer can be forwarded for both GEPs; neither crosses
+    # a lifetime marker. Preserve the original optimization assertions
+    # over that region, not over the unrelated retirement sequence.
+    before_retirement = body.split("  mov r11, rbx\n  mov ebx, 0", 1)[0]
+    assert re.findall(r"^  lea r11, \[rbx \+ (\d+)\]$", before_retirement, re.M) == ["46", "8"], body
+    assert not re.search(r"^  lea r11, \[r11 \+ \d+\]$", before_retirement, re.M), body
+    # The load and extension must land directly in their homes. The
+    # later arithmetic result is not a load or extension.
+    assert re.search(r"^  movzx r(?:bx|12|13|14|15), WORD PTR ", before_retirement, re.M), body
+    assert re.search(r"^  lea r11, \[rbx \+ 8\]\n  mov r(?:bx|12|13|14|15), QWORD PTR \[r11\]$", before_retirement, re.M), body
+    assert before_retirement != body, body
+
+
+def test_constant_gep_last_read_preserves_pointer_retirement():
+    body = emit_x86_64_linux_asm(_PROGRAM).split("field:", 1)[1]
+    assert re.search(r"^  lea r11, \[rbx \+ 46\]$", body, re.M), body
+    assert body.count("  lea r11, ") == 2, body
+    # The source must be copied before retirement and cannot be used
+    # directly afterwards. The pointer-home clear is a GC side effect.
+    assert "  mov r11, rbx\n  mov ebx, 0\n  lea r11, [r11 + 8]\n" in body, body
+
+
+@pytest.mark.pcc_gate(unavailable=(
+    None if sys.platform == "linux" and platform.machine() in ("x86_64", "AMD64")
+    else "requires native Linux x86-64 execution"
+))
+@pytest.mark.parametrize("program, expected", [(_PROGRAM, 42), (_LIVE_PROGRAM, 49)])
+def test_constant_gep_executes_owned_image(tmp_path, program, expected):
+    from pcc.backend.elf_x86_64 import link_static_executable
+    from pcc.backend.x86_64_asm_driver import assemble_file
+
+    start = """.intel_syntax noprefix
+.text
+.globl _start
+_start:
+  lea rdi, .Lrecord[rip]
+  call field
+  mov rdi, rax
+  mov rax, 60
+  syscall
+.section .rodata
+.p2align 3
+.Lrecord:
+  .long 7
+  .long 0
+  .quad 13
+  .zero 30
+  .short 29
+"""
+    exe = tmp_path / "field"
+    exe.write_bytes(link_static_executable([
+        assemble_file(start), assemble_file(emit_x86_64_linux_asm(program)),
+    ]))
+    exe.chmod(0o755)
+    result = subprocess.run([str(exe)], capture_output=True, timeout=10)
+    assert (result.returncode, result.stdout, result.stderr) == (expected, b"", b"")

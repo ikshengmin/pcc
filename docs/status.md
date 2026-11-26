@@ -549,7 +549,15 @@ in the relevant section or issue and removes the entry.
    (register homes across the pointer-retirement marker), with 15 passing
    subtests and four deselected; 26.61 s, 142,790,656-byte peak. Eleven of
    the former twelve x86 baseline failures are repaired. The remaining
-   optimization witness is still open; no selector behavior was changed.
+   optimization witness now separates live-pointer GEP selection from
+   last-read pointer retirement. Both live GEPs use one LEA and load/extend
+   directly into their register homes; the last-read fixture requires the
+   pointer-home clear between its copy and address computation. Two owned
+   native ELF programs execute and return the expected 42 and 49. Linux:
+   132 register-home, register-copy and frame-register checks pass at
+   564bac71 with the test change. No production code or GC lifetime
+   semantics changed; hosted validation pending. Next: other independent
+   #20 CI failures and exact-source checkpoint comparison.
 
    Complete pytest overlap fixture (run 45643044565, artifact 15044643830):
    the fixed 330 MiB allowance rejected a real child whose inherited host
@@ -574,7 +582,7 @@ in the relevant section or issue and removes the entry.
    under the unchanged 90 s / 1 GiB guard. Hosted verification pending.
 
    Claims:
-   - #20 x86 constant GEP register-home witness: Codex, Linux, 2026-11-26T03:02Z, area backend (x86 register homes and its tests only; separate from AArch64 selection)
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
