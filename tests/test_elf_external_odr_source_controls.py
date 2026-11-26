@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.elf_unwind_section_preimage import without_unwind_section
 from tests.elf_external_odr_preimage import (
     BASE_OWNER_SHA256,
     OWNER_REVERSE_EDITS,
@@ -29,7 +30,7 @@ def _source():
     owner = Path(__file__).resolve().parents[1] / "pcc/backend/elf_x86_64.py"
     source = owner.read_bytes().decode("utf-8").replace("\r\n", "\n")
     assert "\r" not in source
-    return source
+    return without_unwind_section(source)
 
 
 def _sha(source):

@@ -67,6 +67,8 @@ SHT_STRTAB = 3
 SHT_RELA = 4
 SHT_NOTE = 7
 SHT_NOBITS = 8
+# AMD64 ABI processor-specific type used for read-only DWARF .eh_frame.
+SHT_X86_64_UNWIND = 0x70000001
 # LLVM's discardable address-significance metadata.  It informs later
 # dead-stripping; this static slice keeps every selected section and therefore
 # can safely consume-and-drop the table after validating its symtab link.
@@ -298,9 +300,12 @@ def _validate_object(obj: ElfObject) -> None:
             raise ElfError(f"invalid or duplicate section name {section.name!r}")
         names.add(section.name)
         if section.type not in (SHT_PROGBITS, SHT_NOBITS, SHT_NOTE):
-            raise ElfError(
-                f"section {section.name!r} has unsupported type {section.type}"
-            )
+            if not (obj.machine == EM_X86_64
+                    and section.type == SHT_X86_64_UNWIND
+                    and section.name == ".eh_frame" and section.flags == SHF_ALLOC):
+                raise ElfError(
+                    f"section {section.name!r} has unsupported type {section.type}"
+                )
         if section.align <= 0 or section.align & (section.align - 1):
             raise ElfError(f"section {section.name!r} has invalid alignment")
         if section.type == SHT_NOBITS:
@@ -737,9 +742,14 @@ def _parse_relocatable(data: bytes, *, compact_relocations: bool = False,
             continue
         section_type = raw[1]
         if section_type not in (SHT_PROGBITS, SHT_NOBITS, SHT_NOTE):
-            raise ElfError(
-                f"section {raw_names[source_index]!r} has unsupported type {section_type}"
-            )
+            # Preserve the AMD64 unwind type and ordinary payload/relocation
+            # ownership. Do not admit unrelated processor-specific sections.
+            if not (header[2] == EM_X86_64
+                    and section_type == SHT_X86_64_UNWIND
+                    and raw_names[source_index] == ".eh_frame" and raw[2] == SHF_ALLOC):
+                raise ElfError(
+                    f"section {raw_names[source_index]!r} has unsupported type {section_type}"
+                )
         if raw[6] or raw[7] or raw[9]:
             raise ElfError(
                 f"section {raw_names[source_index]!r} has unsupported link/info/entsize"

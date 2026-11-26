@@ -9,6 +9,9 @@ No compiler, linker or production module is imported here.
 """
 
 import hashlib
+from tests.elf_unwind_section_preimage import (
+    OWNER_SHA256 as UNWIND_OWNER_SHA256, without_unwind_section,
+)
 
 
 OWNER_SHA256 = "a99b05a0a491a2c48ab9dedb53d01544aec6fa8cb752bbd3e0afd77e88b4d3a6"
@@ -48,6 +51,9 @@ OWNER_REVERSE_EDITS = (
 def without_external_odr(source):
     """Restore only the authenticated parent; reject partial or unknown owners."""
     digest = hashlib.sha256(source.encode()).hexdigest()
+    if digest == UNWIND_OWNER_SHA256:
+        source = without_unwind_section(source)
+        digest = hashlib.sha256(source.encode()).hexdigest()
     if digest == BASE_OWNER_SHA256:
         return source
     assert digest == OWNER_SHA256
