@@ -353,6 +353,40 @@ no test node outcomes. No deadline, worker-count or resource
 gate relaxation. This non-skip status-only commit queues the new
 distinct source snapshot, prior workflow runs preserved.
 
+As of 2026-11-26T21:46Z the next distinct cumulative immutable
+snapshot at production head d3b3d354 includes nonmoving inline four-slot
+list storage a5b2bb00 (actual raw allocations17.57625->10.47625/request,
+managed35.45 unchanged, requested4965.12B unchanged, usable+227.2B;
+measured native count1/2 owner CPU normalized -12.393%/-12.213%5/5,
+same-handler w1 CPU -1.639%4/5 beyond max control1.152%, RSS
+-0.357%5/5; QPS directional only, w4 neutral, p99/STW within controls,
+87 focused tests and exact native ownership/cycle/weakref audits).
+Stage2 direct-only entry-hoist positioning 811125a0 (actual 6465
+queries/1,788,109 records, verified final direct owner; two exact
+source-matched native projection binaries CPU -23.543%5/5, inner
+-98.522%5/5, RSS -380KiB5/5, exact assembly/positions; independent
+Function allocation-only fixture usable unchanged but process RSS
++68KiB at both counts, not a blanket memory guarantee; focused
+131 pass/18 unchanged baseline fail/1 deselect).
+CI/correctness fixes a91caaaf ordinary boxed external annotation live
+dispatch (44/44 focused incl actual Parent/Duck/None and constructor
+controls, strict625 fallback0), 0846c755 exact compact Stage1 source
+lease pressure admission (31/31 focused, full marker/pressure/bundle
+123 pass/2 same local baseline fail, Mac pressure execution unrun),
+cd15c218 ordinary external void exact captured live method binding
+(19 host and67 adjacent pass, six actual ELF integration cases,
+three strict contextual625 fallback0). No unaccepted raw machine
+ABI change or rejected ARM scalar validation included: threshold
+candidate actual owner -78.644%5/5 exact but qualifying full worker
+RSS +2.520% vs median control .596%, rejected. No whole Stage1/Stage2
+speed/RSS parity or hosted pass claim.
+Public Actions API observed at21:46Z: prior run
+[45868668374 (#638)](https://github.com/ikshengmin/pcc/actions/runs/45868668374)
+head9223aca1cd69 in_progress; #639–642 pending, existing runs left
+intact. This non-skip status-only commit queues the next distinct
+source snapshot, no worker/deadline/resource gate changes, no
+cancellation or rerun.
+
 Do not claim any hosted lane green from focused tests. The latest completed
 [checkpoint comparison](investigations/checkpoint-validation-45427972345.md)
 keeps that baseline: candidate `7ec14d388` has exact test regressions
