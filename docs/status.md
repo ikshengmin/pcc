@@ -2109,12 +2109,15 @@ in the relevant section or issue and removes the entry.
    focused typed pair/CFG/pipeline nodes passed on six workers. The new
    count witness reduces nontrivial-block body probes 1001 -> 3; it fails
    on the old pass. Cross-target pass-only evidence, not native ARM or
-   full Stage2; CI pending. Next: remaining repeated frontend/backend
-   owners and equal-ceiling Stage2/3 CI.
+   full Stage2; CI pending. Empty-local-label pass screen (Linux, same frozen actual 203,088-event
+   compiler module): candidate compacting label-only ranges was 0.06685 ->
+   0.07321 s (0/5); a cached-record variant 0.06947 -> 0.06696 s (2/5),
+   controls stable and exact output equal. Neither candidate is admitted;
+   no production change. Next: profile TLV resolver-save elimination and
+   other repeated frontend/backend owners, equal-ceiling Stage2/3 CI.
    [Phase investigation](investigations/stage2-worker-budget-parity-45643044565.md).
 
    Claims:
-   - Stage2 AArch64 empty-label elimination compile-time optimization: Codex, Linux, 2026-11-26T12:02Z, area backend
    - Stage1 compile time on macOS (J2s): Claude, macOS, 2026-11-26T09:45Z, area backend (`self_backend_aarch64_typed_peepholes.py`, `self_backend_aarch64_typed_pass_context.py`, `self_backend_aarch64_fragments.py`, the AArch64 allocator `self_backend_aarch64_darwin_regalloc.py`, the Mach-O link files, `pcc/frontends/python/direct_object_cache.py` and their tests; not `self_backend_aarch64_typed_pair.py` or `self_backend_aarch64_typed_cfg.py`, which the Stage2 pairing/trampoline unit above holds)
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
