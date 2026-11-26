@@ -319,6 +319,40 @@ unfinished. ARM64 Stage2 owner timeout 1800.203s; outer pytest tree
 300s and completed Stage2 wall/RSS <= Stage1 remain unmet. This non-skip
 status-only commit queues this distinct snapshot without cancelling
 or rerunning prior workflow runs.
+As of 2026-11-26T20:35Z the next distinct cumulative immutable
+snapshot includes production MRO lazy traversal 61fc4ea0 (actual
+151998 projected leaf queries, native inner -37.15%, CPU -24.18%
+5/5, RSS neutral, native BFS/cycle/mutable positive tests, original
+full class_gen assembly exact; existing baseline direct-method
+failure byte-identical and separately owned). Also integrated:
+Linux errno raw closure target-specific actual fix 5d113086 (13
+native/IR/cross and 8 adjacent tests, strict625 fallback0;
+general NULL trap preserved, LLVM reference local unrun), exact
+scaffold result ownership model66c6d15d (20/20 actual ELF, three
+negative mutations), Linux stackwalk existing policy100c29d8
+(9/9 actual, Darwin linked-table unrun), Darwin prerequisite
+cb23b48a and exact same-run Mac source owner transfere1ac8f39
+(95/95 contract models, missing/wrong-source/host/phase fail closed,
+current Mac source execution unrun), missing receipt validator
+fae0dcd2 (50pass/48 subtests, actual baseline1 fail/18 pass,
+request/output and existing seal preserved). Stage1 ARM trampoline
+candidate not included: owner CPU normalized -18.465%5/5 exact
+PCO but actual small-worker RSS normalized +2.903% beyond .165%
+control, full CPU neutral; not authorized for production.
+Current c20c2c01 Stage1 Mac actual all625 compile3480.394s +
+publish31.123s =3511.517s, guard peak1,971,683,328B,
+average1.773705 workers. All four Stage2 owners uncompleted:
+x64 partial compiler tree3,207,159,808B, ARM4,278,214,656B,
+Windows2,654,302,208B before 1800s timeouts; Mac inner timeout
+600.430s partial1,929,265,152B (outer621.276s). No Stage2 wall or
+peak parity verdict; no six-worker cold300s acceptance.
+Mac separate marker integration pressure-lease schema mismatch
+is under exact investigation, pressure tests unrun; not-integration
+collection hit memory limit2,885,287,936B vs2,880,356,352B,
+no test node outcomes. No deadline, worker-count or resource
+gate relaxation. This non-skip status-only commit queues the new
+distinct source snapshot, prior workflow runs preserved.
+
 Do not claim any hosted lane green from focused tests. The latest completed
 [checkpoint comparison](investigations/checkpoint-validation-45427972345.md)
 keeps that baseline: candidate `7ec14d388` has exact test regressions
