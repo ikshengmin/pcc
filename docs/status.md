@@ -970,7 +970,7 @@ in the relevant section or issue and removes the entry.
    native test or resource policy change; remaining model independent.
 
    Claims:
-   - none
+   - Generator rejected-bulk-save current frame_move IR ownership model: Codex, Linux, 2026-11-26T19:28Z, area ci-generator-bulk-save-model
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
