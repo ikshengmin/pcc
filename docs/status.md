@@ -1873,6 +1873,24 @@ in the relevant section or issue and removes the entry.
    B1. On an idle host, why a w4 request costs about 50% more processor
        time than a w1 request. B2. Scheduler: the global ready-node pool
        lock and the shared counters become per-carrier caches and batched
+       Measured 2026-11-26 (Claude, local Mac, arm qps-ea1ea73 at ea1ea73f5,
+       load 5-9 from other sessions): table w1 62959 req/s (72% of asyncio),
+       w4 151474 (58%); per request w1 236856 instructions and 53477 cycles,
+       w4 260014 (+9.8%) and 94934 (+77.5%): w4's excess is mostly the same
+       instructions running slower, not spinning. prim w4 scaling: instance
+       0.82, sleep 0.64, clock 1.39, spawn 1.96, scope 1.98, raise 2.00,
+       request 2.58, json 3.15; loop/call/method/tuple 3.8-3.96. Ceiling
+       experiments (screens, not merged): an instance that does not count
+       its class makes `instance` w4 -76.5% but `request` unchanged (the
+       handler creates few user instances); static definitions and classes
+       made immortal moved w4 cycles -2.35%, inside the noise. By sampled
+       time the scheduler lock, its spinning and the ready-node pool are
+       about 6% of a w4 request: `pcc_mutex_lock` from join, join_result,
+       sleep, run_ready_thread and complete (trylock 0.63 us, swtch_pri
+       0.28, safepoint 0.33), `_ready_alloc` 0.37 and `_ready_node_take`'s
+       queue lock 0.33. At w1 json is 5.94 us of a 16.3 us request: about
+       20% allocation and free, container locks 5.8%, store_root 5%,
+       `_tlv_get_addr` 3.6%.
        statistics. B3. Class reference-count contention (an instance
        increments its class's count; a w4 instance costs 785 ns against
        231 ns at w1): module-level classes immortal or deferred, as CPython
