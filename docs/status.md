@@ -993,7 +993,7 @@ in the relevant section or issue and removes the entry.
    inferred.
 
    Claims:
-   - none
+   - Generator borrowed ABI terminal retirement and root initialization CFG model: Codex, Linux IR, 2026-11-26T19:34Z, area ci-generator-root-init
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
