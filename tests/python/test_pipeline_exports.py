@@ -461,3 +461,53 @@ def test_indexed_contextual_host_surface_is_lazy_and_root_scoped(tmp_path):
     assert indexed is True
     assert tuple(contextual) == ("contextual", "host.module")
     assert contextual["host.module"] == {"Host": class_info}
+
+
+def test_indexed_writer_releases_each_wire_metadata_row_before_converting_next(
+    tmp_path, monkeypatch,
+):
+    import gc
+    import weakref
+
+    exports = {"root": {}, "dep": {}}
+    derived = {"Base": ("dep", "Child")}
+    uses = (("dep", "f"),)
+    preload = type_infer.build_unique_external_class_preload_index(exports)
+    converted = []
+    original = pipeline_exports._native_export_to_wire
+    depth = 0
+
+    class TrackedDict(dict):
+        pass
+
+    class TrackedList(list):
+        pass
+
+    def observe(value):
+        nonlocal depth
+        outer = depth == 0
+        depth += 1
+        try:
+            result = original(value)
+        finally:
+            depth -= 1
+        if outer:
+            gc.collect()
+            # All previous top-level wire trees must have been written and
+            # released; the writer must not retain a batch of converted rows.
+            assert all(ref() is None for ref in converted)
+            result = TrackedDict(result) if isinstance(result, dict) else TrackedList(result)
+            converted.append(weakref.ref(result))
+        return result
+
+    monkeypatch.setattr(pipeline_exports, "_native_export_to_wire", observe)
+    path = tmp_path / "exports.indexed"
+    pipeline_exports._write_native_exports_wire(
+        path, exports, derived, uses,
+        module_dependencies={"root": ("dep",)},
+        unique_class_preload_index=preload,
+    )
+    assert len(converted) == 7 + 2 * len(exports)
+    assert pipeline_exports._read_native_exports_wire(
+        path, include_function_object_uses=True,
+    ) == (exports, derived, uses)

@@ -2333,8 +2333,28 @@ in the relevant section or issue and removes the entry.
    confirm full-stage timing and Stage2 resource parity in CI.
    [Phase investigation](investigations/stage2-worker-budget-parity-45643044565.md).
 
+   Stage2 coordinator indexed export writer: the seven metadata rows now
+   convert and write one wire value at a time instead of retaining every
+   converted tree through all module writes. Host CPython 3.13, real closed-
+   world export class surface from 668 compiler frontend/backend/IR modules,
+   825 common types and 379 sensitive roots, final index 1,193 descriptors:
+   five alternating fresh-process pairs, peak RSS median 92,636 -> 79,188 KiB
+   (-14.5%, 5/5), equal pre-write RSS about 41,780 KiB; unchanged legacy
+   writer control 157,784 KiB median. All 29,513,459-byte indexed wires had
+   SHA256 8d3dfa41075b17d52016af866f8288fc28fb70297c4c4bcbb0e4b6a2813e0705.
+   CPU median 0.994 -> 0.960 s (2/5 wins), no speed claim. 39 host wire
+   contracts pass; a new weakref lifetime witness fails the old eager batch;
+   changed module emits owned x86 Linux IR. This measures only the indexed
+   writer on a real compiler class projection, not whole Stage2 RSS or native
+   timing. Root-rebuild profile: 0.508/0.803 s inside class reconstruction
+   over 16 selected roots, encoding 0.206 s. Dependency-set, singleton-name
+   table, static-schema cache and fused delta key-scan candidates did not
+   have compelling controlled CPU gains; none admitted. Next: equal-resource
+   hosted Stage2 terminal receipts and eliminate repeated class reconstruction
+   only with a provably unchanged root-dependent binding/order witness.
+
    Claims:
-   - Stage2 native repeated preload and resource parity: Codex, Linux, 2026-11-26T15:46Z, area selfhost
+   - none
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
