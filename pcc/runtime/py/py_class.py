@@ -71,7 +71,6 @@ from pcc.runtime.py.py_abi_constants import (
     PYOBJECTHEADER_REFCOUNT_OFFSET,
     PYOBJECTHEADER_TYPE_TAG_OFFSET,
     PY_FLAG_GC_MALLOC_ALLOC,
-    PY_FLAG_GC_PINNED,
     PY_FLAG_IMMORTAL,
     PYPROPERTYOBJECT_FDEL_OFFSET,
     PYPROPERTYOBJECT_FGET_OFFSET,
@@ -707,8 +706,8 @@ def py_property_new(fget, fset, fdel):
 
 
 # Each signature component keeps its own counted address lease while the
-# copied bound signature is allocated. A lease on the method does not pin its
-# captures, signature, vectors, or magic string recursively.
+# copied bound signature is allocated. A lease on the method does not cover
+# its captures, signature, vectors, or magic string recursively.
 _BOUND_SIGNATURE_METHOD = 1
 _BOUND_SIGNATURE_CAPTURES = 2
 _BOUND_SIGNATURE_FUNCTION_CAPTURES = 3
@@ -850,38 +849,22 @@ def _call_pyfunc_bound_args(func, bound_args):
     return py_func_call_bound_forward(func, bound_args)
 
 
-def _bound_clear_root(slots, pins, offset: int) -> None:
-    value = load_ptr(slots, offset)
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        # Only the function slot can contain an unmanaged native entry. Its
-        # ownership remains in the tuple; it carries no pin lease (pin=-1).
-        prior: int = load_i64(pins, offset)
-        if prior >= 0:
-            pcc_gc_unpin(value)
-            if prior != 0:
-                pcc_gc_reassert_pin(value)
+def _bound_clear_root(slots, offset: int) -> None:
     pcc_gc_store_root(ptr_add(slots, offset), null())
 
 
-def _bound_entry_build(slots, pins) -> None:
+def _bound_entry_build(slots) -> None:
     # output0, captures8, args16, function24, self32, full48,
     # current arg56, arg1 64, arg2 72, saved error80.
     func = py_tuple_get(load_ptr(slots, 8), 0)
     store_ptr(slots, 24, func)
-    store_i64(pins, 24, -1)
     if ptr_is_null(func):
         return
     # The slot is already registered. Query can park, so reload after it.
     managed: int = _ptr_can_have_header(func)
     func = load_ptr(slots, 24)
-    if managed and is_tagged_int(func) == 0:
-        store_i64(pins, 24, load_i32(func, 12) & 64)
-        pcc_gc_pin(func)
     self_obj = py_tuple_get(load_ptr(slots, 8), 1)
     store_ptr(slots, 32, self_obj)
-    if ptr_is_null(self_obj) == 0 and is_tagged_int(self_obj) == 0:
-        store_i64(pins, 32, load_i32(self_obj, 12) & 64)
-        pcc_gc_pin(self_obj)
     if ptr_is_null(self_obj):
         return
     n_args: int = py_tuple_len(load_ptr(slots, 16))
@@ -889,9 +872,6 @@ def _bound_entry_build(slots, pins) -> None:
     if managed and load_i32(func, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_FUNC:
         full = py_tuple_new(n_args + 1)
         store_ptr(slots, 48, full)
-        if ptr_is_null(full) == 0 and is_tagged_int(full) == 0:
-            store_i64(pins, 48, load_i32(full, 12) & 64)
-            pcc_gc_pin(full)
         if ptr_is_null(full):
             return
         py_tuple_set_item(load_ptr(slots, 48), 0, load_ptr(slots, 32))
@@ -899,27 +879,18 @@ def _bound_entry_build(slots, pins) -> None:
         while i < n_args:
             arg = py_tuple_get(load_ptr(slots, 16), i)
             store_ptr(slots, 56, arg)
-            if ptr_is_null(arg) == 0 and is_tagged_int(arg) == 0:
-                store_i64(pins, 56, load_i32(arg, 12) & 64)
-                pcc_gc_pin(arg)
             if ptr_is_null(arg):
                 return
             py_tuple_set_item(load_ptr(slots, 48), i + 1, load_ptr(slots, 56))
-            _bound_clear_root(slots, pins, 56)
+            _bound_clear_root(slots, 56)
             i = i + 1
         result = _call_pyfunc_bound_args(load_ptr(slots, 24), load_ptr(slots, 48))
         store_ptr(slots, 0, result)
-        if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
-            store_i64(pins, 0, load_i32(result, 12) & 64)
-            pcc_gc_pin(result)
     elif n_args >= 0 and n_args <= 3:
         i: int = 0
         while i < n_args:
             arg = py_tuple_get(load_ptr(slots, 16), i)
             store_ptr(slots, 56 + i * 8, arg)
-            if ptr_is_null(arg) == 0 and is_tagged_int(arg) == 0:
-                store_i64(pins, 56 + i * 8, load_i32(arg, 12) & 64)
-                pcc_gc_pin(arg)
             if ptr_is_null(arg):
                 return
             i = i + 1
@@ -932,54 +903,32 @@ def _bound_entry_build(slots, pins) -> None:
         else:
             result = call_ptr4(load_ptr(slots, 24), load_ptr(slots, 32), load_ptr(slots, 56), load_ptr(slots, 64), load_ptr(slots, 72))
         store_ptr(slots, 0, result)
-        if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
-            store_i64(pins, 0, load_i32(result, 12) & 64)
-            pcc_gc_pin(result)
 
 
 @c_abi_export("pcc_instance_bound_method_entry")
 def _instance_bound_method_entry(captures: c_ptr, args: c_ptr) -> c_ptr:
     slots = stack_alloc(88)
-    pins = stack_alloc(88)
     memset(slots, 0, 88)
-    memset(pins, 0, 88)
     pcc_gc_frame_enter(global_addr("pcc_bound_callback_frame_map"), slots)
-    if ptr_is_null(captures) == 0 and is_tagged_int(captures) == 0:
-        store_i64(pins, 8, load_i32(captures, 12) & 64)
-        pcc_gc_pin(captures)
     pcc_gc_store_root(ptr_add(slots, 8), captures)
-    if ptr_is_null(args) == 0 and is_tagged_int(args) == 0:
-        store_i64(pins, 16, load_i32(args, 12) & 64)
-        pcc_gc_pin(args)
     pcc_gc_store_root(ptr_add(slots, 16), args)
-    _bound_entry_build(slots, pins)
+    _bound_entry_build(slots)
     if ptr_is_null(load_ptr(slots, 0)):
         _class_require_result(null(), cstr("class callback"), cstr("class callback returned NULL without setting an exception"))
         error = py_current_exception()
         if ptr_is_null(error) == 0:
-            store_i64(pins, 80, load_i32(error, 12) & 64)
-            pcc_gc_pin(error)
             py_incref(error)
             store_ptr(slots, 80, error)
-    prior_result_pin: int = load_i64(pins, 0)
     index: int = 9
     while index > 0:
-        if ptr_eq(load_ptr(slots, 0), load_ptr(slots, index * 8)):
-            prior_result_pin = load_i64(pins, index * 8)
-        index = index - 1
-    index = 9
-    while index > 0:
-        _bound_clear_root(slots, pins, index * 8)
+        _bound_clear_root(slots, index * 8)
         index = index - 1
     error = load_ptr(slots, 80)
     if ptr_is_null(error) == 0:
         py_raise(error)
-        _bound_clear_root(slots, pins, 80)
-    result = load_ptr(slots, 0)
-    if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
-        pcc_gc_reassert_pin(result)
+        _bound_clear_root(slots, 80)
     pcc_gc_frame_leave(slots)
-    return pcc_gc_take_pinned_slot(slots, prior_result_pin)
+    return pcc_gc_take_slot(slots)
 
 
 _BOUND_BIND_METHOD = 1
@@ -1057,14 +1006,9 @@ def py_instance_bind_method(method, self_obj, name):
     if status != 0:
         _special_error(cstr("method binding failed without an exception"))
     _special_close(slots, tokens, handles, count, suspended)
-    value = load_ptr(output, 0)
-    prior: int = 0
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        pcc_gc_pin(value)
     pcc_gc_frame_leave(output)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(output, prior)
+    return pcc_gc_take_slot(output)
 
 
 def _bound_method_function_slot_locked(bound):
@@ -1130,21 +1074,18 @@ def py_bound_method_function(bound):
 
     Diagnostic callers already hold the bound object stable. Inspect existing
     owning capture slots under the graph lock; only after managed FUNC proof
-    acquire the result reference and pin. No raw code pointer becomes a root.
+    acquire the result reference. No raw code pointer becomes a root.
     """
     result_slot = stack_alloc(C_POINTER_SIZE)
     store_ptr(result_slot, 0, null())
-    prior_pin: int = 0
     pcc_py_gc_minor_graph_lock()
     source = _bound_method_function_slot_locked(bound)
     if ptr_is_null(source) == 0:
         original = load_ptr(source, 0)
-        prior_pin = load_i32(original, PYOBJECTHEADER_FLAGS_OFFSET) & 64
         py_incref(original)
-        pcc_gc_pin(original)
         store_ptr(result_slot, 0, original)
     pcc_py_gc_minor_graph_unlock()
-    return pcc_gc_take_pinned_slot(result_slot, prior_pin)
+    return pcc_gc_take_slot(result_slot)
 
 
 # Instance attribute resolution cache, one table per thread.  Resolving
@@ -1669,7 +1610,7 @@ def _class_attr_lookup_in_mro(cls, name):
     if ptr_is_null(name) != 0:
         return null()
     cls = cls
-    # The cache owns its pinned key; an uncached key is this lookup's own.
+    # The cache owns its key; an uncached key is this lookup's own.
     owned: int = 0
     key = pcc_cached_name_key(name)
     if ptr_is_null(key) != 0:
@@ -2047,15 +1988,7 @@ def _object_member_captures(first) -> c_ptr:
 
 def _object_new_accepts_excess(cls) -> bool:
     current = _class_new_lookup(cls)
-    current_pin: int = 0
-    if _ptr_can_have_header(current):
-        current_pin = load_i32(current, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        pcc_gc_pin(current)
     inherited = _object_new_cached(global_load_ptr("py_object_root_cache"))
-    inherited_pin: int = 0
-    if _ptr_can_have_header(inherited):
-        inherited_pin = load_i32(inherited, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        pcc_gc_pin(inherited)
     same: int = ptr_eq(current, inherited)
     if same == 0 and _ptr_can_have_header(current) and ptr_is_null(inherited) == 0:
         inherited_func = pcc_gc_load_ptr(inherited, ptr_add(inherited, PYSTATICMETHODOBJECT_FUNC_OFFSET))
@@ -2063,15 +1996,7 @@ def _object_new_accepts_excess(cls) -> bool:
         if load_i32(current, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_STATICMETHOD:
             current_func = pcc_gc_load_ptr(current, ptr_add(current, PYSTATICMETHODOBJECT_FUNC_OFFSET))
         same = ptr_eq(current_func, inherited_func)
-    if _ptr_can_have_header(inherited):
-        pcc_gc_unpin(inherited)
-        if inherited_pin != 0:
-            pcc_gc_reassert_pin(inherited)
     py_decref(inherited)
-    if _ptr_can_have_header(current):
-        pcc_gc_unpin(current)
-        if current_pin != 0:
-            pcc_gc_reassert_pin(current)
     py_decref(current)
     if same == 0:
         return False
@@ -2121,50 +2046,32 @@ def _object_new_cache_fill(root, result_slot) -> None:
     if ptr_is_null(attrs) != 0:
         _class_require_result(null(), cstr("object.__new__"), cstr("object allocator namespace allocation failed"))
         return
-    prior_attrs_pin: int = load_i32(attrs, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-    pcc_gc_pin(attrs)
     key = py_str_new(cstr("__new__"), 7)
     if ptr_is_null(key) == 0:
-        pcc_gc_pin(key)
         descriptor = py_dict_get(attrs, key)
         if ptr_is_null(descriptor) != 0:
             captures = _object_new_captures()
-            pcc_gc_pin(captures)
             function = null()
             if ptr_is_null(captures) == 0 and py_err_occurred() == 0:
                 if py_builtin_type_class_tag(root) == PY_TYPE_STR:
                     function = py_func_new_bound(_str_new_entry, captures, cstr("__new__"), null())
                 else:
                     function = py_func_new_bound(_object_new_entry, captures, cstr("__new__"), null())
-                pcc_gc_pin(function)
-            pcc_gc_unpin(captures)
             py_decref(captures)
             if ptr_is_null(function) == 0:
                 if py_err_occurred() == 0:
                     descriptor = py_staticmethod_new(function)
                     if ptr_is_null(descriptor) == 0:
-                        pcc_gc_pin(descriptor)
                         if py_err_occurred() == 0:
                             py_dict_set(attrs, key, descriptor)
                             if py_err_occurred() == 0:
                                 pcc_gc_store_root(result_slot, descriptor)
-                        pcc_gc_unpin(descriptor)
                         py_decref(descriptor)
-                pcc_gc_unpin(function)
                 py_decref(function)
         else:
-            prior_pin: int = load_i32(descriptor, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-            pcc_gc_pin(descriptor)
             pcc_gc_store_root(result_slot, descriptor)
-            pcc_gc_unpin(descriptor)
-            if prior_pin != 0:
-                pcc_gc_reassert_pin(descriptor)
             py_decref(descriptor)
-        pcc_gc_unpin(key)
         py_decref(key)
-    pcc_gc_unpin(attrs)
-    if prior_attrs_pin != 0:
-        pcc_gc_reassert_pin(attrs)
     if ptr_is_null(load_ptr(result_slot, 0)) != 0:
         _class_require_result(null(), cstr("object.__new__"), cstr("object allocator callable allocation failed"))
 
@@ -2181,23 +2088,16 @@ def _object_new_cached(root) -> c_ptr:
         return _class_require_result(null(), cstr("object.__new__"), cstr("object allocator cache lock failed"))
     _object_new_cache_fill(root, slot)
     pcc_mutex_unlock(mutex)
-    result = load_ptr(slot, 0)
-    prior_pin: int = 0
-    if ptr_is_null(result) == 0:
-        prior_pin = load_i32(result, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        pcc_gc_pin(result)
     pcc_gc_scheduler_root_unregister_handle(handle)
-    return pcc_gc_take_pinned_slot(slot, prior_pin)
+    return pcc_gc_take_slot(slot)
 
 
-def _class_new_return_value(value, key, prior_pin: int) -> c_ptr:
-    # The caller pins the owned lookup result before this helper can park.
-    # Key cleanup must finish before the raw return reference is unpinned.
+def _class_new_return_value(value, key) -> c_ptr:
+    # Key cleanup must finish before the raw return reference is handed off.
     slot = stack_alloc(C_POINTER_SIZE)
     store_ptr(slot, 0, value)
-    pcc_gc_unpin(key)
     py_decref(key)
-    return pcc_gc_take_pinned_slot(slot, prior_pin)
+    return pcc_gc_take_slot(slot)
 
 
 def _class_new_lookup(cls) -> c_ptr:
@@ -2206,7 +2106,6 @@ def _class_new_lookup(cls) -> c_ptr:
     key = py_str_new(cstr("__new__"), 7)
     if ptr_is_null(key) != 0:
         return null()
-    pcc_gc_pin(key)
     n_mro: int = load_i32(cls, PYCLASSOBJECT_N_MRO_OFFSET)
     mro = load_ptr(cls, PYCLASSOBJECT_MRO_OFFSET)
     i: int = 0
@@ -2214,7 +2113,6 @@ def _class_new_lookup(cls) -> c_ptr:
         owner = pcc_gc_load_ptr(cls, ptr_add(mro, i * C_POINTER_SIZE))
         if ptr_is_null(owner) == 0:
             if ptr_eq(owner, root) != 0:
-                pcc_gc_unpin(key)
                 py_decref(key)
                 if not _object_allocator_supports_class(cls):
                     py_raise_owned(py_exc_new(11, cstr("owned __new__ lookup does not implement this builtin allocator")))
@@ -2224,11 +2122,7 @@ def _class_new_lookup(cls) -> c_ptr:
             if ptr_is_null(attrs) == 0:
                 value = py_dict_get(attrs, key)
                 if ptr_is_null(value) == 0:
-                    prior_pin: int = 0
-                    if _ptr_can_have_header(value):
-                        prior_pin = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-                    pcc_gc_pin(value)
-                    return _class_new_return_value(value, key, prior_pin)
+                    return _class_new_return_value(value, key)
             n_methods: int = load_i32(owner, PYCLASSOBJECT_N_METHODS_OFFSET)
             methods = load_ptr(owner, PYCLASSOBJECT_METHODS_OFFSET)
             j: int = 0
@@ -2237,24 +2131,18 @@ def _class_new_lookup(cls) -> c_ptr:
                 method_name = load_ptr(methods, offset + PYCLASSMETHOD_NAME_OFFSET)
                 if _strs_eq(method_name, cstr("__new__")) != 0:
                     value = load_ptr(methods, offset + PYCLASSMETHOD_FUNC_OFFSET)
-                    prior_pin: int = 0
-                    if _ptr_can_have_header(value):
-                        prior_pin = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-                    pcc_gc_pin(value)
                     py_incref(value)
-                    return _class_new_return_value(value, key, prior_pin)
+                    return _class_new_return_value(value, key)
                 j = j + 1
             if py_builtin_type_class_tag(owner) == PY_TYPE_STR:
-                pcc_gc_unpin(key)
                 py_decref(key)
                 return _object_new_cached(owner)
         i = i + 1
-    pcc_gc_unpin(key)
     py_decref(key)
     return null()
 
 
-def _metaclass_call_body(slots, pins):
+def _metaclass_call_body(slots, owned):
     # The namespace owns descriptors; the native method table can also
     # contain a raw entry point. Preserve that distinction while binding.
     meta = load_ptr(slots, 4 * C_POINTER_SIZE)
@@ -2269,7 +2157,7 @@ def _metaclass_call_body(slots, pins):
         # No override, including inherited default type.__call__. The caller
         # performs ordinary type construction instead of calling itself.
         return null()
-    _instance_lookup_hold(slots, pins, 5, descriptor, borrowed)
+    _instance_lookup_hold(slots, owned, 5, descriptor, borrowed)
     descriptor = load_ptr(slots, 5 * C_POINTER_SIZE)
     cls = load_ptr(slots, C_POINTER_SIZE)
     meta = load_ptr(slots, 4 * C_POINTER_SIZE)
@@ -2295,7 +2183,7 @@ def _metaclass_call_body(slots, pins):
     if ptr_is_null(bound) != 0:
         return _class_require_result(null(), cstr("metaclass __call__ binding"),
                                      cstr("metaclass __call__ binding returned NULL without an exception"))
-    _instance_lookup_hold(slots, pins, 6, bound, 0)
+    _instance_lookup_hold(slots, owned, 6, bound, 0)
     result = py_obj_call(load_ptr(slots, 6 * C_POINTER_SIZE),
                          load_ptr(slots, 2 * C_POINTER_SIZE),
                          load_ptr(slots, 3 * C_POINTER_SIZE))
@@ -2317,18 +2205,18 @@ def py_class_metaclass_call(cls, args, kwargs):
     if py_builtin_type_class_tag(meta) == PY_TYPE_CLASS:
         return null()
     # Reuse the eight-slot lookup lease protocol, including raw-method
-    # classification, original pin states, aliasing and exception retirement.
+    # classification, aliasing and exception retirement.
     # result, cls, args, kwargs, metaclass, descriptor, bound callable, error.
     slots = stack_alloc(8 * C_POINTER_SIZE)
-    pins = stack_alloc(8 * C_POINTER_SIZE)
+    owned = stack_alloc(8 * C_POINTER_SIZE)
     handles = stack_alloc(8 * C_POINTER_SIZE)
     memset(slots, 0, 8 * C_POINTER_SIZE)
-    memset(pins, 0, 8 * C_POINTER_SIZE)
+    memset(owned, 0, 8 * C_POINTER_SIZE)
     memset(handles, 0, 8 * C_POINTER_SIZE)
-    _instance_lookup_hold(slots, pins, 1, cls, 1)
-    _instance_lookup_hold(slots, pins, 2, args, 1)
-    _instance_lookup_hold(slots, pins, 3, kwargs, 1)
-    _instance_lookup_hold(slots, pins, 4, meta, 1)
+    _instance_lookup_hold(slots, owned, 1, cls, 1)
+    _instance_lookup_hold(slots, owned, 2, args, 1)
+    _instance_lookup_hold(slots, owned, 3, kwargs, 1)
+    _instance_lookup_hold(slots, owned, 4, meta, 1)
     count: int = 0
     while count < 8:
         handle = pcc_gc_scheduler_root_register_handle(ptr_add(slots, count * C_POINTER_SIZE))
@@ -2337,28 +2225,27 @@ def py_class_metaclass_call(cls, args, kwargs):
         store_ptr(handles, count * C_POINTER_SIZE, handle)
         count = count + 1
     if count == 8:
-        result = _metaclass_call_body(slots, pins)
-        _instance_lookup_hold(slots, pins, 0, result, 0)
+        result = _metaclass_call_body(slots, owned)
+        _instance_lookup_hold(slots, owned, 0, result, 0)
     else:
         _class_require_result(null(), cstr("metaclass __call__"),
                               cstr("metaclass temporary root registration failed"))
-    prior_result_pin: int = load_i64(pins, 0)
     saved_error_index: int = 7
     saved_error_offset: int = saved_error_index * C_POINTER_SIZE
     if py_err_occurred() != 0:
-        _instance_lookup_hold(slots, pins, saved_error_index, py_current_exception(), 1)
+        _instance_lookup_hold(slots, owned, saved_error_index, py_current_exception(), 1)
     index: int = 6
     while index > 0:
-        _instance_lookup_release(slots, pins, index)
+        _instance_lookup_release(slots, owned, index)
         index = index - 1
     if ptr_is_null(load_ptr(slots, saved_error_offset)) == 0:
         py_raise(load_ptr(slots, saved_error_offset))
-        _instance_lookup_release(slots, pins, saved_error_index)
+        _instance_lookup_release(slots, owned, saved_error_index)
     index = 0
     while index < count:
         pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, index * C_POINTER_SIZE))
         index = index + 1
-    return pcc_gc_take_pinned_slot(slots, prior_result_pin)
+    return pcc_gc_take_slot(slots)
 
 
 @c_abi_export("py_class_getattr")
@@ -2871,10 +2758,8 @@ def _instance_lookup_rooted(inst, idx: int, name, lookup_kind: int):
     """
     roots = stack_alloc(3 * C_POINTER_SIZE)
     handles = stack_alloc(3 * C_POINTER_SIZE)
-    pins = stack_alloc(2 * C_POINTER_SIZE)
     memset(roots, 0, 3 * C_POINTER_SIZE)
     memset(handles, 0, 3 * C_POINTER_SIZE)
-    memset(pins, 0, 2 * C_POINTER_SIZE)
     pcc_py_gc_minor_graph_lock()
     inst = inst
     cls = pcc_gc_load_ptr(inst, ptr_add(inst, PYINSTANCEOBJECT_CLS_OFFSET))
@@ -2885,12 +2770,6 @@ def _instance_lookup_rooted(inst, idx: int, name, lookup_kind: int):
     store_ptr(roots, 0, inst)
     store_ptr(roots, C_POINTER_SIZE, cls)
     index: int = 0
-    while index < 2:
-        value = load_ptr(roots, index * C_POINTER_SIZE)
-        store_i64(pins, index * C_POINTER_SIZE, load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64)
-        pcc_gc_pin(value)
-        index = index + 1
-    index = 0
     while index < 3:
         handle = pcc_gc_scheduler_root_register_handle(ptr_add(roots, index * C_POINTER_SIZE))
         if ptr_is_null(handle) != 0:
@@ -2904,7 +2783,7 @@ def _instance_lookup_rooted(inst, idx: int, name, lookup_kind: int):
             names = load_ptr(cls, PYCLASSOBJECT_FIELD_NAMES_OFFSET)
             name = load_ptr(names, idx * C_POINTER_SIZE)
         if lookup_kind == _INSTANCE_LOOKUP_VARS:
-            # The admitted receiver and class stay pinned while read barriers
+            # The admitted receiver and class stay rooted while read barriers
             # may park. Canonical runtime module objects own their live dict;
             # class names and matching field layouts do not prove that type.
             module_cls = pcc_gc_load_ptr(
@@ -2921,29 +2800,7 @@ def _instance_lookup_rooted(inst, idx: int, name, lookup_kind: int):
         else:
             result = py_obj_getattr(pcc_gc_load_ptr(null(), roots), name)
         store_ptr(roots, 2 * C_POINTER_SIZE, result)
-    prior_result_pin: int = 0
-    pcc_py_gc_minor_graph_lock()
-    result = pcc_gc_load_ptr(null(), ptr_add(roots, 2 * C_POINTER_SIZE))
-    if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
-        prior_result_pin = load_i32(result, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        if ptr_eq(result, load_ptr(roots, 0)):
-            prior_result_pin = load_i64(pins, 0)
-        if ptr_eq(result, load_ptr(roots, C_POINTER_SIZE)):
-            prior_result_pin = load_i64(pins, C_POINTER_SIZE)
-        pcc_gc_pin(result)
-    pcc_py_gc_minor_graph_unlock()
     cleanup_index: int = 0
-    pcc_py_gc_minor_graph_lock()
-    while cleanup_index < 2:
-        value = pcc_gc_load_ptr(null(), ptr_add(roots, cleanup_index * C_POINTER_SIZE))
-        pcc_gc_unpin(value)
-        if ptr_eq(value, result) != 0 or load_i64(pins, cleanup_index * C_POINTER_SIZE) != 0:
-            # Balance this input's pin lease, but preserve the original bit
-            # or the independent result lease. No moving window under lock.
-            pcc_gc_reassert_pin(value)
-        cleanup_index = cleanup_index + 1
-    pcc_py_gc_minor_graph_unlock()
-    cleanup_index = 0
     while cleanup_index < 3:
         handle = load_ptr(handles, cleanup_index * C_POINTER_SIZE)
         if ptr_is_null(handle) == 0:
@@ -2951,7 +2808,7 @@ def _instance_lookup_rooted(inst, idx: int, name, lookup_kind: int):
         cleanup_index = cleanup_index + 1
     if index != 3:
         return _class_require_result(null(), cstr("instance field lookup"), cstr("instance field lookup root registration failed"))
-    return pcc_gc_take_pinned_slot(ptr_add(roots, 2 * C_POINTER_SIZE), prior_result_pin)
+    return pcc_gc_take_slot(ptr_add(roots, 2 * C_POINTER_SIZE))
 
 
 @c_abi_export("py_instance_set_field")
@@ -3004,7 +2861,7 @@ def _instance_getattr_default(inst, cls, name):
     return _instance_getattr_default_body(inst, cls, name, null(), null())
 
 
-def _instance_lookup_hold(slots, pins, index: int, value, borrowed: int):
+def _instance_lookup_hold(slots, owned, index: int, value, borrowed: int):
     """Keep one slow-lookup temporary current and owned across callbacks.
 
     Each slot is assigned once. Inputs are already protected by the missing
@@ -3014,58 +2871,41 @@ def _instance_lookup_hold(slots, pins, index: int, value, borrowed: int):
         return value
     slot = ptr_add(slots, index * C_POINTER_SIZE)
     store_ptr(slot, 0, value)
-    store_i64(pins, index * C_POINTER_SIZE, -1)
+    # ``owned`` marks a managed owner (1); a native method entry stays 0.
+    store_i64(owned, index * C_POINTER_SIZE, 0)
     pcc_py_gc_minor_graph_lock()
     value = pcc_gc_load_ptr(null(), slot)
     store_ptr(slot, 0, value)
     if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
         if _ptr_can_have_header(value):
-            prior: int = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-            other: int = 0
-            while other < 8:
-                if other != index and ptr_eq(value, load_ptr(slots, other * C_POINTER_SIZE)) != 0:
-                    other_pin: int = load_i64(pins, other * C_POINTER_SIZE)
-                    if other_pin >= 0:
-                        prior = prior & other_pin
-                other = other + 1
-            store_i64(pins, index * C_POINTER_SIZE, prior)
-            pcc_gc_pin(value)
+            store_i64(owned, index * C_POINTER_SIZE, 1)
             if borrowed != 0:
                 py_incref(value)
     pcc_py_gc_minor_graph_unlock()
     return value
 
 
-def _instance_lookup_release(slots, pins, index: int) -> None:
+def _instance_lookup_release(slots, owned, index: int) -> None:
     slot = ptr_add(slots, index * C_POINTER_SIZE)
     value = load_ptr(slot, 0)
     if ptr_is_null(value) != 0:
         return
-    prior_pin: int = load_i64(pins, index * C_POINTER_SIZE)
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        if prior_pin < 0:
-            # A raw native method pointer has no refcount or pin lease.
-            store_ptr(slot, 0, null())
-            return
-        other: int = 0
-        while other < 8:
-            if other != index and ptr_eq(value, load_ptr(slots, other * C_POINTER_SIZE)) != 0:
-                if load_i64(pins, other * C_POINTER_SIZE) >= 0:
-                    prior_pin = prior_pin | 64
-            other = other + 1
-    # This strict primitive clears the root and balances exactly one lease
-    # without a park before decref takes over ownership of the raw argument.
-    py_decref(pcc_gc_take_pinned_slot(slot, prior_pin))
+    if is_tagged_int(value) == 0 and load_i64(owned, index * C_POINTER_SIZE) == 0:
+        # A raw native method pointer has no refcount.
+        store_ptr(slot, 0, null())
+        return
+    # Clear the root before decref takes over ownership of the raw argument.
+    py_decref(pcc_gc_take_slot(slot))
 
 
 def _instance_getattr_default_rooted(inst, cls, name, custom_lookup: int):
     # result, class attribute, dynamic dict, dict key, method, callback key,
     # callback arguments, saved error. Input leases belong to the caller.
     slots = stack_alloc(8 * C_POINTER_SIZE)
-    pins = stack_alloc(8 * C_POINTER_SIZE)
+    owned = stack_alloc(8 * C_POINTER_SIZE)
     handles = stack_alloc(8 * C_POINTER_SIZE)
     memset(slots, 0, 8 * C_POINTER_SIZE)
-    memset(pins, 0, 8 * C_POINTER_SIZE)
+    memset(owned, 0, 8 * C_POINTER_SIZE)
     memset(handles, 0, 8 * C_POINTER_SIZE)
     count: int = 0
     while count < 8:
@@ -3076,29 +2916,23 @@ def _instance_getattr_default_rooted(inst, cls, name, custom_lookup: int):
         count = count + 1
     if count == 8:
         if custom_lookup != 0:
-            result = _instance_getattr_custom_body(inst, cls, name, slots, pins)
+            result = _instance_getattr_custom_body(inst, cls, name, slots, owned)
         else:
-            result = _instance_getattr_default_body(inst, cls, name, slots, pins)
-        _instance_lookup_hold(slots, pins, 0, result, 0)
-    prior_result_pin: int = load_i64(pins, 0)
-    index: int = 7
-    while index > 0:
-        if ptr_eq(load_ptr(slots, 0), load_ptr(slots, index * C_POINTER_SIZE)) != 0:
-            prior_result_pin = load_i64(pins, index * C_POINTER_SIZE)
-        index = index - 1
+            result = _instance_getattr_default_body(inst, cls, name, slots, owned)
+        _instance_lookup_hold(slots, owned, 0, result, 0)
     saved_error_index: int = 7
     saved_error_offset: int = saved_error_index * C_POINTER_SIZE
     if py_err_occurred() != 0:
-        _instance_lookup_hold(slots, pins, saved_error_index, py_current_exception(), 1)
-    # Release every owner once, keeping any remaining aliased lease pinned.
-    # The result and original exception survive arbitrary finalizer callbacks.
-    index = 6
+        _instance_lookup_hold(slots, owned, saved_error_index, py_current_exception(), 1)
+    # Release every owner once. The result and original exception survive
+    # arbitrary finalizer callbacks.
+    index: int = 6
     while index > 0:
-        _instance_lookup_release(slots, pins, index)
+        _instance_lookup_release(slots, owned, index)
         index = index - 1
     if ptr_is_null(load_ptr(slots, saved_error_offset)) == 0:
         py_raise(load_ptr(slots, saved_error_offset))
-        _instance_lookup_release(slots, pins, saved_error_index)
+        _instance_lookup_release(slots, owned, saved_error_index)
     index = 0
     while index < count:
         pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, index * C_POINTER_SIZE))
@@ -3106,10 +2940,10 @@ def _instance_getattr_default_rooted(inst, cls, name, custom_lookup: int):
     if count != 8:
         return _class_require_result(null(), cstr("instance field lookup"),
                                      cstr("instance field temporary root registration failed"))
-    return pcc_gc_take_pinned_slot(slots, prior_result_pin)
+    return pcc_gc_take_slot(slots)
 
 
-def _instance_lookup_descriptor(descriptor, inst, cls, slots, pins):
+def _instance_lookup_descriptor(descriptor, inst, cls, slots, owned):
     if ptr_is_null(slots) != 0:
         return _descriptor_call_get(descriptor, inst, cls)
     if ptr_is_null(descriptor) != 0 or is_tagged_int(descriptor) != 0:
@@ -3138,8 +2972,8 @@ def _instance_lookup_descriptor(descriptor, inst, cls, slots, pins):
         method = _descriptor_method(descriptor, cstr("__get__"))
         if ptr_is_null(method) != 0:
             return null()
-    method = _instance_lookup_hold(slots, pins, 4, method, 1)
-    args = _instance_lookup_hold(slots, pins, 6, py_tuple_new(count), 0)
+    method = _instance_lookup_hold(slots, owned, 4, method, 1)
+    args = _instance_lookup_hold(slots, owned, 6, py_tuple_new(count), 0)
     if ptr_is_null(args) != 0:
         return _class_require_result(null(), cstr("py_tuple_new"),
                                      cstr("class callback argument tuple allocation failed"))
@@ -3162,10 +2996,10 @@ def _instance_lookup_descriptor(descriptor, inst, cls, slots, pins):
     )
 
 
-def _instance_lookup_call(method, inst, key, slots, pins, args_index: int):
+def _instance_lookup_call(method, inst, key, slots, owned, args_index: int):
     if _ptr_can_have_header(method):
         if load_i32(method, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_FUNC:
-            args = _instance_lookup_hold(slots, pins, args_index, py_tuple_new(2), 0)
+            args = _instance_lookup_hold(slots, owned, args_index, py_tuple_new(2), 0)
             if ptr_is_null(args) != 0:
                 return _class_require_result(null(), cstr("py_tuple_new"),
                                              cstr("class callback argument tuple allocation failed"))
@@ -3179,36 +3013,36 @@ def _instance_lookup_call(method, inst, key, slots, pins, args_index: int):
     return call_ptr2(method, inst, key)
 
 
-def _instance_getattr_custom_body(inst, cls, name, slots, pins):
+def _instance_getattr_custom_body(inst, cls, name, slots, owned):
     # Empty-field custom lookup uses the same temporary ownership frame as
     # default lookup. Function objects and native method pointers are distinct.
     method = _instance_lookup_hold(
-        slots, pins, 4, _class_lookup_in_mro(cls, cstr("__getattribute__")), 1,
+        slots, owned, 4, _class_lookup_in_mro(cls, cstr("__getattribute__")), 1,
     )
     if py_err_occurred() != 0:
         return null()
     if ptr_is_null(method) != 0:
-        return _instance_getattr_default_body(inst, cls, name, slots, pins)
-    key = _instance_lookup_hold(slots, pins, 5, py_str_new(name, strlen(name)), 0)
+        return _instance_getattr_default_body(inst, cls, name, slots, owned)
+    key = _instance_lookup_hold(slots, owned, 5, py_str_new(name, strlen(name)), 0)
     if ptr_is_null(key) != 0:
         return _class_require_result(null(), cstr("py_str_new"),
                                      cstr("instance attribute key allocation failed"))
-    got = _instance_lookup_call(method, inst, key, slots, pins, 6)
+    got = _instance_lookup_call(method, inst, key, slots, owned, 6)
     _class_require_result(got, cstr("__getattribute__"),
                           cstr("class callback returned NULL without setting an exception"))
     if ptr_is_null(got) == 0:
         return got
     if py_err_occurred() != 0:
-        current = _instance_lookup_hold(slots, pins, 1, py_current_exception(), 1)
+        current = _instance_lookup_hold(slots, owned, 1, py_current_exception(), 1)
         attr_cls = py_exc_builtin_class(6)
         if ptr_is_null(attr_cls) == 0:
             if py_exc_matches(current, attr_cls) != 0:
                 fallback = _instance_lookup_hold(
-                    slots, pins, 2, _class_lookup_in_mro(cls, cstr("__getattr__")), 1,
+                    slots, owned, 2, _class_lookup_in_mro(cls, cstr("__getattr__")), 1,
                 )
                 if ptr_is_null(fallback) == 0:
                     py_clear_exception()
-                    got = _instance_lookup_call(fallback, inst, key, slots, pins, 3)
+                    got = _instance_lookup_call(fallback, inst, key, slots, owned, 3)
                     return _class_require_result(
                         got, cstr("__getattr__"),
                         cstr("class callback returned NULL without setting an exception"),
@@ -3216,7 +3050,7 @@ def _instance_getattr_custom_body(inst, cls, name, slots, pins):
     return null()
 
 
-def _instance_getattr_default_body(inst, cls, name, slots, pins):
+def _instance_getattr_default_body(inst, cls, name, slots, owned):
     """`py_instance_getattr_default` for an instance the caller validated,
     with its class `cls` and a non-NULL `name`."""
     # `__class__` and `__dict__` return below before any outcome is recorded,
@@ -3277,7 +3111,7 @@ def _instance_getattr_default_body(inst, cls, name, slots, pins):
             py_incref(dyn)
         return dyn
     class_attr = _instance_lookup_hold(
-        slots, pins, 1, _class_attr_lookup_in_mro(cls, name), 0,
+        slots, owned, 1, _class_attr_lookup_in_mro(cls, name), 0,
     )
     if py_err_occurred() != 0:
         return null()
@@ -3288,7 +3122,7 @@ def _instance_getattr_default_body(inst, cls, name, slots, pins):
                     cls, name, _ATTR_RES_DATA_DESCRIPTOR,
                     ptr_to_int(class_attr), outcome_epoch,
                 )
-            got = _instance_lookup_descriptor(class_attr, inst, cls, slots, pins)
+            got = _instance_lookup_descriptor(class_attr, inst, cls, slots, owned)
             if ptr_is_null(got) == 0:
                 if field_fallback_rooted == 0:
                     py_decref(class_attr)
@@ -3322,8 +3156,8 @@ def _instance_getattr_default_body(inst, cls, name, slots, pins):
     dyn = _instance_dynamic_dict(inst, 0)
     if ptr_is_null(dyn) == 0:
         method_cacheable = 0
-        dyn = _instance_lookup_hold(slots, pins, 2, dyn, 1)
-        key = _instance_lookup_hold(slots, pins, 3, py_str_new(name, strlen(name)), 0)
+        dyn = _instance_lookup_hold(slots, owned, 2, dyn, 1)
+        key = _instance_lookup_hold(slots, owned, 3, py_str_new(name, strlen(name)), 0)
         if ptr_is_null(key) != 0:
             return _class_require_result(null(), cstr("py_str_new"),
                                          cstr("instance attribute key allocation failed"))
@@ -3352,7 +3186,7 @@ def _instance_getattr_default_body(inst, cls, name, slots, pins):
                 if field_fallback_rooted == 0:
                     py_decref(class_attr)
                 return bound
-        got = _instance_lookup_descriptor(class_attr, inst, cls, slots, pins)
+        got = _instance_lookup_descriptor(class_attr, inst, cls, slots, owned)
         if ptr_is_null(got) == 0:
             if field_fallback_rooted == 0:
                 py_decref(class_attr)
@@ -3367,7 +3201,7 @@ def _instance_getattr_default_body(inst, cls, name, slots, pins):
         return class_attr
     if ptr_is_null(cls) != 0:
         return null()
-    method = _instance_lookup_hold(slots, pins, 4, _class_lookup_in_mro(cls, name), 1)
+    method = _instance_lookup_hold(slots, owned, 4, _class_lookup_in_mro(cls, name), 1)
     if py_err_occurred() != 0:
         return null()
     if ptr_is_null(method) == 0:
@@ -3408,7 +3242,7 @@ def _instance_getattr_default_body(inst, cls, name, slots, pins):
         if py_err_occurred() != 0:
             return null()
     getattr_method = _instance_lookup_hold(
-        slots, pins, 4, _class_lookup_in_mro(cls, cstr("__getattr__")), 1,
+        slots, owned, 4, _class_lookup_in_mro(cls, cstr("__getattr__")), 1,
     )
     if py_err_occurred() != 0:
         return null()
@@ -3418,7 +3252,7 @@ def _instance_getattr_default_body(inst, cls, name, slots, pins):
             # dict (checked above) did not either.
             _attr_res_store(cls, name, _ATTR_RES_ABSENT, 0, outcome_epoch)
         return null()
-    key = _instance_lookup_hold(slots, pins, 5, py_str_new(name, strlen(name)), 0)
+    key = _instance_lookup_hold(slots, owned, 5, py_str_new(name, strlen(name)), 0)
     if ptr_is_null(key) != 0:
         return null()
     # The method-table slot for a compiled __getattr__ holds a PY_TYPE_FUNC
@@ -3426,7 +3260,7 @@ def _instance_getattr_default_body(inst, cls, name, slots, pins):
     # call_ptr2 alone treats the object as a code address and crashes.
     if _ptr_can_have_header(getattr_method):
         if load_i32(getattr_method, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_FUNC:
-            gargs = _instance_lookup_hold(slots, pins, 6, py_tuple_new(2), 0)
+            gargs = _instance_lookup_hold(slots, owned, 6, py_tuple_new(2), 0)
             if ptr_is_null(gargs) != 0:
                 _class_require_result(
                     null(),
@@ -4898,7 +4732,6 @@ def _dict_update_from(storage, source, name) -> int:
     iterator = py_obj_iter(source)
     if ptr_is_null(iterator) != 0:
         return -1
-    pcc_gc_pin(iterator)
     status: int = 0
     done: int = 0
     index: int = 0
@@ -4913,7 +4746,6 @@ def _dict_update_from(storage, source, name) -> int:
                     status = -1
             done = 1
         else:
-            pcc_gc_pin(item)
             if _member_tag(item) != PY_TYPE_TUPLE and _member_tag(item) != PY_TYPE_LIST:
                 text = stack_alloc(24)
                 parts = stack_alloc(3 * C_POINTER_SIZE)
@@ -4942,7 +4774,6 @@ def _dict_update_from(storage, source, name) -> int:
                     key = py_obj_getitem(item, py_int_from_i64(0))
                     value = null()
                     if ptr_is_null(key) == 0:
-                        pcc_gc_pin(key)
                         value = py_obj_getitem(item, py_int_from_i64(1))
                     if ptr_is_null(key) != 0 or ptr_is_null(value) != 0:
                         status = -1
@@ -4954,12 +4785,9 @@ def _dict_update_from(storage, source, name) -> int:
                             done = 1
                         py_decref(value)
                     if ptr_is_null(key) == 0:
-                        pcc_gc_unpin(key)
                         py_decref(key)
-            pcc_gc_unpin(item)
             py_decref(item)
             index = index + 1
-    pcc_gc_unpin(iterator)
     py_decref(iterator)
     return status
 
@@ -5224,12 +5052,8 @@ def _dict_ior_entry(captures: c_ptr, args: c_ptr) -> c_ptr:
     storage = _dict_member_storage(load_ptr(slots, 0), 0, cstr("__ior__"))
     if ptr_is_null(storage) == 0 and _member_call_check(slots, cstr("dict"), cstr("__ior__"), 0, 1) == 0:
         source = _object_call_arg(slots, 0)
-        pcc_gc_pin(source)
-        pcc_gc_pin(storage)
         if _dict_update_from(storage, source, cstr("__ior__")) == 0:
             result = _object_new_ref(load_ptr(slots, 0))
-        pcc_gc_unpin(storage)
-        pcc_gc_unpin(source)
         py_decref(source)
     _object_call_release(slots)
     return result
@@ -6058,12 +5882,9 @@ def _class_construct_equal(roots, borrowed, sequence: int, index: int) -> int:
 
 
 def _class_construct_finish(roots, borrowed, success: int):
-    prior_pin: int = 0
     if success != 0:
         pcc_gc_publish_initialized(pcc_gc_load_ptr(null(), roots))
         result = pcc_gc_load_ptr(null(), roots)
-        prior_pin = load_i32(result, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        pcc_gc_pin(result)
     store_ptr(borrowed, 0, null())
     store_ptr(borrowed, 8, null())
     index: int = 4
@@ -6076,7 +5897,7 @@ def _class_construct_finish(roots, borrowed, success: int):
     pcc_gc_frame_leave(roots)
     if success == 0:
         return null()
-    return pcc_gc_take_pinned_slot(roots, prior_pin)
+    return pcc_gc_take_slot(roots)
 
 
 @c_abi_export("py_class_new_runtime_layout")
@@ -6360,8 +6181,7 @@ def py_class_new_builtin(name, bases, n_bases: int, field_names, n_fields: int):
     cls = py_class_new(name, bases, n_bases, field_names, n_fields)
     if ptr_is_null(cls) == 0:
         py_gc_untrack(cls)
-        # Immortal, not pinned: a relocating collector may still move it, as
-        # it moved every class before program classes became collectable.
+        # Immortal; the one collector never moves it.
         atomic_rmw_i32("or", cls, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_IMMORTAL, "relaxed")
     return cls
 
@@ -6481,14 +6301,9 @@ def py_class_new_from_objects(name_obj, bases_obj, namespace):
     if status != 0:
         _special_error(cstr("class construction failed without an exception"))
     _special_close(slots, tokens, handles, count, suspended)
-    prior: int = 0
-    value = load_ptr(output, 0)
-    if ptr_is_null(value) == 0:
-        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        pcc_gc_pin(value)
     pcc_gc_frame_leave(output)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(output, prior)
+    return pcc_gc_take_slot(output)
 
 
 @c_abi_export("py_class_mark_slots_only")
@@ -6712,16 +6527,12 @@ pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
-
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_reassert_pin = extern("pcc_gc_reassert_pin", (c_ptr,), c_void)
-
-pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 
 define_global_i32("pcc_bound_callback_frame_map", 11)
 
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
+
+pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 
 
 # Slot-based call boundary. Every managed scratch slot is registered EMPTY
@@ -7668,7 +7479,7 @@ def _str_exact_copy_body(slots, tokens) -> int:
         source = _instance_builtin_payload_slot(value, cls)
     # The receiver is leased, so its payload slot remains addressable while
     # the child acquires its own counted address lease. This child lease, not
-    # a receiver root/pin, protects UTF-8 bytes across allocation and polls.
+    # a receiver root, protects UTF-8 bytes across allocation and polls.
     if _special_copy(slots, tokens, _STR_NEW_TEXT, source, 0) != 0:
         return -1
     payload = load_ptr(slots, _STR_NEW_TEXT * C_POINTER_SIZE)
@@ -7712,14 +7523,9 @@ def _str_rooted_entry(cls, args, kwargs, copy_only: int):
     if status != 0:
         _special_error(cstr("str subtype construction failed without an exception"))
     _special_close(slots, tokens, handles, count, suspended)
-    prior: int = 0
-    value = load_ptr(output, 0)
-    if ptr_is_null(value) == 0:
-        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        pcc_gc_pin(value)
     pcc_gc_frame_leave(output)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(output, prior)
+    return pcc_gc_take_slot(output)
 
 
 @c_abi_export("py_str_subclass_new")
@@ -8042,14 +7848,9 @@ def py_tuple_subclass_new(cls, args, kwargs):
     if status != 0:
         _special_error(cstr("tuple subtype construction failed without an exception"))
     _special_close(slots, tokens, handles, count, suspended)
-    prior: int = 0
-    value = load_ptr(output, 0)
-    if ptr_is_null(value) == 0:
-        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        pcc_gc_pin(value)
     pcc_gc_frame_leave(output)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(output, prior)
+    return pcc_gc_take_slot(output)
 
 
 py_builtin_type_for_tag = extern("py_builtin_type_for_tag", (c_int64,), c_ptr)
@@ -8603,14 +8404,9 @@ def _tuple_view_rooted(receiver, args, operation: int, iteration_index: int):
     if status != 0:
         _special_error(cstr("tuple descriptor failed without an exception"))
     _special_close(slots, tokens, handles, count, suspended)
-    value = load_ptr(output, 0)
-    prior: int = 0
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        pcc_gc_pin(value)
     pcc_gc_frame_leave(output)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(output, prior)
+    return pcc_gc_take_slot(output)
 
 
 def _tuple_method_entry(captures: c_ptr, args: c_ptr) -> c_ptr:
@@ -8760,13 +8556,8 @@ def py_tuple_type_new():
     if status != 0:
         _special_error(cstr("tuple type initialization failed without an exception"))
     _special_close(slots, tokens, handles, count, suspended)
-    value = load_ptr(output, 0)
-    prior: int = 0
-    if ptr_is_null(value) == 0:
-        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        pcc_gc_pin(value)
     pcc_gc_frame_leave(output)
-    return pcc_gc_take_pinned_slot(output, prior)
+    return pcc_gc_take_slot(output)
 
 
 def _tuple_class_call_body(slots, tokens) -> int:
@@ -8857,14 +8648,9 @@ def py_tuple_class_call(cls, args, kwargs):
     if status != 0:
         _special_error(cstr("tuple class call failed without an exception"))
     _special_close(slots, tokens, handles, count, suspended)
-    value = load_ptr(output, 0)
-    prior: int = 0
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        pcc_gc_pin(value)
     pcc_gc_frame_leave(output)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(output, prior)
+    return pcc_gc_take_slot(output)
 
 
 def _super_new_select(slots, tokens, record) -> int:
@@ -9130,14 +8916,9 @@ def py_tuple_getattr(receiver, name):
     if status < 0:
         _special_error(cstr("tuple attribute lookup failed without an exception"))
     _special_close(slots, tokens, handles, count, suspended)
-    value = load_ptr(output, 0)
-    prior: int = 0
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        pcc_gc_pin(value)
     pcc_gc_frame_leave(output)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(output, prior)
+    return pcc_gc_take_slot(output)
 
 
 
@@ -9330,14 +9111,9 @@ def _str_method_entry(captures: c_ptr, args: c_ptr) -> c_ptr:
     if status != 0:
         _special_error(cstr("string descriptor failed without an exception"))
     _special_close(slots, tokens, handles, count, suspended)
-    value = load_ptr(output, 0)
-    prior: int = 0
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        pcc_gc_pin(value)
     pcc_gc_frame_leave(output)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(output, prior)
+    return pcc_gc_take_slot(output)
 
 
 _STR_TYPE_CLASS = 1
@@ -9424,13 +9200,8 @@ def py_str_type_new() -> c_ptr:
     if status != 0:
         _special_error(cstr("str type initialization failed without an exception"))
     _special_close(slots, tokens, handles, count, suspended)
-    value = load_ptr(output, 0)
-    prior: int = 0
-    if ptr_is_null(value) == 0:
-        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        pcc_gc_pin(value)
     pcc_gc_frame_leave(output)
-    return pcc_gc_take_pinned_slot(output, prior)
+    return pcc_gc_take_slot(output)
 
 
 # list.sort reached as a method object (getattr, or a call with unpacked
@@ -9640,14 +9411,9 @@ def py_list_sort_call(receiver, args, kwargs) -> c_ptr:
     if status != 0:
         _special_error(cstr("list.sort failed without an exception"))
     _special_close(slots, tokens, handles, count, suspended)
-    value = load_ptr(output, 0)
-    prior: int = 0
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        pcc_gc_pin(value)
     pcc_gc_frame_leave(output)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(output, prior)
+    return pcc_gc_take_slot(output)
 
 
 @c_abi_export("py_str_getattr")
@@ -9713,14 +9479,9 @@ def py_str_getattr(receiver: c_ptr, name: c_ptr) -> c_ptr:
     if status < 0:
         _special_error(cstr("str attribute lookup failed without an exception"))
     _special_close(slots, tokens, handles, count, suspended)
-    value = load_ptr(output, 0)
-    prior: int = 0
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        pcc_gc_pin(value)
     pcc_gc_frame_leave(output)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(output, prior)
+    return pcc_gc_take_slot(output)
 
 
 # Struct sequences retain an ordinary immutable tuple payload and keep their
@@ -9834,16 +9595,9 @@ def _structseq_c_object(receiver, visible, hidden, create: int):
     if suspended == 0:
         py_clear_exception()
         py_tls_exc_swap_slot(entry_exception)
-    pcc_py_gc_minor_graph_lock()
-    value = load_ptr(output, 0)
-    prior: int = 0
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
-        pcc_gc_pin(value)
-    pcc_py_gc_minor_graph_unlock()
     pcc_gc_frame_leave(output)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(output, prior)
+    return pcc_gc_take_slot(output)
 
 
 @c_abi_export("py_structseq_new")
