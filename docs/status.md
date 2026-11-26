@@ -4029,8 +4029,30 @@ in the relevant section or issue and removes the entry.
    method-generation call profile (not methods-being-compiled trace),
    then source-matched native focused experiment on measured owner.
 
+   Actual nested ClassLowering method-generation cProfile (diagnostic only).
+   Old exact source 6cbafc4a, same actual native AST/context and host
+   one-worker indexed-assembly route; profile enabled only within 156
+   outer method-emission calls, including nested calls. COMPLETE
+   109.100990 s, wait4 CPU 105.649357 s, peak isolated tree 790,835,200 B,
+   byte-identical 57,304,557-byte assembly SHA256 7165f5ed623388294453b9a74154db3e9562185daf3d9f446b03c35811777e16,
+   exact CFG counts. Profile SHA256
+   ad9dacfde28883687330ee47d2e42864790781b615fa2799261305132325ae9c.
+   77,852,099 calls / 76,613,209 primitive calls, 46.654 s profiled
+   interval (instrumented host, concurrent independent build; not native
+   CPU or causal A/B). Existing IR builder call 155,077 calls/10.175 s
+   inclusive, publish_call 155,077/6.686 s; _resolve_method_mro
+   245,699/3.091 s, method_overridden_by_subclass 1,438/3.615 s,
+   annotation_module_bindings 2,025/2.992 s, _closed_world_is_node
+   1,543,050 total/959,850 primitive calls, _name_is_stored_in
+   124,783 total/509 primitive/1.938 s. These nested times overlap.
+   First candidate: eliminate repeated source-verified annotation
+   namespace scans within the exact frozen current AST owner; no
+   global/public cache, identity-based invalidation on AST replacement,
+   unchanged import/rebinding/scaffold proof. Require exact output and
+   native focused source-matched evidence before production.
+
    Claims:
-   - Stage2 actual ClassLowering nested generation profile: Codex, Linux, 2026-11-26T19:12Z, area selfhost
+   - Stage2 immutable codegen annotation binding reuse: Codex, Linux, 2026-11-26T19:14Z, area selfhost
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
