@@ -107,9 +107,18 @@ class _SpanOwnerTransfer:
 
 
 class _Pass:
+    # A pass built without __init__ shares no decoded records.
+    decoded_limit: int = 0
+
     def __init__(self, fragments, semantics, span):
         self.fragments = fragments
         self.semantics = semantics
+        # The opcode view shared with TypedPassContext (see its
+        # decoded_limit): records older than this pass never change.
+        shared = semantics is fragments.semantics and not semantics.verify_each
+        self.decoded_limit: int = fragments.records._length // 4 if shared else 0
+        self.opcodes: dict = fragments.decoded_opcodes
+        self.token_lists: dict = fragments.decoded_tokens
         self.ids = CompilerIntArena()
         try:
             self.output = CompilerIntArena()
@@ -154,6 +163,16 @@ class _Pass:
     def op(self, rid):
         if rid < 0:
             return ""
+        if rid < self.decoded_limit:
+            cache = self.opcodes
+            if rid in cache:
+                return cache[rid]
+            decoded = self._decode_op(rid)
+            cache[rid] = decoded
+            return decoded
+        return self._decode_op(rid)
+
+    def _decode_op(self, rid):
         code: CompilerInt4 = self.code(rid)
         if code.second < 0:
             return ""
@@ -164,6 +183,17 @@ class _Pass:
     def tokens(self, rid):
         if rid < 0:
             return []
+        if rid < self.decoded_limit:
+            # A fresh list each time: changed_register edits its copy.
+            cache = self.token_lists
+            if rid in cache:
+                return list(cache[rid])
+            decoded = self._decode_tokens(rid)
+            cache[rid] = tuple(decoded)
+            return decoded
+        return self._decode_tokens(rid)
+
+    def _decode_tokens(self, rid):
         code: CompilerInt4 = self.code(rid)
         if code.second < 0:
             return []

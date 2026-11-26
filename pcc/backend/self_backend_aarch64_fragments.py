@@ -107,6 +107,7 @@ class AArch64EmissionFragments:
         self.decoded_local_labels: dict = {}
         self.decoded_branches: dict = {}
         self.decoded_boundaries: dict = {}
+        self.decoded_tokens: dict = {}
         if capture_semantics:
             try:
                 self.semantics = AArch64InstructionSemantics()
@@ -436,6 +437,7 @@ class AArch64EmissionFragments:
         self.decoded_local_labels.clear()
         self.decoded_branches.clear()
         self.decoded_boundaries.clear()
+        self.decoded_tokens.clear()
         if self.semantics is not None:
             self.semantics.reset()
         self.symbol_names.clear()
