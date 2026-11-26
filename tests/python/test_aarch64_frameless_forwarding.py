@@ -53,6 +53,7 @@ def body(assembly):
     return re.search(r"_wrapper:\n(.*?)(?=\n\.p2align 2|\n\.section|\Z)", assembly, re.S).group(1)
 
 
+@pytest.mark.usefixtures("branch_protection_on")
 def test_unchanged_tail_forwarding_has_no_saved_return_or_frame(monkeypatch):
     monkeypatch.setenv("PCC_SELF_CALLEE_SAVED_REGISTERS", "1")
     emitted = body(emit_aarch64_darwin_asm(SOURCE, optimize=True))
@@ -63,6 +64,7 @@ def test_unchanged_tail_forwarding_has_no_saved_return_or_frame(monkeypatch):
 
 
 @pytest.mark.parametrize("arguments", ("ptr %slot, ptr %owner", "ptr @left, ptr %slot"))
+@pytest.mark.usefixtures("branch_protection_on")
 def test_permuted_or_replaced_inputs_retain_protected_tail_frame(arguments, monkeypatch):
     monkeypatch.setenv("PCC_SELF_CALLEE_SAVED_REGISTERS", "1")
     source = SOURCE.replace("@callee(ptr %owner, ptr %slot)\n", "@callee("+arguments+")\n")

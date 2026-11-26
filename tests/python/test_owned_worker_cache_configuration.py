@@ -42,7 +42,7 @@ def cache_case(monkeypatch, tmp_path):
     ("PCC_SELF_CALLEE_SAVED_REGISTERS", "0"),
     ("PCC_SELF_FUNCTION_LIVE_INTERVALS", "1"),
     ("PCC_SELF_BOOLEAN_REGISTER_LOWERING", "1"),
-    ("PCC_SELF_BRANCH_PROTECTION", "0"),
+    ("PCC_SELF_BRANCH_PROTECTION", "1"),
 ])
 def test_each_effective_setting_separates_exact_ir(cache_case, monkeypatch, name, value):
     _, plan = cache_case
@@ -59,7 +59,7 @@ def test_each_effective_setting_separates_exact_ir(cache_case, monkeypatch, name
     ("PCC_SELF_CALLEE_SAVED_REGISTERS", "yes"),
     ("PCC_SELF_FUNCTION_LIVE_INTERVALS", "0"),
     ("PCC_SELF_BOOLEAN_REGISTER_LOWERING", "off"),
-    ("PCC_SELF_BRANCH_PROTECTION", "on"),
+    ("PCC_SELF_BRANCH_PROTECTION", "off"),
 ])
 def test_equivalent_default_settings_share_key(cache_case, monkeypatch, name, value):
     _, plan = cache_case
@@ -137,11 +137,12 @@ def test_tiny_owned_object_bytes_change_with_branch_protection(cache_case, monke
     target = "aarch64-apple-darwin"
     ir = 'target triple = "' + target + '"\ndefine i64 @answer() {\nentry:\n ret i64 42\n}\n'
     Path(items[0][2]).write_text(ir)
-    protected_key = plan()[0][0]
-    protected = emit_owned_object(ir, target)
-    monkeypatch.setenv("PCC_SELF_BRANCH_PROTECTION", "0")
+    # Unsigned by default, as clang emits plain arm64 (2026-11-26).
     unprotected_key = plan()[0][0]
     unprotected = emit_owned_object(ir, target)
+    monkeypatch.setenv("PCC_SELF_BRANCH_PROTECTION", "1")
+    protected_key = plan()[0][0]
+    protected = emit_owned_object(ir, target)
     assert protected and unprotected
     assert protected != unprotected
     assert protected_key != unprotected_key
@@ -252,7 +253,7 @@ def test_real_owned_worker_subprocess_cache_round_trip(monkeypatch, tmp_path):
     # key separation must not depend on this tiny program exposing a change.
     assert compile_or_hit()[1] == "hit"
     monkeypatch.delenv("PCC_SELF_TARGET_PASSES")
-    monkeypatch.setenv("PCC_SELF_BRANCH_PROTECTION", "0")
+    monkeypatch.setenv("PCC_SELF_BRANCH_PROTECTION", "1")
     changed_protection = compile_or_hit()
     assert changed_protection[0] != cold[0] and changed_protection[1] == "miss"
     assert changed_protection[2] != cold[2]
@@ -272,6 +273,6 @@ def test_real_owned_worker_subprocess_cache_round_trip(monkeypatch, tmp_path):
         "cold": {"key": Path(cold[0]).stem, "status": cold[1], "object_sha256": cold[2]},
         "warm": {"key": Path(warm[0]).stem, "status": warm[1], "object_sha256": warm[2]},
         "all_passes": {"key": Path(changed_passes[0]).stem, "status": changed_passes[1], "object_sha256": changed_passes[2]},
-        "branch_protection_off": {"key": Path(changed_protection[0]).stem, "status": changed_protection[1], "object_sha256": changed_protection[2]},
+        "branch_protection_on": {"key": Path(changed_protection[0]).stem, "status": changed_protection[1], "object_sha256": changed_protection[2]},
     }
     print("OWNED_WORKER_CACHE_RECEIPT " + json.dumps(receipt, sort_keys=True))

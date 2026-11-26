@@ -255,6 +255,7 @@ def _body(text: str, name: str) -> str:
     return "\n".join(out)
 
 
+@pytest.mark.usefixtures("branch_protection_on")
 def test_production_text_keeps_only_live_saves():
     asm = emit_aarch64_darwin_asm(_PROGRAM, optimize=True)
     # The argument in x0 is live across the address formation for the load.

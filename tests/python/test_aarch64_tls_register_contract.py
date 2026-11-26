@@ -42,6 +42,7 @@ entry:
 '''
 
 
+@pytest.mark.usefixtures("branch_protection_on")
 def test_tls_resolver_protects_live_x0_alias_and_return_address(monkeypatch):
     monkeypatch.setenv("PCC_SELF_CALLEE_SAVED_REGISTERS", "1")
     assembly = emit_aarch64_darwin_asm(IR, optimize=True)

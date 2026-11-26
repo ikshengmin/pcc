@@ -61,6 +61,13 @@ from tests.runtime_build_cache import (  # noqa: E402
 from tests.native_provisioning import require_native_provisioning_allowed  # noqa: E402
 
 
+@pytest.fixture
+def branch_protection_on(monkeypatch):
+    """Self-backend AArch64 signing (pac-ret, BTI) is opt-in since 2026-11-26:
+    plain arm64 matches clang's default. Tests of the signed form use this."""
+    monkeypatch.setenv("PCC_SELF_BRANCH_PROTECTION", "1")
+
+
 @pytest.fixture(scope="session")
 def pcc_runtime_archive(tmp_path_factory):
     """Return the immutable pcc-Python archive required by pcc1 tests.

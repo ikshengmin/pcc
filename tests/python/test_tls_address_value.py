@@ -75,6 +75,7 @@ def frontend_ir(tmp_path, target):
 
 
 @pytest.mark.parametrize("target", TARGETS)
+@pytest.mark.usefixtures("branch_protection_on")
 def test_frontend_keeps_one_tls_address_value_and_emits_owned_object(tmp_path, target):
     text = frontend_ir(tmp_path, target)
     queries = [line for line in text.splitlines()
@@ -91,6 +92,7 @@ def test_frontend_keeps_one_tls_address_value_and_emits_owned_object(tmp_path, t
 
 
 @pytest.mark.parametrize("target", TARGETS)
+@pytest.mark.usefixtures("branch_protection_on")
 def test_global_pointer_access_emits_owned_tls_on_every_target(tmp_path, target):
     source = tmp_path / "pointer_access.py"
     source.write_text('''from pcc import i64

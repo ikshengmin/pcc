@@ -202,13 +202,6 @@ in the relevant section or issue and removes the entry.
   2026-11-26 a loaded host (load 7.1) gave a 4.2% floor, which no single
   1-3% change can pass. Claude's recommendation: yes.
 
-- P0 (b), asked by Claude 2026-11-26: keep return-address signing on every
-  non-leaf self-compiled AArch64 function (SEC-P1-CFI), or drop it for plain
-  arm64 executables as clang does by default (about 1.3% of a handler
-  request's instructions)? Claude's view: plain arm64 processes on macOS
-  likely run without pointer-authentication keys, so the hint instructions
-  may protect nothing there; not verified.
-
 - P0 (c), asked by Claude 2026-11-26: the self AArch64 allocator's model
   now limits P0 (technique log (e)): every value keeps a stack slot and a
   register is only a projection, call operands and values crossing calls
@@ -1511,6 +1504,17 @@ in the relevant section or issue and removes the entry.
    callee-saved registers, no parallel-move argument setup, no live-range
    splitting, no shrink-wrapped callee-saved saves), which needs a design
    decision before more work; see the waiting list.
+   (f) Return-address signing off by default (maintainer decision,
+   2026-11-26, answering waiting-list P0 (b): plain arm64 matches clang; the
+   goal is at least LLVM parity, then asyncio). `branch_protection_enabled`
+   now defaults to off, so self-compiled AArch64 functions carry no
+   `paciasp`/`autiasp` and frameless leaves no `bti c`;
+   `PCC_SELF_BRANCH_PROTECTION=1` restores both. Signing was 14.0% of the
+   self backend's excess over clang in the exact ranking and about 2% of a
+   request on the LLVM lab; the self-backend effect is measured with the
+   next arm. Tests of the signed form use the `branch_protection_on`
+   fixture (tests/conftest.py); `test_self_backend_default_matches_clang_plain_arm64`
+   pins the default.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2

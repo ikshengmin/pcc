@@ -14,6 +14,7 @@ pytestmark = pytest.mark.usefixtures("precise_stackmap_tables")
 _TRIPLE = 'target triple = "arm64-apple-darwin23.6.0"\n'
 
 
+@pytest.mark.usefixtures("branch_protection_on")
 def test_direct_scalar_tail_position_uses_jump():
     source = _TRIPLE + '''
 declare i64 @callee(i64, ptr)
@@ -82,6 +83,7 @@ entry:
 
 # AArch64 Darwin execution
 @pytest.mark.pcc_gate(probe=lambda: not (sys.platform != "darwin" or platform.machine() != "arm64"))
+@pytest.mark.usefixtures("branch_protection_on")
 def test_tail_call_forwards_eight_register_arguments(tmp_path):
     source = _TRIPLE + '''
 @number = global i64 8

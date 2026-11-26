@@ -64,13 +64,15 @@ _DISABLE_VALUES = {"0", "off", "false", "no", "none", "disable", "disabled"}
 def branch_protection_enabled() -> bool:
     """Return whether self-backend AArch64 branch protection is active.
 
-    ON by default for the aarch64-darwin self backend (this module is only
-    imported on that target), matching the LLVM path's default. Opt out with
-    ``PCC_SELF_BRANCH_PROTECTION=0`` (or ``off``/``false``/``no``/``none``).
+    OFF by default (maintainer decision, 2026-11-26): plain arm64 code
+    matches clang's default for that target, which signs no return address
+    and emits no BTI landing pad; on the handler the signing cost about 2%
+    of a request's instructions. Opt in with ``PCC_SELF_BRANCH_PROTECTION=1``
+    (any value other than ``0``/``off``/``false``/``no``/``none``).
     """
     raw = os.environ.get(_ENV_TOGGLE)
     if raw is None:
-        return True
+        return False
     return raw.strip().lower() not in _DISABLE_VALUES
 
 

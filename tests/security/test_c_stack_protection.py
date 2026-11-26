@@ -75,6 +75,7 @@ def test_stack_canary_emitted_for_buffer_function(monkeypatch, tmp_path):
     )
 
 
+@pytest.mark.usefixtures("branch_protection_on")
 def test_control_flow_protection_pac_or_bti_emitted(monkeypatch, tmp_path):
     source = r"""
     int cb(int x){ return x + 1; }

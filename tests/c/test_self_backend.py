@@ -6619,6 +6619,7 @@ entry:
     assert any(line == "  strb w11, [x17]" for line in lines)
 
 
+@pytest.mark.usefixtures("branch_protection_on")
 def test_self_backend_aarch64_prologue_helper_covers_arg_spills_and_hidden_sret():
     stack_arg_ir = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -7016,6 +7017,7 @@ step:
     assert lines.count("  stur x9, [x15]") == 39
 
 
+@pytest.mark.usefixtures("branch_protection_on")
 def test_self_backend_aarch64_terminator_helpers_cover_epilogue_branch_and_switch():
     branch_ir = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -7132,6 +7134,7 @@ switch_case.1:
     assert emit_unreachable_terminator() == ["  brk #0"]
 
 
+@pytest.mark.usefixtures("branch_protection_on")
 def test_self_backend_aarch64_return_helper_covers_scalar_and_hidden_sret_paths():
     scalar_ir = """
 target triple = "arm64-apple-darwin23.6.0"

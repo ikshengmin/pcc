@@ -129,6 +129,7 @@ entry:
 
 
 @pytest.mark.parametrize("kind", ("dynamic", "tls", "linux_vararg"))
+@pytest.mark.usefixtures("branch_protection_on")
 def test_compaction_keeps_distinct_platform_frame_obligations(kind):
     if kind == "dynamic":
         source = TRIPLE + '''

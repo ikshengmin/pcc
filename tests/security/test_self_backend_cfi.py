@@ -84,6 +84,7 @@ def _emit_self_asm(source: str, tmp_path) -> str:
     return asm_path.read_text(encoding="utf-8")
 
 
+@pytest.mark.usefixtures("branch_protection_on")
 def test_self_backend_prologue_signs_return_address(tmp_path):
     asm = _emit_self_asm(_INDIRECT_CALL_C, tmp_path)
     # Reverse-edge: LR is signed on entry (paciasp) and authenticated before the
@@ -104,6 +105,16 @@ def test_self_backend_prologue_signs_return_address(tmp_path):
     )
 
 
+def test_self_backend_default_matches_clang_plain_arm64(tmp_path, monkeypatch):
+    # Maintainer decision, 2026-11-26: plain arm64 code is emitted as clang
+    # emits it by default for that target, with no return-address signing and
+    # no BTI landing pad. PCC_SELF_BRANCH_PROTECTION=1 restores both.
+    monkeypatch.delenv("PCC_SELF_BRANCH_PROTECTION", raising=False)
+    asm = _emit_self_asm(_INDIRECT_CALL_C, tmp_path)
+    for mnemonic in ("paciasp", "autiasp", "bti c"):
+        assert mnemonic not in asm, mnemonic
+
+
 def test_self_backend_branch_protection_can_be_disabled(tmp_path, monkeypatch):
     """The hardening is a self-backend option (ON by default, opt-out env)."""
     monkeypatch.setenv("PCC_SELF_BRANCH_PROTECTION", "0")
@@ -114,6 +125,7 @@ def test_self_backend_branch_protection_can_be_disabled(tmp_path, monkeypatch):
     assert "ret" in asm
 
 
+@pytest.mark.usefixtures("branch_protection_on")
 def test_self_backend_hardened_binary_assembles_and_runs(tmp_path):
     """The signed/authenticated return path must not corrupt execution.
 
