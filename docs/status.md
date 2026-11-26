@@ -4458,8 +4458,29 @@ in the relevant section or issue and removes the entry.
    method owner: repeated MRO/subclass override scans; require actual
    key/walk counts and cache invalidation proof.
 
+   Actual nested MRO/subclass owner attribution (diagnostic only):
+   same old source/native AST/context, host singleton indexed assembly,
+   read-only wrappers only inside 156 method scopes. COMPLETE74.298459 s,
+   CPU74.061089 s, peak833,843,200 B; exact original 57,304,557-byte
+   assembly SHA256 7165f5ed623388294453b9a74154db3e9562185daf3d9f446b03c35811777e16.
+   Counts SHA256 232da0266a82ff74408ab50232ed4bd9d5e1d51aed0679e53a64b6755d141875.
+   245,699 MRO calls, all initial exact local registry; 244,237 negative
+   (172 distinct negative keys), 1,462 positive incl 1,245 cache hits.
+   243,470 calls originate in subclass override and all are negative.
+   151,998 exact local leaf-absent queries (107 unique keys, no eligible
+   Name base) verified every one returned None. 1,438 override calls
+   all false, 745 __getattribute__. Registry grows313->331 throughout
+   generation, ruling out broad negative caching without generation
+   proof; many class/method/base mutations exist. Existing source
+   allocates visited set/queue and two nested closures on non-hit,
+   even leaf miss. Next narrow no-cache change: lazy graph-walk storage
+   only on discovery of a base edge, remove per-query closures and
+   keep current positive cache publication/order and mutable miss
+   semantics. Require test-first, actual same-route exact output,
+   source-matched native measurement and no fallback before production.
+
    Claims:
-   - Stage2 actual repeated MRO and subclass override attribution: Codex, Linux, 2026-11-26T19:54Z, area selfhost
+   - Stage2 allocation-free local MRO misses: Codex, Linux, 2026-11-26T19:59Z, area selfhost
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
