@@ -7,9 +7,11 @@ capacity declaration, not a validated runtime locale policy or host-libc parity.
 These tests cannot certify absent locale or multibyte runtime operations.
 """
 import os
+import platform
 import re
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -113,6 +115,73 @@ def test_c_and_cpp_multibyte_capacity_declarations_agree_without_runtime_claim(t
     cpp_text = preprocess_cpp('#include <climits>' + sentinel, target_triple=target)
     for text in (c_text, cpp_text):
         assert re.findall(r'PCC_CAPACITY_OBSERVER\s+(\d+)', text) == ['16']
+
+
+@pytest.mark.parametrize('target,long_bits,signed_char', (*TARGETS,
+    ('aarch64-apple-darwin', 64, True), ('x86_64-w64-windows-gnu', 32, True)))
+def test_limits_h_has_identical_full_target_values_types_and_macro_scope(target, long_bits, signed_char, monkeypatch):
+    monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('external preprocessor invoked'))
+    limits = target_limits(long_bits, signed_char)
+    codes = {'int': 'i', 'unsigned int': 'j', 'long': 'l', 'unsigned long': 'm',
+             'long long': 'x', 'unsigned long long': 'y'}
+    tail = ''.join('int pick(' + dtype + ');' for dtype in codes)
+    tail += ''.join('const ' + dtype + ' value_' + name + '=' + name + ';'
+                    'int probe_' + name + '(){return pick(' + name + ');}'
+                    for name, dtype, _ in limits)
+    for name in ('EOF', 'NULL', 'MB_CUR_MAX'):
+        tail += '\n#ifdef ' + name + '\n#error leaked ' + name + '\n#endif\n'
+    def preprocess(headers):
+        return preprocess_cpp(headers + tail, target_triple=target, line_markers=False)
+    baseline = preprocess('#include <climits>\n')
+    for headers in ('#include <limits.h>\n#include <climits>\n',
+                    '#include <climits>\n#include <limits.h>\n',
+                    '#include <limits.h>\n#include <limits.h>\n'):
+        text = preprocess(headers)
+        assert text.split() == baseline.split()
+        assert '_fake_typedefs.h' not in text and 'typedef' not in text
+        parser = CppParser(target_triple=target)
+        ast = parser.parse(text, 'limits.h-original.cpp')
+        for name, dtype, value in limits:
+            fact = parser.scope.names['value_' + name].constant_fact
+            assert fact.status == KNOWN and fact.dtype == dtype and fact.value == value
+        calls = []
+        class Calls(c_ast.NodeVisitor):
+            def visit_FuncCall(self, node):
+                calls.append(node.name.name)
+        Calls().visit(ast)
+        assert calls == ['_Z4pick' + codes[dtype] for _, dtype, _ in limits]
+
+
+LIMITS_H_PROGRAM = (
+    '#include <limits.h>\n#include <climits>\n'
+    'int choose(unsigned int){return 17;}int choose(long){return 25;}'
+    'int choose(int){return 1;}int main(){'
+    'if(CHAR_MIN!=-128||CHAR_MAX!=127||ULONG_MAX!=18446744073709551615UL)return 2;'
+    'return choose(UINT_MAX)+choose(LONG_MAX);}'
+)
+
+
+def test_limits_h_public_object_matches_existing_climits_owner(monkeypatch):
+    monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('external compiler invoked'))
+    result = compile_cpp(LIMITS_H_PROGRAM, 'limits-header.cpp')
+    baseline = compile_cpp(LIMITS_H_PROGRAM.replace('<limits.h>', '<climits>'), 'limits-header.cpp')
+    assert result[0][1] == baseline[0][1]
+    assert emit_owned_object(result[0][1], TARGET) == emit_owned_object(baseline[0][1], TARGET)
+
+
+@pytest.mark.integration
+@pytest.mark.pcc_gate(unavailable=None if sys.platform == 'linux' and platform.machine().lower() in (
+    'amd64', 'x86_64') else 'requires owned Linux x86-64 LP64 limit execution')
+def test_limits_h_public_object_executes_without_runtime_substitution(tmp_path, monkeypatch):
+    with monkeypatch.context() as guard:
+        guard.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('external compiler/linker invoked'))
+        result = compile_cpp(LIMITS_H_PROGRAM, 'limits-header.cpp')
+        data = emit_owned_object(result[0][1], TARGET)
+        executable = link_object(data)
+    binary = tmp_path / 'owned'
+    binary.write_bytes(executable)
+    binary.chmod(0o700)
+    record_execution(binary, Execution(42, b'', b''))
 
 
 PROGRAMS = (

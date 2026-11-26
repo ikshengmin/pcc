@@ -2523,7 +2523,18 @@ in the relevant section or issue and removes the entry.
    bounded owned archive's libc/errno/strtoint source and object receipts
    match current owners. Strict complete runtime fixture added; hosted
    execution pending. Unchanged NumPy halffloat.cpp now stops at missing
-   limits.h, not an emitted object. Next NumPy C++: owned limits.h spelling,
+   limits.h, not an emitted object. C++ follow-up: owned `<limits.h>`
+   now shares `<climits>`' exact target integer limits and promoted types.
+   Full constant/overload checks on Linux x86-64/AArch64, Darwin AArch64,
+   and both Windows LLP64 targets preserve platform char signedness and
+   widths in both inclusion orders/repeated inclusion, without fake C
+   typedefs or unrelated macros. `MB_LEN_MAX` remains the existing
+   compile-time capacity, not a locale/runtime qualification. 113 focused
+   host tests passed; actual self-emitted/static-owned-linked x86 ELF
+   overload/limit program returned 42 with empty streams, matching G++
+   14.2 and byte-identical IR/object to the existing `<climits>` spelling.
+   Unchanged NumPy halffloat.cpp now stops at missing ctype.h (same SHA),
+   still no emitted object. Next NumPy C++: owned ctype.h spelling,
    then actual generated configuration; no fabricated inputs or production
    acceptance. The new 45856871699 Java and Go receipts reproduce the
    existing strict source frontiers: Java reference 15140386201 204/4 and
@@ -2566,7 +2577,7 @@ in the relevant section or issue and removes the entry.
    neither an external token nor a caller-provided crate named core waives it.
 
    Claims:
-   - Owned C++ limits.h target integer-limit spelling (NumPy halffloat next blocker): Codex, Linux, 2026-11-26T17:25Z, area frontend-cpp
+   - none
 5. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:
