@@ -1138,7 +1138,7 @@ in the relevant section or issue and removes the entry.
    test-body, resource limit or coverage acceptance change.
 
    Claims:
-   - none
+   - Exact Darwin indexed handoff source owner transfer with same-run coverage proof: Codex, Linux CI models, 2026-11-26T20:14Z, area ci-indexed-handoff-source-owner
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
