@@ -1188,8 +1188,23 @@ in the relevant section or issue and removes the entry.
    74.619s/772186112B. No production toolchain, resource/gating or
    general trap weakening. Latest integrated hosted CI UNRUN.
 
+   Indexed handoff missing receipt strict retirement failure
+   (2026-11-26 frozen 5d113086): exact hosted artifact 15145043938
+   missing_receipt node reproduced old expected OSError vs actual
+   HandoffError, 1 FAIL/18 PASS guard COMPLETE 1.555s/62300160B.
+   The required receipt is rejected as a nonregular file before
+   unlink, unlike OS failures of actual validated-input unlink.
+   Test now expects exact HandoffError and exact coordinator receipt
+   path, checks entered retirement but no successful return, missing
+   receipt stays absent and request/output preserved. All existing
+   seal/sidecar/companion/decoy preservation, no successor, no
+   observation release and other failure cases unchanged. Whole
+   retirement plus indexed handoff suite 50 PASS/48 subtests,
+   guard COMPLETE 2.064s/72445952B under unchanged 90s/1GiB.
+   No production or gate change; integrated hosted CI UNRUN.
+
    Claims:
-   - Indexed handoff missing receipt strict retirement failure: Codex, Linux, 2026-11-26T20:35Z, area indexed-handoff-retirement-test
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and

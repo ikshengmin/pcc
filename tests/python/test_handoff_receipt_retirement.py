@@ -258,12 +258,22 @@ def test_pool_failure_never_retires_companions_or_releases_successor(sealed_case
         error = subprocess.CalledProcessError
     elif failure in ("missing_report", "stale_report", "live_report"):
         error = policy.WorkerMemoryError
-    elif failure in ("missing_receipt", "sidecar_unlink", "seal_unlink"):
+    elif failure == "missing_receipt":
+        # Missing required input is a sealed handoff validation failure,
+        # unlike an OS error retiring an already validated input.
+        error = handoff.HandoffError
+    elif failure in ("sidecar_unlink", "seal_unlink"):
         error = OSError
     else:
         error = ValueError
-    with pytest.raises(error):
+    with pytest.raises(error) as raised:
         _run(state)
+    if failure == "missing_receipt":
+        assert str(raised.value) == "indexed handoff: not a regular file: " + str(sealed_case.receipt)
+        assert ("handoff-enter", 1) in state["events"]
+        assert not any(event[0] == "handoff-return" for event in state["events"])
+        assert sealed_case.request.is_file() and sealed_case.output.is_file()
+        assert not sealed_case.receipt.exists()
     assert not any(event[0] == "companion" for event in state["events"])
     assert ("start", 2) not in state["events"]
     assert len(state["observations"]) == 1
