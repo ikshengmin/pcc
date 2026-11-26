@@ -5500,8 +5500,49 @@ in the relevant section or issue and removes the entry.
    secondary source-matched controls; no stable RSS adverse accepted.
    CI raw context has next heavy slot, source-only preparation.
 
+   Narrow exact Name-only leaf fast path also DENIED; stop this
+   owner, no production. Test-first exact preimage1 red/4 pass;
+   candidate5 new pass and existing six baseline stale regex failures
+   unchanged, all six emitted function body SHA256 match baseline.
+   Candidate26 pass/6 fail vs existing baseline21/6. Only one exact
+   Name predicate (5 source lines incl comment), no new state.
+   Current exact626-module contextual changed module capture74 funcs/
+   44,311 inst, zero fallback/no libpython. Same old actual singleton
+   COMPLETE62.793s/843,071,488B concurrent diagnostic only, identical
+   original57,304,557B assembly; all509/16/124,783/75,241 exact,
+   probes2,875,180->1,791,006 (-1,084,174/-37.708% calls only),
+   Name absent probes0. Independent source-matched static native
+   exact Name/actual Assign/custom Name subclass contracts pass
+   both preloaded and stream harnesses. Exclusive 5 triples each,
+   all30 exact ordered509 results:
+   Preloaded primary inner4.412047->2.815542s (-36.185%,5/5,
+   control-.801%); CPU7.285112->5.657720s (-22.339%,5/5,
+   control-1.414%); wall-22.552%; RSS39,100->39,016KiB
+   (-84KiB/-.215%,control0,3/5), median paired normalized-.368%.
+   Raw A/B/C KiB:38760/38756/39256,39112/39016/39160,
+   38748/38396/38720,39100/39144/38604,39104/39164/39100.
+   Streaming secondary inner4.432806->2.798026s (-36.879%,5/5,
+   control+.181%); CPU7.349824->5.566639s (-24.262%,5/5,
+   control-.592%); wall-24.285%; RSS38,800->39,168KiB
+   (+368KiB/+.948%,control-80KiB/-.206%,0/5 wins),
+   median paired normalized+.968%, largest adverse B−C812KiB
+   vs max unchanged drift444KiB.
+   Raw A/B/C KiB:38700/38804/38444,38800/39168/38356,
+   38816/39336/38720,38736/39236/38860,38808/39132/38800.
+   Actual independent stable secondary RSS adverse; reject rather
+   than cherry-pick favorable preloaded result. Prior broad streaming
+   and preloaded failed gates retained above. No more retries of
+   this AST owner without a distinct measured memory cause.
+   Preloaded formal receipt SHA256
+   a6607250b65edb4d8a5df2b36c268f5272b128704e21ab0b420fcc7627f6a932;
+   streaming SHA256 cb84d192d9ade40a6e9ff9e8fe8c8df1be9680b7a8e2d563049b608b57dc9581.
+   Next actual hosted #638 x64 Stage2 owner unsafe_lowering (after
+   completed class_gen), source-only phase attribution first, or
+   measured coordinator memory-specific owner; no full bootstrap,
+   no relaxed limits or unqualified Stage2 parity. CI ELF contexts
+   receive next heavy slot.
+
    Claims:
-   - Stage2 rebound AST exact Name leaf: Codex, Linux, 2026-11-26T22:51Z, area selfhost
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
