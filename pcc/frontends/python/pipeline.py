@@ -3175,6 +3175,7 @@ _run_python_frontend_worker_commands = (
 
 _PRELOAD_DELTA_MIN_ROOTS = 16
 _PRELOAD_DELTA_ROOTS_PER_CHUNK = 8
+_OWNED_PRELOAD_DELTA_EXPORT_WRITER = _write_native_exports_wire
 
 
 def _build_unique_external_class_preload_index(native_exports, work_dir=""):
@@ -3241,7 +3242,9 @@ def _build_unique_external_class_preload_index(native_exports, work_dir=""):
 
 def _preload_deltas_in_workers(native_exports, roots, prefix, jobs, work_dir):
     from pcc.frontends.python.preload_delta_worker import WORKER_ARG, read_result
-    from pcc.frontends.python.type_infer import preload_class_export_surface
+    from pcc.frontends.python.type_infer import (
+        _preload_worker_class_export_surface, preload_class_export_surface,
+    )
     from pcc.frontends.python.worker_process_pool import ResourceObservationScope
 
     # pcc1 compiles tempfile and shutil as CPython modules, so a function
@@ -3253,9 +3256,15 @@ def _preload_deltas_in_workers(native_exports, roots, prefix, jobs, work_dir):
         try:
             exports_path = os.path.join(state, "exports.json")
             created.append(exports_path)
-            _write_native_exports_wire(
-                exports_path, preload_class_export_surface(native_exports), {},
-            )
+            # Only the owned private worker transport may omit class
+            # metadata not read by the preload resolver. Preserve the
+            # complete class records for alternate writer callbacks.
+            if _write_native_exports_wire is _OWNED_PRELOAD_DELTA_EXPORT_WRITER:
+                worker_exports = _preload_worker_class_export_surface(native_exports)
+            else:
+                worker_exports = preload_class_export_surface(native_exports)
+            _write_native_exports_wire(exports_path, worker_exports, {})
+            worker_exports = None
             width = max(1, min(jobs, len(roots)))
             commands = []
             outputs = []

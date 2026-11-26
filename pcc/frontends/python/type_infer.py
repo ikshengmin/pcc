@@ -5968,6 +5968,32 @@ def preload_class_export_surface(external_exports):
     return surface
 
 
+def _preload_worker_class_export_surface(external_exports):
+    """Project only fields consumed by the owned class-preload worker.
+
+    The resolver still sees every module, class binding and original order,
+    including aliases and classless owner modules. Public export consumers
+    and the full-record preload_class_export_surface retain their metadata.
+    """
+    fields = (
+        "kind", "class_name", "owning_module", "valueclass", "base_names",
+        "field_types", "field_names",
+    )
+    surface = {}
+    for module_name, module_exports in external_exports.items():
+        class_exports = {}
+        for export_name, info in module_exports.items():
+            if not isinstance(info, dict) or info.get("kind") != "class":
+                continue
+            projected = {}
+            for field, value in info.items():
+                if field in fields:
+                    projected[field] = value
+            class_exports[export_name] = projected
+        surface[module_name] = class_exports
+    return surface
+
+
 def build_unique_external_class_preload(external_exports):
     """Freeze the repeated unique-class scan into dense type IDs once."""
 

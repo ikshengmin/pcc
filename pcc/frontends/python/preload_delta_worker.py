@@ -8,8 +8,9 @@ workers; the coordinator assigns type ids in root order afterwards, which
 keeps the index identical to the serial build.
 
 Wire: the exports file uses the ordinary native exports wire over the whole
-module graph (the coordinator sends only complete class records); the roots
-file lists one root per line; the result is ``_native_export_to_wire`` of
+module graph (the owned coordinator sends only fields consumed by the class
+resolver; complete class records remain readable for compatibility); the
+roots file lists one root per line; the result is ``_native_export_to_wire`` of
 ``((root, drop_keys, ((key, descriptor), ...)), ...)``.
 """
 

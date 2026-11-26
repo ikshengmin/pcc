@@ -3060,8 +3060,48 @@ in the relevant section or issue and removes the entry.
    and real integration tests before production push; no current speed
    claim from these bytes alone.
 
+   Stage2 compact owned private class-preload worker transport:
+   separate seven-field projection for the actual class resolver; retains
+   all module/class binding inventory, aliases, original field and class
+   order, missing-vs-present values. Public preload_class_export_surface
+   complete-record API and alternate writer callbacks unchanged;
+   ordinary native-export wire schema remains unchanged. Only exact
+   owned coordinator writer selects compact projection. Both Stage1
+   pcc0 and Stage2 native pcc1 use this path when preload workers are
+   admitted; serial fallback retains original metadata.
+   Actual frozen 668-module/4,658-class graph transport22,772,804 ->
+   1,988,766B (-91.27%); method records alone20,049,466B. Full global
+   preload/sensitivity and ALL379 actual root deltas equal, aggregate
+   SHA256 d3483650f33226ef96ef385f8bdc3b0d16474c2b1cd410bfb3067dac060d0eb7.
+   Guard COMPLETE16.92s/113,881,088B. 79 focused host tests pass,
+   including actual owned host worker parallel index parity, full public
+   callback compatibility, exact alias/base/missing field/order behavior.
+   Source-owned Linux runtime117.05s/387,944,448B, current192-member
+   provenance valid. Actual pcc0+self+owned linker static x64 ELF
+   68 modules/227,599,669B IR, built206.17s/1,618,841,600B. Native
+   production projector on entire real graph emits host-identical
+   compact wire SHA256
+   f3d207ed090c1b074b72b4998b8d3f721daf6be8de3448c14f0755f3176c67b6.
+   Same source-owned actual worker body with phase timers, full vs
+   compact wire only, same 8-root manifest. Five alternating exclusive
+   quiet fresh process pairs: median full CPU14.708106 ->2.930488s
+   (-80.08%,5/5), wall14.767891 ->2.959692s (-79.96%,5/5), peak RSS
+   430,256 ->80,868KiB (-81.20%,5/5). Decoder wall12.608076 ->
+   1.325711s (-89.49%,5/5), global preload .247041 ->.181294s,
+   root delta loop1.367024 ->1.399022s (neutral; 2/5). Unchanged
+   full-wire zero-root control CPU13.517278s (range13.274594–13.664461),
+   decode12.704087s; confirms decode dominates full worker. All output
+   bytes exact native/host SHA256
+   1a984f6a4e875793febbe097c32528708930c1a5c8f30bd4fa1270d34fb5111c.
+   Guard COMPLETE156.88s/463,724,544B. Stage1 same worker route but
+   host A/B not yet measured. Old Linux x64 hosted preload phase
+   Stage2 263.82s vs Stage1 24.80s; export phase789.86 vs77.12s,
+   so preload is only one part, no end-to-end Stage2 parity or CI
+   qualification claimed. Next: host worker A/B and hosted checkpoint
+   receipts; then profile remaining full export/AST worker owners.
+
    Claims:
-   - Stage2 owned private compact class preload worker transport: Codex, Linux, 2026-11-26T17:19Z, area selfhost
+   - none
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its

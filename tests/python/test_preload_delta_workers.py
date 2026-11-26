@@ -503,3 +503,74 @@ def test_sparse_root_delta_matches_dense_oracle_without_discarded_index(monkeypa
         assert result == expected[root]
         assert json.dumps(result) == json.dumps(expected[root])
     assert observed and not any(observed)
+
+
+def test_owned_worker_wire_projects_only_resolver_fields(monkeypatch, host_workers, tmp_path):
+    from pcc.frontends.python.pipeline_exports import _read_native_exports_wire
+
+    exports = _exports()
+    # Retain a qualified recursive base, alias, classless module, and all
+    # metadata in the public full-record view.
+    exports["m03"]["C3"]["base_names"] = ("m02.C2",)
+    exports["alias"] = {"Alias": exports["m03"]["C3"]}
+    for table in exports.values():
+        for row in tuple(table.values()):
+            row["methods"] = (("unused_method", ("func", (), ("str",))),)
+            row["qualified_name"] = "unused-qualified"
+            row["dynamic_field_layout"] = True
+        table["make"] = {"kind": "function", "return_ty": ("str",)}
+    original_bytes = json.dumps(exports).encode()
+    full = type_infer.preload_class_export_surface(exports)
+    expected = {
+        module: {
+            name: {field: value for field, value in info.items()
+                   if field in ("kind", "class_name", "owning_module", "valueclass",
+                                "base_names", "field_types", "field_names")}
+            for name, info in table.items()
+        }
+        for module, table in full.items()
+    }
+    assert type_infer._preload_worker_class_export_surface(exports) == expected
+    assert full["m03"]["C3"] is exports["m03"]["C3"]
+    assert "methods" in full["m03"]["C3"]
+    assert expected["plain"] == {}
+    serial = type_infer.build_unique_external_class_preload_index(exports)
+    captured = []
+    original_run = pipeline._run_python_frontend_worker_commands
+
+    def observe(commands, **kwargs):
+        graph, derived = _read_native_exports_wire(
+            str(tmp_path / "preload_deltas" / "exports.json")
+        )
+        captured.append(graph)
+        assert derived == {}
+        return original_run(commands, **kwargs)
+
+    monkeypatch.setattr(pipeline, "_run_python_frontend_worker_commands", observe)
+    monkeypatch.setenv("PCC_PRELOAD_DELTA_JOBS", "3")
+    parallel = pipeline._build_unique_external_class_preload_index(exports, str(tmp_path))
+    assert captured == [expected]
+    assert list(captured[0]) == list(exports)
+    assert json.dumps(parallel) == json.dumps(serial)
+    assert json.dumps(exports).encode() == original_bytes
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_compact_preload_projection_preserves_missing_fields_and_binding_order():
+    exports = {
+        "first": {
+            "Alias": {"kind": "class", "class_name": "Record", "owning_module": "owner",
+                      "extra": "not needed"},
+            "Other": {"kind": "class", "class_name": "Other"},
+        },
+        "owner": {},
+    }
+    compact = type_infer._preload_worker_class_export_surface(exports)
+    assert tuple(compact) == ("first", "owner")
+    assert tuple(compact["first"]) == ("Alias", "Other")
+    assert tuple(compact["first"]["Alias"]) == ("kind", "class_name", "owning_module")
+    assert tuple(compact["first"]["Other"]) == ("kind", "class_name")
+    assert compact["owner"] == {}
+    assert type_infer.build_unique_external_class_preload_index(compact) == (
+        type_infer.build_unique_external_class_preload_index(exports)
+    )
