@@ -117,3 +117,123 @@ def test_host_span_snapshot_still_rejects_invalid_record_id(invalid):
             ctx.read_span(valid)
     finally:
         fragments.close()
+
+
+@pytest.mark.parametrize("checked", [False, True])
+def test_exact_single_run_copies_one_snapshot_without_source_alias(monkeypatch, checked):
+    from pcc.backend import self_backend_aarch64_typed_pass_context as pc
+    from pcc.backend.self_backend_value_arena import CompilerIntArena
+    monkeypatch.delenv("PCC_DEBUG_AARCH64_VERIFY_EACH", raising=False)
+    fragments = AArch64EmissionFragments(capture_semantics=True)
+    source_ids = CompilerIntArena()
+    try:
+        seed = fragments.new_fragment()
+        for _ in range(4):
+            fragments.append_nop(seed)
+        source = fragments.new_fragment()
+        for value in (0, 1, 3, 2):
+            source_ids.append(value)
+        fragments.spans.append_ids(source, source_ids, checked=checked)
+        original_run_values = list(fragments.spans.runs._values)
+        ctx = TypedPassContext(fragments, fragments.semantics)
+        seen = []
+        original = pc._copy_exact_host_span_slice
+        def observe(context, span, ids):
+            before = ids._values
+            result = original(context, span, ids)
+            assert result is not before and result is not fragments.spans.runs._values
+            assert ids._values is before and ids._values == []
+            assert ids._length == 0
+            seen.append(result)
+            return result
+        monkeypatch.setattr(pc, "_copy_exact_host_span_slice", observe)
+        result = ctx.read_span(source)
+        assert result is seen[0] and result == [0, 1, 3, 2]
+        assert result is not fragments.spans.runs._values
+        result.append(0)
+        assert fragments.spans.runs._values == original_run_values
+    finally:
+        source_ids.close()
+        fragments.close()
+
+
+@pytest.mark.parametrize("observer", ["copy", "extend", "close"])
+def test_custom_copy_lifetime_still_clears_observed_temporary(monkeypatch, observer):
+    from pcc.backend.self_backend_value_arena import CompilerIntArena
+    from pcc.backend import self_backend_aarch64_typed_pass_context as pc
+    monkeypatch.delenv("PCC_DEBUG_AARCH64_VERIFY_EACH", raising=False)
+    fragments = AArch64EmissionFragments(capture_semantics=True)
+    try:
+        seed = fragments.new_fragment()
+        fragments.append_nop(seed)
+        fragments.append_nop(seed)
+        source = fragments.new_fragment()
+        fragments.spans.append_id_list(source, [0, 1])
+        ctx = TypedPassContext(fragments, fragments.semantics)
+        observed = []
+        if observer == "copy":
+            original = fragments.copy_record_ids
+            def copy(span, out):
+                original(span, out)
+                observed.append(out._values)
+            monkeypatch.setattr(fragments, "copy_record_ids", copy)
+        elif observer == "extend":
+            original = CompilerIntArena.extend_from
+            def extend(out, source, start, count):
+                original(out, source, start, count)
+                observed.append(out._values)
+            monkeypatch.setattr(CompilerIntArena, "extend_from", extend)
+        else:
+            original = CompilerIntArena.close
+            def close(arena):
+                if arena._length == 2:
+                    observed.append(arena._values)
+                original(arena)
+            monkeypatch.setattr(CompilerIntArena, "close", close)
+        proof = pc._copy_exact_host_span_slice
+        def check(context, span, ids):
+            result = proof(context, span, ids)
+            assert result is None
+            return result
+        monkeypatch.setattr(pc, "_copy_exact_host_span_slice", check)
+        assert ctx.read_span(source) == [0, 1]
+        assert observed and all(values == [] for values in observed)
+    finally:
+        fragments.close()
+
+
+def test_custom_id_comparison_and_concat_keep_snapshot_oracle(monkeypatch):
+    from pcc.backend import self_backend_aarch64_typed_pass_context as pc
+    monkeypatch.delenv("PCC_DEBUG_AARCH64_VERIFY_EACH", raising=False)
+    fragments = AArch64EmissionFragments(capture_semantics=True)
+    try:
+        seed = fragments.new_fragment()
+        fragments.append_nop(seed)
+        fragments.append_nop(seed)
+        source = fragments.new_fragment()
+        fragments.spans.append_id_list(source, [0, 1])
+        calls = []
+        class ObservedID(int):
+            def __lt__(self, other):
+                calls.append("lt")
+                return super().__lt__(other)
+            def __ge__(self, other):
+                calls.append("ge")
+                return super().__ge__(other)
+        fragments.spans.runs._values[-2] = ObservedID(0)
+        ctx = TypedPassContext(fragments, fragments.semantics)
+        proof = pc._copy_exact_host_span_slice
+        def check(context, span, ids):
+            result = proof(context, span, ids)
+            assert result is None
+            assert calls == []
+            return result
+        monkeypatch.setattr(pc, "_copy_exact_host_span_slice", check)
+        assert ctx.read_span(source) == [0, 1]
+        assert calls == ["lt", "ge"]
+        calls.clear()
+        fragments.spans.append(source, 1)  # concat, not a single run
+        assert ctx.read_span(source) == [0, 1, 1]
+        assert calls == ["lt", "ge"]
+    finally:
+        fragments.close()

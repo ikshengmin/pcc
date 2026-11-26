@@ -3593,10 +3593,63 @@ in the relevant section or issue and removes the entry.
        noninferiority. Strong actual owner/phase gain alone cannot
        override full RSS gate. No allocator tuning or another
        threshold retry, no production source change/whole Stage1 claim.
+       ARM typed exact single-run host snapshot (Codex/Linux,
+       base7fcbb394). Actual full c_codegen diagnostic 7 read_span
+       calls, first checked -3/six ordinary -2 runs,10,553,762 IDs,
+       CPU.933s diagnostic; each close observes distinct equal-length
+       temporary and returned list,11.97–12.17MB duplicate per call,
+       total84.43MB avoidable second-copy allocation. 176 samples
+       161 bounds validation,7 source extend,7 close; high-water
+       already set earlier, no big CPU claim. Ownership transfer
+       alone rejected: actual projected first-run transient peak
+       unchanged24,338,752B because source slice+extend already
+       duplicates list, directional CPU slower.
+       Exact canonical single-run source shape/method/owner and
+       exact scalar bounds proof now creates one independent list
+       snapshot, no temporary source slice+arena duplicate and
+       second copy. Public/custom/debug/concat/malformed paths use
+       original copy/validation/close ordering; returned list not
+       aliased to source. Actual1,521,122 captured IDs projected
+       owner sha256
+       6540f8d9cc232e0eb1096ff231835cc3d36e9454b52589b57ec5c9dbccb6d536,
+       direct slice diagnostic traced peak24,338,752->12,169,320B
+       (-50.0%, -12.17MB), retained list12,169,088B unchanged;
+       one-off CPU.090->.121s slower, not a speed claim.
+       Initial in-module helper native hot edge regression rejected;
+       final isolated CPython-only helper captures canonical method
+       identities at import, preserves custom callback fallback.
+       Focused108 tests pass (ordinary/checked exact independence,
+       observed copy/extend/close clears temporary, malformed/custom
+       comparison/concat fallback). Final strict contextual closure
+       626 modules (+1 helper), context49 funcs/9000 instr, helper
+       7/7462, both fallback0/no libpython. Six unchanged native hot
+       methods exact instruction counts/full call multisets incl
+       record1371/821 calls and operands743/399. read_span raw i1
+       gate block18 true20->helper40, false21 helper unreachable
+       by actual CFG; added dynamic calls only host branch, native
+       sys=pcc false, canonical native loaded-method4/call_slots2.
+       Clean full large c_codegen same-input screen exact PCO
+       22,204,134B sha256
+       88554c1a84e58c21ae6def1a6a56049726bdfc5ed8c6c726feb94e427264a7b0,
+       CPU128.504->127.827s, RSS1,133,020->1,132,252KiB neutral,
+       not formal high-water gain. Five actual small full
+       worker_resource_plan alternating triples, exact same-base
+       controls, guard COMPLETE246.038s (transport reattached,
+       all15 arms present and lock released). Backend+obj CPU
+       15.46386->15.40708s raw-.367%, paired norm+.526% within
+       control1.086%; full decode+backend CPU norm+1.091% within
+       control1.321%, wall neutral. RSS168180->168024KiB,
+       paired norm-.095%4/5 vs control.005%, slight lower.
+       Unrelated stackmap phase norm+3.783%1/5 vs control.282%;
+       finalize norm-1.449%4/5 within control1.922%, total CPU
+       neutral. All15 exact PCO2,777,336B sha256
+       cbff0094db13b8b62e2abb637264d6c9902579c1c1d09e7f36f46cc5f2307717.
+       Admit scoped structural temporary memory allocation reduction
+       only, no large high-water/whole Stage1 speed or target claim.
        Next (latest actual Stage1 codegen priority): (1) ARM typed
-       prepare memory: actual private read_span temporary list
-       duplication/ownership transfer, measure calls/cost/RSS and
-       preserve public snapshot/callback/native path; then common indexed fact/emission
+       prepare memory: quantify retained prior run history and
+       private CFG owner retirement with public snapshot/callback
+       contracts, then common indexed fact/emission
        owner; (2) J2 (e) one error
        landing per function after registering temporaries once, measured
        against the actual CI block inventory; (3) the allocation model
@@ -3968,7 +4021,6 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Generic dictionary raw table coallocation: Codex, Linux, 2026-11-26T22:10Z, area runtime-gc-dict-storage
-   - Stage1 ARM typed read_span private list ownership transfer: Codex, Linux, 2026-11-26T21:47Z, area backend-aarch64-typed-readspan
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets

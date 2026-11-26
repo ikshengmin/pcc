@@ -5,6 +5,10 @@ This adapter does not decode machine words or parse/render instruction strings.
 """
 from __future__ import annotations
 
+import sys
+
+_HOST_READSPAN_SCALAR = sys.implementation.name == "cpython"
+
 from .arm64_encode import EncodeError
 from .self_backend_aarch64_fragments import (
     EMISSION_RECORD_LABEL, EMISSION_RECORD_MEMORY_PAIR_BARRIER,
@@ -146,6 +150,10 @@ class TypedPassContext:
         # One bulk span copy; every record is still validated by record().
         ids = CompilerIntArena()
         try:
+            if _HOST_READSPAN_SCALAR:
+                direct = _copy_exact_host_span_slice(self, span, ids)
+                if direct is not None:
+                    return direct
             self.fragments.copy_record_ids(span, ids)
             limit = self.fragments.records._length // 4
             # The host oracle has already bulk-copied the span into a fresh
@@ -180,3 +188,9 @@ class TypedPassContext:
         span = self.fragments.new_fragment()
         self.fragments.spans.append_id_list(span, records)
         return span
+
+
+# Capture canonical host method identities before public callers can install
+# observers. Native pcc skips this import and the guarded route above.
+if _HOST_READSPAN_SCALAR:
+    from .self_backend_aarch64_host_readspan import _copy_exact_host_span_slice
