@@ -20,6 +20,13 @@ from tests.python.test_slot_call_lexical_roots import _emit
 ROOT = Path(__file__).resolve().parents[2]
 ROOT_HELPER = 'py_cleanup_one_root_preserving_exception'
 TWO_ROOT_HELPER = 'py_cleanup_two_roots_preserving_exception'
+ROOT_HELPERS = {
+    ROOT_HELPER: ('slot',),
+    TWO_ROOT_HELPER: ('first', 'second'),
+    'py_cleanup_three_roots_preserving_exception': ('first', 'second', 'third'),
+    'py_cleanup_four_roots_preserving_exception': ('first', 'second', 'third', 'fourth'),
+    'py_cleanup_five_roots_preserving_exception': ('first', 'second', 'third', 'fourth', 'fifth'),
+}
 FRAME_SUFFIXES = ('', '_local', '_mapped', '_local_mapped')
 
 
@@ -123,10 +130,9 @@ def test_actual_runtime_helper_abi_and_synchronous_body(tmp_path, monkeypatch, t
                             str(output), 'x86_64-unknown-linux-gnu')
     text = output.read_text()
     verify_stackmaps(text)
-    for name, signature, disposal in (
-        (ROOT_HELPER, r'ptr %slot', ['pcc_gc_store_root']),
-        (TWO_ROOT_HELPER, r'ptr %first, ptr %second', ['pcc_gc_store_root'] * 2),
-    ):
+    for name, owners in ROOT_HELPERS.items():
+        signature = ', '.join('ptr %' + owner for owner in owners)
+        disposal = ['pcc_gc_store_root'] * len(owners)
         match = re.search(r'^define[^\n]*void @' + name + r'\(' + signature + r'\)[^\n]*\{\n(.*?)^}', text, re.M | re.S)
         assert match
         body = match.group(1)
@@ -134,11 +140,10 @@ def test_actual_runtime_helper_abi_and_synchronous_body(tmp_path, monkeypatch, t
         assert calls == ['pcc_gc_frame_enter_lifo', 'py_tls_exc_swap_slot'] + disposal + [
             'py_clear_exception', 'py_tls_exc_swap_slot', 'pcc_gc_frame_leave_lifo',
         ]
-        if name == TWO_ROOT_HELPER:
-            assert re.findall(r'@pcc_gc_store_root\(ptr (%\w+), ptr null\)', body) == [
-                '%second', '%first',
-            ]
-            assert not re.search(r'load ptr, ptr %(?:first|second)\b', body)
+        assert re.findall(r'@pcc_gc_store_root\(ptr (%\w+), ptr null\)', body) == [
+            '%' + owner for owner in reversed(owners)
+        ]
+        assert not re.search(r'load ptr, ptr %(?:' + '|'.join(owners) + r')\b', body)
         assert body.index('store ptr null') < body.index('@pcc_gc_frame_enter_lifo')
         assert 'alloca [8 x i8]' in body
         assert 'br ' not in body and 'Py_' not in body
@@ -185,18 +190,32 @@ def test_two_root_helper_preserves_exceptional_return_convention(annotation, val
     assert blocks['err.finish'].strip().endswith(error_return)
 
 
+@pytest.mark.parametrize('count', [3, 4, 5])
+def test_exact_multi_root_helper_keeps_all_caller_retirements_visible(count):
+    model, first, second, target = setup_roots()
+    roots = (first, second) + tuple(IdentityOnly() for _ in range(count - 2))
+    model._slot_call_root_records.extend((slot, None, True) for slot in roots[2:])
+    # The recorder models declarations by name. Real declaration and caller
+    # signature/stack-map verification are below, not bypassed by this model.
+    name = list(ROOT_HELPERS)[count - 1]
+    model.runtime[name] = name
+    model._slot_call_cleanup_block(roots, target)
+    assert model.events == [(name, roots)] + [
+        ('leave', slot) for slot in reversed(roots)
+    ] + [('branch', target)]
+
+
 @pytest.mark.parametrize('shape', [
-    'three-roots',
+    'six-roots',
     'flagged', 'non-lifo', 'flagged-first', 'flagged-second',
     'non-lifo-first', 'non-lifo-second',
 ])
 def test_ineligible_shapes_keep_inline_tls_protocol(shape):
     model, first, second, target = setup_roots()
     roots = (first,)
-    if shape == 'three-roots':
-        third = IdentityOnly()
-        model._slot_call_root_records.append((third, None, True))
-        roots = (first, second, third)
+    if shape == 'six-roots':
+        roots = (first, second) + tuple(IdentityOnly() for _ in range(4))
+        model._slot_call_root_records.extend((slot, None, True) for slot in roots[2:])
     if shape == 'flagged': model._slot_call_root_records[0] = (first, IdentityOnly(), True)
     if shape == 'non-lifo': model._slot_call_root_records[0] = (first, None, False)
     if shape in ('flagged-first', 'flagged-second', 'non-lifo-first', 'non-lifo-second'):
@@ -209,7 +228,14 @@ def test_ineligible_shapes_keep_inline_tls_protocol(shape):
     model._slot_call_cleanup_block(roots, target)
     calls = [event[0] for event in model.events]
     assert calls.count('swap') == 2
-    assert not any(helper in calls for helper in (ROOT_HELPER, TWO_ROOT_HELPER))
+    assert not any(helper in calls for helper in ROOT_HELPERS)
+    if shape == 'six-roots':
+        releases = [event[1][0] for event in model.events if event[0] == 'pcc_gc_store_root']
+        assert releases == list(reversed(roots))
+        saved = [event[1] for event in model.events if event[0] == 'enter']
+        assert len(saved) == 1
+        leaves = [event[1] for event in model.events if event[0] == 'leave']
+        assert leaves == saved + list(reversed(roots))
 
 
 @pytest.mark.parametrize('source', [
@@ -230,10 +256,8 @@ def test_real_caller_cleanup_root_provenance_and_stackmaps(source):
         for block in blocks:
             checked += 1
             leaves = _lifo_calls(block, 'leave')
-            for helper, signature in (
-                (ROOT_HELPER, r'ptr (%[\w.]+)'),
-                (TWO_ROOT_HELPER, r'ptr (%[\w.]+), ptr (%[\w.]+)'),
-            ):
+            for helper, owner_names in ROOT_HELPERS.items():
+                signature = ', '.join(r'ptr (%[\w.]+)' for _ in owner_names)
                 if '@' + helper + '(' not in block:
                     continue
                 owners = re.search(r'@' + helper + r'\(' + signature + r'\)', block)
@@ -247,3 +271,33 @@ def test_real_caller_cleanup_root_provenance_and_stackmaps(source):
                 assert '@py_tls_exc_swap_slot(' not in block
                 assert '@pcc_gc_store_root(' not in block
     assert checked
+
+
+@pytest.mark.parametrize('count', [3, 4, 5])
+def test_actual_multi_root_call_helper_signature_and_retirement(count):
+    args = ['arg' + str(i) for i in range(count - 1)]
+    source = 'def probe(f, ' + ', '.join(args) + '):\n    return f(' + ', '.join(args) + ')\n'
+    _, text = _emit(source)
+    verify_stackmaps(text)
+    helper = list(ROOT_HELPERS)[count - 1]
+    body = re.search(r'^define[^\n]*@user_lexical_probe\([^\n]*\).*?^}', text, re.M | re.S)[0]
+    resolve = _slot_resolver(body)
+    enters = {resolve(slot): symbol for symbol, (_map, slot) in _lifo_calls(body, 'enter')}
+    signature = ', '.join(r'ptr (%[\w.]+)' for _ in range(count))
+    checks = 0
+    for block in re.findall(r'^call.slot.cleanup[^:]*:\n(.*?)(?=^[\w.]+:|^})', body, re.M | re.S):
+        if '@' + helper + '(' not in block:
+            continue
+        checks += 1
+        owners = re.search(r'@' + helper + r'\(' + signature + r'\)', block)
+        assert owners
+        leaves = _lifo_calls(block, 'leave')
+        assert [resolve(args[0]) for _symbol, args in leaves] == [
+            resolve(slot) for slot in reversed(owners.groups())
+        ]
+        for symbol, (slot,) in leaves:
+            assert enters[resolve(slot)] == symbol.replace('_leave_', '_enter_', 1)
+            assert block.index('@' + helper) < block.index('@' + symbol)
+        assert '@py_tls_exc_swap_slot(' not in block
+        assert '@pcc_gc_store_root(' not in block
+    assert checks > 0
