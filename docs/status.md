@@ -298,6 +298,27 @@ and15148417046 (Linux ARM64), exact manifests/hashes verified:
 4,911,534,080B (vs1644.478621s/4,676,341,760B; RSS +5.03%).
 Both precede later AST v2/frame/integer route etc; six-worker
 300s target unmet and no comparable completed Stage2.
+As of 2026-11-26T19:58Z the next distinct cumulative immutable snapshot
+at production head 761b7d0b includes private nonsuspending list iterator
+7a099ce3 (actual same-handler w1 throughput +4.56%, CPU paired normalized
+-4.0%, RSS noninferior; w4 throughput neutral; no stable w4 gain claim),
+native global result index b81247f7 (actual repeated owner -99.845%, exact
+ELF, whole worker neutral), host verifier successful definition plane
+761b7d0b (actual c_codegen owner CPU normalized -13.065%, 5/5, full worker
+verification phase -13.471%, total neutral, exact ELF and RSS),
+native annotation index 1eef7a57 (actual 2025 scans eliminated,
+isolated native CPU -33.592%, exact assembly/CFG, RSS neutral), and
+actual lambda iterator root-frame retirement fix 10f25029 (18 model,
+68 adjacent, three source-matched native cases passed). Existing
+resource and correctness gates unchanged. c20c2c01 latest actual
+Windows Stage1 1804.973591s/3,753,308,160B; x64 Stage2 timeout
+1800.146s, actual partial compiler-tree peak 3,207,159,808B (+12.45%
+above Stage1), 8405 samples, last 1783.857s, class_gen backend
+unfinished. ARM64 Stage2 owner timeout 1800.203s; outer pytest tree
+4,771,790,848B is not a comparable compiler-tree value. Stage1 six-worker
+300s and completed Stage2 wall/RSS <= Stage1 remain unmet. This non-skip
+status-only commit queues this distinct snapshot without cancelling
+or rerunning prior workflow runs.
 Do not claim any hosted lane green from focused tests. The latest completed
 [checkpoint comparison](investigations/checkpoint-validation-45427972345.md)
 keeps that baseline: candidate `7ec14d388` has exact test regressions
