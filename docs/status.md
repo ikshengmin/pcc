@@ -2278,8 +2278,44 @@ in the relevant section or issue and removes the entry.
        the codegen workers or fewer records (safepoints at calls that cannot
        reach a collection need a GC-protocol proof first); the workers need
        the allocation model change below and J2's single error landing.
-       Next: (1) per-object link preparation in the codegen workers; (2) passes that
-       did not rewrite publish nothing and build no output; (3) the
+       The typed CFG pass input is an immutable producer-owned record stream
+       with one aligned opcode header per event. Stage1 host replay
+       (Codex, Linux, 2026-11-26, ab8696fc): retain exact event indices and
+       public callback/dense/native paths; in compact CPython owner lists
+       find only branch and zero-header event candidates for trampoline,
+       indexed cold fold and empty local-label cleanup. Copy retained runs
+       in bulk, never return the mutable input root. The private host span
+       reader copies validated IDs by list, still checks each ID's range.
+       The debug verifier, another owner and external metadata iterables
+       retain the original dense checks; native storage keeps the original
+       route. Real 625-source compiler closure diagnostic with explicit
+       arm64-apple-darwin target froze worker_resource_plan (5.70 MB),
+       pipeline_frontend_parallel (8.29 MB) and pipeline_exports (9.99 MB),
+       each zero py_cpy_* fallback calls. Five quiet alternating CPU-pinned
+       full owned Mach-O emission pairs on actual worker_resource_plan
+       (same parsed module IR, not a whole Stage1/direct capture replay):
+       backend+object CPU 15.365 -> 14.688 s (-4.41%, 5/5), wall 15.568
+       -> 14.891 s (-4.35%, 5/5), unchanged parse control 2.434 -> 2.413 s
+       (1.52% median paired absolute drift); normalized owner CPU median
+       -4.61%, 5/5. Full replay parse+backend+object CPU 17.778 -> 17.157 s
+       (-3.50%), wall 17.982 -> 17.399 s (-3.24%), peak RSS 193840
+       -> 187684 KiB (-3.18%, 5/5). Exact same 2,319,208-byte object
+       in all ten arms (sha256 d320f3fde7b785009423ca67ab006adcfd8edd6db41f704e209cc6297fb9a1ec).
+       The targeted phase walls: trampoline 0.826 -> 0.375 s (-54.6%),
+       indexed fold 0.284 -> 0.131 s (-53.9%), empty labels
+       0.114 -> 0.071 s (-38.2%), prepare 4.847 -> 4.321 s (-10.85%),
+       each 5/5. No whole Stage1 time claim; actual native Mac execution
+       not run.
+       Exact final candidate contextual fallback count zero for both changed
+       backend modules (625-source Darwin target closure); 207 focused host
+       tests pass and one native Mac execution test is deselected on Linux
+       (the same execution-format failure on base). Second real module
+       pipeline_frontend_parallel has exact 9,175,128-byte Mach-O object
+       parity (sha256 5f41f79443f533132770104d2390e3370177b5e8e697d76dafd4da71574ec054);
+       this one loaded pair is correctness only.
+       Next: (1) per-object link preparation in the codegen workers;
+       (2) remeasure remaining dense loop NOP/pair scans and no-rewrite
+       pass publication (preserving public snapshot contracts); (3) the
        allocation model toward LLVM's (the maintainer's answer to P0 (c):
        at least LLVM parity): values without stack slots unless spilled,
        live-range splitting, compare/branch and immediate fusion at
@@ -2373,7 +2409,6 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Native handler allocation/free type and size attribution: Codex, Linux, 2026-11-26T17:12Z, area runtime-gc
-   - J2s typed CFG pass redundant span/candidate scanning on actual Stage1 compiler modules (typed_cfg/pass_context only, disjoint from AArch64 selection/regalloc and runtime GC): Codex, Linux, 2026-11-26T17:04Z, area backend-stage1
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from .self_backend_aarch64_fragments import EMISSION_RECORD_LABEL
 from .self_backend_aarch64_semantics import (
-    TOKEN_REGISTER, TOKEN_SYMBOL,
+    TOKEN_REGISTER, TOKEN_SYMBOL, OPCODE_NAMES,
     REGISTER_WSP, REGISTER_XZR, REGISTER_WZR,
 )
 
@@ -91,6 +91,52 @@ def _retarget(ctx, record_id, target, opcode=None):
     return ctx.emit(ctx.opcode(record_id) if opcode is None else opcode, tokens)
 
 
+# Every candidate is selected from producer provenance, not decoded
+# machine words. Unknown/future direct branches remain in the set via the
+# same spelling predicate as _decode_branch.
+_CFG_BRANCH_OPCODE_IDS = frozenset(
+    index for index, name in enumerate(OPCODE_NAMES)
+    if name == "b" or name.startswith("b.") or name in ("cbz", "cbnz")
+)
+
+
+def _host_cfg_candidates(ctx, records):
+    """Ordered event/branch positions for the immutable compact host owner."""
+    headers = ctx.semantics.headers
+    if ctx.decoded_limit == 0 or headers._address != 0:
+        return None
+    from .self_backend_aarch64_fragments import AArch64EmissionFragments
+    from .self_backend_aarch64_semantics import AArch64InstructionSemantics
+    if (type(headers._values) is not list
+            or type(ctx.fragments) is not AArch64EmissionFragments
+            or type(ctx.semantics) is not AArch64InstructionSemantics):
+        return None
+    # Non-instruction event headers have opcode zero. This is a superset
+    # of local labels; leave the existing label-family/name tests intact.
+    events = []
+    branches = []
+    raw = headers._values
+    for index, record_id in enumerate(records):
+        opcode = raw[record_id * 4]
+        if opcode == 0:
+            events.append(index)
+        elif opcode in _CFG_BRANCH_OPCODE_IDS:
+            branches.append(index)
+    return events, branches
+
+
+def _host_static_metadata(metadata_labels) -> bool:
+    # Public proof iterables can execute caller code during iteration or
+    # hashing. Only the producer's integer metadata inventory (or the
+    # empty default tuple) can skip those dense record visits.
+    if type(metadata_labels) is not set and type(metadata_labels) is not tuple:
+        return False
+    for label in metadata_labels:
+        if type(label) is not int:
+            return False
+    return True
+
+
 def thread_trampoline_branches_records(ctx, records, metadata_labels=()):
     trampolines = {}
     label_index = {}
@@ -162,6 +208,80 @@ def thread_trampoline_branches_records(ctx, records, metadata_labels=()):
     return out
 
 
+def _thread_trampoline_branches_host(ctx, records, metadata_labels, candidates):
+    trampolines = {}
+    label_index = {}
+    event_positions, branch_positions = candidates
+    for index in event_positions:
+        record_id = records[index]
+        label = _local(ctx, record_id)
+        if label is None:
+            continue
+        label_index[label] = index
+        if ctx.symbol(label).startswith("L_pcc_smap"):
+            continue
+        body = []
+        following = index + 1
+        while following < len(records) and not _boundary(ctx, records[following]):
+            if not ctx.is_empty(records[following]):
+                body.append(records[following])
+                # Only a single nonempty instruction can be a trampoline.
+                if len(body) > 1:
+                    break
+            following += 1
+        if len(body) == 1:
+            branch = _branch(ctx, body[0])
+            if branch is not None and branch[0] == "b" and branch[1] != label:
+                trampolines[label] = branch[1]
+    if not trampolines:
+        return records
+    rewritten = list(records)
+    for index in branch_positions:
+        record_id = records[index]
+        branch = _branch(ctx, record_id)
+        if branch is None:
+            continue
+        opcode, target = branch
+        resolved = target
+        seen = set()
+        while resolved in trampolines and resolved not in seen:
+            seen.add(resolved)
+            resolved = trampolines[resolved]
+        limit = 6000 if opcode in ("cbz", "cbnz") else (200000 if opcode.startswith("b.") else 0)
+        if not (resolved == target or (limit and
+                (resolved not in label_index or abs(label_index[resolved] - index) > limit))):
+            rewritten[index] = _retarget(ctx, record_id, resolved)
+    referenced = set(metadata_labels)
+    for index in branch_positions:
+        branch = _branch(ctx, rewritten[index])
+        if branch is not None:
+            referenced.add(branch[1])
+    out = []
+    cursor = 0
+    for index in event_positions:
+        if index < cursor:
+            continue
+        label = _local(ctx, rewritten[index])
+        if label is not None and label in trampolines and label not in referenced:
+            # Copy the preceding run at the next removable candidate, not
+            # every retained event individually. Skipped bodies retain the
+            # original boundary and fallthrough proofs.
+            out.extend(rewritten[cursor:index])
+            cursor = index
+            previous = len(out) - 1
+            while previous >= 0 and ctx.is_empty(out[previous]):
+                previous -= 1
+            falls_through = previous < 0 or not (
+                ctx.opcode(out[previous]) in ("b", "br") or ctx.opcode(out[previous]).startswith("ret")
+            )
+            if not falls_through:
+                cursor = index + 1
+                while cursor < len(rewritten) and not _boundary(ctx, rewritten[cursor]):
+                    cursor += 1
+    out.extend(rewritten[cursor:])
+    return out
+
+
 _INVERSE = {
     "eq": "ne", "ne": "eq", "lt": "ge", "le": "gt", "gt": "le", "ge": "lt",
     "lo": "hs", "ls": "hi", "hi": "ls", "hs": "lo", "mi": "pl", "pl": "mi",
@@ -224,6 +344,55 @@ def fold_cond_branch_to_fallthrough_records(
                     continue
         out.append(record_id)
         index += 1
+    return out
+
+
+def _fold_cond_branch_to_fallthrough_host(ctx, records, source_edge_index, candidates):
+    # Only label/directive and direct-branch events can affect the source
+    # proof or rewrite. Keep physical event indices for distance checks.
+    events, branches = candidates
+    label_index = {}
+    for index in events:
+        label = _local(ctx, records[index])
+        if label is not None:
+            label_index[label] = index
+    out = []
+    cursor = 0
+    error = None
+    success = None
+    for index in sorted(events + branches):
+        if index < cursor:
+            continue
+        record_id = records[index]
+        label = _local(ctx, record_id)
+        if label is not None:
+            if not ctx.symbol(label).startswith("L_pcc_smap"):
+                error, success = source_edge_index.get(label, (None, None))
+        elif _function(ctx, record_id):
+            error = None
+            success = None
+        if success is not None and index + 1 < len(records):
+            branch = _branch(ctx, record_id)
+            alternative = _branch(ctx, records[index + 1])
+            if branch is not None and alternative is not None and alternative[0] == "b":
+                opcode, target = branch
+                inverse = ""
+                if opcode in ("cbz", "cbnz"):
+                    inverse = "cbnz" if opcode == "cbz" else "cbz"
+                elif opcode.startswith("b.") and opcode[2:] in _INVERSE:
+                    inverse = "b." + _INVERSE[opcode[2:]]
+                following = index + 2
+                while following < len(records) and ctx.is_empty(records[following]):
+                    following += 1
+                other = alternative[1]
+                if (inverse and ctx.symbol(target).startswith("L_") and ctx.symbol(other).startswith("L_")
+                        and target == success and other == error and other in label_index
+                        and abs(label_index[other] - index) <= 200000 and following < len(records)
+                        and _local(ctx, records[following]) == target):
+                    out.extend(records[cursor:index])
+                    out.append(_retarget(ctx, record_id, other, inverse))
+                    cursor = index + 2
+    out.extend(records[cursor:])
     return out
 
 
@@ -304,12 +473,38 @@ def drop_unreferenced_empty_local_labels_records(ctx, records, metadata_labels=(
     return out
 
 
+def _drop_unreferenced_empty_local_labels_host(ctx, records, metadata_labels, candidates):
+    events, branches = candidates
+    referenced = set(metadata_labels)
+    for index in branches:
+        branch = _branch(ctx, records[index])
+        if branch is not None:
+            referenced.add(branch[1])
+    out = []
+    cursor = 0
+    for index in events:
+        label = _local(ctx, records[index])
+        if label is not None and label not in referenced and not ctx.symbol(label).startswith("L_pcc_smap"):
+            following = index + 1
+            while following < len(records) and ctx.is_empty(records[following]):
+                following += 1
+            if following < len(records) and (_local(ctx, records[following]) is not None or _function(ctx, records[following])):
+                out.extend(records[cursor:index])
+                cursor = index + 1
+    out.extend(records[cursor:])
+    return out
+
+
 def thread_trampoline_branches(fragments, semantics, span, metadata_labels=()):
     from .self_backend_aarch64_typed_pass_context import TypedPassContext
     ctx = TypedPassContext(fragments, semantics)
     # Public proof and owner callbacks can mutate the original span's nodes
     # without changing its root identity. Rebuild from the captured output IDs.
-    return ctx.write_span(thread_trampoline_branches_records(ctx, ctx.read_span(span), metadata_labels))
+    records = ctx.read_span(span)
+    candidates = _host_cfg_candidates(ctx, records)
+    if candidates is None or not _host_static_metadata(metadata_labels):
+        return ctx.write_span(thread_trampoline_branches_records(ctx, records, metadata_labels))
+    return ctx.write_span(_thread_trampoline_branches_host(ctx, records, metadata_labels, candidates))
 
 
 def fold_cond_branch_to_fallthrough(
@@ -319,8 +514,17 @@ def fold_cond_branch_to_fallthrough(
     ctx = TypedPassContext(fragments, semantics)
     # Public proof and owner callbacks can mutate the original span's nodes
     # without changing its root identity. Rebuild from the captured output IDs.
+    records = ctx.read_span(span)
+    # The indexed proof is producer-owned. A public iterable may run
+    # callbacks and must retain the original dense search order.
+    if type(source_edge_index) is dict:
+        candidates = _host_cfg_candidates(ctx, records)
+        if candidates is not None:
+            return ctx.write_span(_fold_cond_branch_to_fallthrough_host(
+                ctx, records, source_edge_index, candidates,
+            ))
     return ctx.write_span(fold_cond_branch_to_fallthrough_records(
-        ctx, ctx.read_span(span), eligible_edges, source_edge_index=source_edge_index,
+        ctx, records, eligible_edges, source_edge_index=source_edge_index,
     ))
 
 
@@ -390,7 +594,13 @@ def drop_unreferenced_empty_local_labels(fragments, semantics, span, metadata_la
     ctx = TypedPassContext(fragments, semantics)
     # Public proof and owner callbacks can mutate the original span's nodes
     # without changing its root identity. Rebuild from the captured output IDs.
-    return ctx.write_span(drop_unreferenced_empty_local_labels_records(ctx, ctx.read_span(span), metadata_labels))
+    records = ctx.read_span(span)
+    candidates = _host_cfg_candidates(ctx, records)
+    if candidates is None or not _host_static_metadata(metadata_labels):
+        return ctx.write_span(drop_unreferenced_empty_local_labels_records(ctx, records, metadata_labels))
+    return ctx.write_span(_drop_unreferenced_empty_local_labels_host(
+        ctx, records, metadata_labels, candidates,
+    ))
 
 
 def run_aarch64_typed_cfg_passes(

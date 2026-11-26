@@ -98,3 +98,22 @@ def test_replacement_encoder_publishes_matching_branch_and_pair_provenance():
     finally:
         semantics.close()
         fragments.close()
+
+
+@pytest.mark.parametrize("invalid", [-1, 1000])
+def test_host_span_snapshot_still_rejects_invalid_record_id(invalid):
+    fragments = AArch64EmissionFragments(capture_semantics=True)
+    try:
+        span = fragments.new_fragment()
+        fragments.append_nop(span)
+        valid = fragments.new_fragment()
+        fragments.spans.append_id_list(valid, [0])
+        original = fragments.spans.runs._length - 1
+        # Deliberately corrupt the copied run after publication; the host
+        # fast path must not treat a valid span tree as a valid ID stream.
+        fragments.spans.runs.set_unchecked(original, invalid)
+        ctx = TypedPassContext(fragments, fragments.semantics)
+        with pytest.raises(EncodeError, match="record ID is invalid"):
+            ctx.read_span(valid)
+    finally:
+        fragments.close()

@@ -8,7 +8,7 @@ from __future__ import annotations
 from .arm64_encode import EncodeError
 from .self_backend_aarch64_fragments import (
     EMISSION_RECORD_LABEL, EMISSION_RECORD_MEMORY_PAIR_BARRIER,
-    EMISSION_RECORD_EMPTY, EMISSION_RECORD_DIRECTIVE,
+    EMISSION_RECORD_EMPTY, EMISSION_RECORD_DIRECTIVE, AArch64EmissionFragments,
 )
 from .self_backend_aarch64_semantics import (
     FORM_CANONICAL, OPCODE_NAMES, append_semantic_instruction, semantic_opcode_id,
@@ -147,9 +147,21 @@ class TypedPassContext:
         ids = CompilerIntArena()
         try:
             self.fragments.copy_record_ids(span, ids)
+            limit = self.fragments.records._length // 4
+            # The host oracle has already bulk-copied the span into a fresh
+            # private exact list. Keep bounds checks in the same order, but
+            # avoid one arena getter and while-loop counter per event.
+            # Do not borrow the list: close() clears it.
+            if (not self.verify_each and ids._address == 0
+                    and type(ids._values) is list
+                    and type(self.fragments) is AArch64EmissionFragments):
+                records = ids._values[:ids._length]
+                for record_id in records:
+                    if record_id < 0 or record_id >= limit:
+                        raise EncodeError("AArch64 typed pass record ID is invalid")
+                return records
             records = []
             index = 0
-            limit = self.fragments.records._length // 4
             while index < ids._length:
                 record_id = ids.get_unchecked(index)
                 if self.verify_each:

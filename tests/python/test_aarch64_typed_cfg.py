@@ -250,3 +250,103 @@ def test_shared_local_label_decode_uses_only_family_lane_for_instruction(monkeyp
         assert reads == [label_record]
     finally:
         fragments.close()
+
+
+def test_host_sparse_trampoline_candidates_match_dense_exact_event_ids(monkeypatch):
+    from pcc.backend.self_backend_aarch64_fragments import AArch64EmissionFragments, EMISSION_RECORD_EMPTY
+    from pcc.backend.self_backend_value_arena import CompilerInt4
+    from pcc.backend.self_backend_aarch64_typed_pass_context import TypedPassContext
+
+    monkeypatch.delenv("PCC_DEBUG_AARCH64_VERIFY_EACH", raising=False)
+    owner = AArch64EmissionFragments(capture_semantics=True)
+    try:
+        span = owner.new_fragment()
+        owner.append_label(span, "_entry")
+        owner.append_branch(span, "b", "L_tramp")
+        for _ in range(80):
+            owner.append_nop(span)
+        owner.append_branch(span, "b", "L_done")
+        owner.append_label(span, "L_tramp")
+        owner._append_record(span, CompilerInt4(0, EMISSION_RECORD_EMPTY, 0, -1))
+        owner.append_branch(span, "b", "L_target")
+        owner._append_record(span, CompilerInt4(0, EMISSION_RECORD_EMPTY, 0, -1))
+        owner.append_label(span, "L_target")
+        owner.append_branch(span, "b", "L_done")
+        owner.append_label(span, "L_pcc_smap_1")
+        owner.append_nop(span)
+        owner.append_label(span, "L_done")
+        owner.append_nop(span)
+        ctx = TypedPassContext(owner, owner.semantics)
+        records = ctx.read_span(span)
+        candidates = typed._host_cfg_candidates(ctx, records)
+        assert candidates is not None
+        events, branches = candidates
+        assert len(events) < len(records) // 4
+        assert len(branches) == 4
+        dense = typed.thread_trampoline_branches_records(ctx, records)
+        sparse = typed._thread_trampoline_branches_host(ctx, records, (), candidates)
+        # Rewritten record IDs differ; compare every record's four raw
+        # fields and exact semantic opcode/operands in original order.
+        def projection(ids):
+            return [(ctx.record(r), ctx.opcode(r), ctx.operands(r)) for r in ids]
+        assert projection(sparse) == projection(dense)
+    finally:
+        owner.close()
+
+
+def test_host_sparse_cold_fold_and_label_cleanup_match_dense(monkeypatch):
+    from pcc.backend.self_backend_aarch64_fragments import AArch64EmissionFragments, EMISSION_RECORD_EMPTY
+    from pcc.backend.self_backend_value_arena import CompilerInt4
+    from pcc.backend.self_backend_aarch64_typed_pass_context import TypedPassContext
+
+    monkeypatch.delenv("PCC_DEBUG_AARCH64_VERIFY_EACH", raising=False)
+    owner = AArch64EmissionFragments(capture_semantics=True)
+    try:
+        span = owner.new_fragment()
+        owner.append_label(span, "_entry")
+        owner.append_label(span, "L_source")
+        for _ in range(40):
+            owner.append_nop(span)
+        owner.append_branch(span, "cbz", "L_success", "x9")
+        owner.append_branch(span, "b", "L_error")
+        owner._append_record(span, CompilerInt4(0, EMISSION_RECORD_EMPTY, 0, -1))
+        owner.append_label(span, "L_success")
+        owner.append_label(span, "L_empty")
+        owner._append_record(span, CompilerInt4(0, EMISSION_RECORD_EMPTY, 0, -1))
+        owner.append_label(span, "L_pcc_smap_1")
+        owner.append_nop(span)
+        owner.append_label(span, "L_error")
+        owner.append_nop(span)
+        ctx = TypedPassContext(owner, owner.semantics)
+        records = ctx.read_span(span)
+        candidates = typed._host_cfg_candidates(ctx, records)
+        assert candidates is not None
+        edge = {owner.symbol_ids["L_source"]: (owner.symbol_ids["L_error"], owner.symbol_ids["L_success"])}
+        dense = typed.fold_cond_branch_to_fallthrough_records(ctx, records, (), source_edge_index=edge)
+        sparse = typed._fold_cond_branch_to_fallthrough_host(ctx, records, edge, candidates)
+        def projection(ids):
+            return [(ctx.record(r), ctx.opcode(r), ctx.operands(r)) for r in ids]
+        assert projection(sparse) == projection(dense)
+        assert len(sparse) == len(records) - 1
+        dense_labels = typed.drop_unreferenced_empty_local_labels_records(ctx, sparse)
+        sparse_labels = typed._drop_unreferenced_empty_local_labels_host(
+            ctx, sparse, (), typed._host_cfg_candidates(ctx, sparse),
+        )
+        assert projection(sparse_labels) == projection(dense_labels)
+        assert len(sparse_labels) < len(sparse)
+    finally:
+        owner.close()
+
+
+def test_sparse_metadata_gate_excludes_external_callbacks():
+    class Metadata:
+        def __iter__(self):
+            raise AssertionError("must not traverse an external proof to select the host path")
+
+    class Label(int):
+        pass
+
+    assert typed._host_static_metadata(())
+    assert typed._host_static_metadata({0, 7})
+    assert not typed._host_static_metadata(Metadata())
+    assert not typed._host_static_metadata((Label(7),))
