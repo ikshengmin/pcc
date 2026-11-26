@@ -1845,8 +1845,21 @@ in the relevant section or issue and removes the entry.
        commits: test_llvm_capi_direct_indexed_kernel.py::
        test_direct_publication_uses_exact_static_abi_in_stage1_context
        (dynamic getattr in arm64_asm_driver._define_label); the GC4 copy
-       fixture tests (fixture files removed with GC4).
-       Next: (1) the link's per-relocation objects; (2) passes that
+       fixture tests (fixture files removed with GC4). Sampled (SIGPROF,
+       not cProfile, which inflated the relocation folding several times),
+       the link was about 43% stack maps (runtime-table emission alone 20%,
+       its validation 9%), 25% final image preparation, 16% the compact
+       view's revalidation, 10% input decode, 9% relocation packing.
+       9bb17d907 converts stack-map locations by byte column, writes record
+       rows per block and validates block maxima from the packed words
+       (link 163.8 -> 148.0 s CPU, five pairs, output byte-identical).
+       Against five minutes cold the gap is still about 4x: the link stays
+       single-threaded over 15.6M relocations, 9M safepoint records and 28M
+       stack-map locations, so it needs per-object preparation moved into
+       the codegen workers or fewer records (safepoints at calls that cannot
+       reach a collection need a GC-protocol proof first); the workers need
+       the allocation model change below and J2's single error landing.
+       Next: (1) per-object link preparation in the codegen workers; (2) passes that
        did not rewrite publish nothing and build no output; (3) the
        allocation model toward LLVM's (the maintainer's answer to P0 (c):
        at least LLVM parity): values without stack slots unless spilled,
