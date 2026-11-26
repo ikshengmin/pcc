@@ -529,6 +529,20 @@ in the relevant section or issue and removes the entry.
    disabled assertion, deleted node or relaxed acceptance is appropriate.
    Continue these actual frontend/runtime owners as item 4/5 units; the
    present host has no javac or Clang++ to requalify their strict oracles.
+   #20 worker-prior run 45856871699 (6cbafc4a): all four platform
+   artifacts (Linux x86 15140375466, ARM 15139367323, Windows 15139163406,
+   macOS 15139124581) now pass the former inventory check but stop at
+   `test_scalar_type_reads_use_authoritative_arena_and_live_mutations`
+   after 1371-1376 passes. The direct arena `_length` optimization leaves
+   the previous six `len()` dispatch observations obsolete, not the full
+   four-cell proof. The exact-class model now independently observes one
+   authoritative slot read and zero `__len__` dispatch per scalar call,
+   all three type checks, and the original short-window IndexError followed
+   by the same live arena's real append making the fourth cell readable.
+   Exact preimage failed locally, changed node passes, all 100 finite
+   source-extracted scalar tests pass (47.10 s on host Python 3.13). Test
+   inventory, production backend, runtime and CI budgets unchanged; hosted
+   execution pending. No heavy build or additional CI dispatch.
    Next: re-run worker-prior/changed-module and remaining Source; the 216-node
    source shared batch still requires a hosted rerun, and the active
    checkpoint's independent wheel evidence is pending.
@@ -640,7 +654,7 @@ in the relevant section or issue and removes the entry.
    under the unchanged 90 s / 1 GiB guard. Hosted verification pending.
 
    Claims:
-   - Worker-prior scalar arena direct length proof regression: Codex, Linux, 2026-11-26T17:45Z, area checkpoint
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and

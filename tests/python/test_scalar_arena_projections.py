@@ -586,24 +586,56 @@ def test_scalar_type_reads_use_authoritative_arena_and_live_mutations():
     function = _type_function(namespace, "_type_id_is_int")
     kernel = _kernel(namespace)
     kernel.instruction_kind_ids = _arena(namespace, [999] * 48)
-    type_checks, length_checks = [], []
+    type_checks, length_reads, len_dispatches = [], [], []
+    arena_type = namespace["CompilerIntArena"]
+    original_getattribute = arena_type.__getattribute__
+    original_len = arena_type.__len__
 
     def counted_type(value):
         type_checks.append(type(value).__name__)
         return type(value)
 
-    def counted_len(value):
-        length_checks.append(value)
-        return len(value)
+    def counted_getattribute(arena, name):
+        value = original_getattribute(arena, name)
+        if name == "_length":
+            length_reads.append((arena, value))
+        return value
 
-    namespace.update(type=counted_type, len=counted_len)
+    def counted_len(arena):
+        len_dispatches.append(arena)
+        return original_len(arena)
+
+    # Instrument the actual exact model class, not a subclass that would
+    # intentionally lose the scalar guard. Count the authoritative slot read
+    # independently from __len__ dispatch (including direct method calls).
+    arena_type.__getattribute__ = counted_getattribute
+    arena_type.__len__ = counted_len
+    namespace.update(type=counted_type)
     for kind in range(6):
         kernel.type_scalars.set_unchecked(0, kind)
         assert function(kernel, 0) == (kind == 1)
     assert kernel.type_scalars._values.reads == [0] * 6
-    # These are data-read savings, not a net-cost claim: each normal call also
-    # pays three exact-type checks, one full-window bound and guard branches.
-    assert len(type_checks) == 18 and len(length_checks) == 6
+    # Direct length avoids the CPython method frame, not the full-window proof.
+    # Each normal call still pays three exact-type checks and one live bound.
+    assert len(type_checks) == 18
+    assert length_reads == [(kernel.type_scalars, 48)] * 6
+    assert len_dispatches == []
+
+    # The same live arena crosses the original four-cell boundary. A short
+    # window must take the original snapshot/error path; after a real append
+    # completes it, no cached length or unconditional scalar read is allowed.
+    short = _arena(namespace, [1, 64, 0])
+    kernel.type_scalars = short
+    length_reads.clear()
+    assert _result(function, kernel, 0) == ("error", "IndexError", ("list index out of range",))
+    assert length_reads == [(short, 3)]
+    assert short._values.reads == [0, 1, 2, 3]
+    short.append(-1)
+    length_reads.clear()
+    short._values.reads.clear()
+    assert function(kernel, 0)
+    assert length_reads == [(short, 4)] and short._values.reads == [0]
+    assert len_dispatches == []
 
 
 def test_original_window_not_entire_logical_record_controls_projection():
