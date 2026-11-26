@@ -30,7 +30,10 @@ def test_module_creators_publish_new_results_before_parking(tmp_path, monkeypatc
         finish = _ir_body(text, 'py_sys_modules_owner_finish')
         transfer = finish.index('@pcc_gc_take_slot(')
         assert finish.rfind('@pcc_gc_frame_leave(') < transfer
-        assert not re.search(r'\bcall\b', finish[finish.index('\n', transfer):])
+        # Nothing runs between the transfer and its return. Blocks laid out
+        # after that return (the drop loop) are not on this path.
+        tail = finish[finish.index('\n', transfer):]
+        assert not re.search(r'\bcall\b', tail[:tail.index('ret ptr ')])
         return
     if module == 'py_compiled_module_runtime':
         factory = _ir_body(text, 'user_' + module + '__create_compiled_module_node')

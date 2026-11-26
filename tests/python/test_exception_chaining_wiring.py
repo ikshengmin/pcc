@@ -407,8 +407,8 @@ def test_format_and_copy_protocols_guard_silent_null_before_cleanup():
     guard_pos = body.index('cstr("format callback returned NULL without setting an exception")', call_pos)
     assert call_pos < guard_pos
     wrapper = format_py.split("def _call_object_format(", 1)[1].split("\ndef ", 1)[0]
-    assert wrapper.index("_format_callback_body(slots, tokens, borrowed)") < wrapper.index(
-        "_format_callback_drop(slots, tokens, _FORMAT_ARGS)"
+    assert wrapper.index("_format_callback_body(slots, borrowed)") < wrapper.index(
+        "_format_callback_drop(slots, _FORMAT_ARGS)"
     )
     call_pos = copy_py.index("result = py_func_call(method, full_args)")
     guard_pos = copy_py.index("_copy_require_result(", call_pos)

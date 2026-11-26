@@ -152,6 +152,23 @@ class PercentMemory:
         self.store(destination, 0, value)
         return self.acquire(destination)
 
+    def root_copy(self, destination, source):
+        # pcc_gc_root_copy(_borrowed): a status only; the one collector takes
+        # no lease (item 2 (d)). The lease forms above stay for the models of
+        # modules that still lease (U10).
+        self.park()
+        self.copy_count += 1
+        if self.copy_count == self.copy_failure:
+            self.pending = 'copy-error'
+            return -1
+        value = self.load(source)
+        assert self.load(destination) is None
+        if value is None:
+            return 0
+        self.object(value)['refs'] += 1
+        self.store(destination, 0, value)
+        return 0
+
     def decref(self, value):
         if value is None:
             return
@@ -339,6 +356,7 @@ class PercentMemory:
             global_load_ptr=lambda name: None,
             pcc_gc_frame_enter=enter, pcc_gc_frame_leave=leave,
             pcc_gc_root_copy_borrowed_lease=self.copy, pcc_gc_root_copy_lease=self.copy,
+            pcc_gc_root_copy_borrowed=self.root_copy, pcc_gc_root_copy=self.root_copy,
             pcc_gc_foreign_lease_acquire=self.acquire, pcc_gc_foreign_lease_release=self.release,
             pcc_gc_store_root=self.drop, py_tls_exc_swap_slot=swap,
             pcc_py_gc_minor_graph_lock=lambda: self.park(),
@@ -391,7 +409,7 @@ class PercentMemory:
 
     def install(self):
         tree = ast.parse(self.source.read_text())
-        names = {'_format_callback_adopt', '_format_callback_drop', '_type_of',
+        names = {'_format_callback_drop', '_type_of',
                  '_format_percent', '_format_percent_body', '_parse_digits', '_skip_digits', '_is_digit_byte',
                  '_append_type_name', '_append_type_name_body', '_append_pystr', '_bytes_payload', '_bytes_payload_length',
                  'py_str_mod', 'py_bytes_mod'}
@@ -556,31 +574,6 @@ def test_percent_final_result_failures_preserve_original_exception(runtime_sourc
     assert model.objects[value.identity]['refs'] == 1
     assert all(obj['refs'] == 0 for identity, obj in model.objects.items()
                if identity not in (format_obj.identity, value.identity))
-
-
-@pytest.mark.parametrize('role', ('method', 'args', 'converted', 'rendered', 'key', 'result', 'bytearray'))
-def test_percent_lease_failure_retires_the_already_published_owner(runtime_source, role):
-    model = PercentMemory(runtime_source, True, lease_failure=role)
-    if role in ('method', 'args', 'converted', 'rendered'):
-        value = model.new(ABI['PY_TYPE_INSTANCE'], 'value')
-        output = model.buffer(32)
-        status = model.env['_percent_text'](output, value, Payload(b'%s'), model.alloc(72),
-                    115 if role == 'rendered' else 98, 0, 0, -1, 0 if role == 'rendered' else 1)
-        model.finish()
-        assert status == -1
-        baseline = {value.identity: 1}
-    else:
-        value = model.new(ABI['PY_TYPE_BYTES'] if role == 'bytearray' else ABI['PY_TYPE_STR'], b'TEXT' if role == 'bytearray' else 'TEXT')
-        arguments = model.new(ABI['PY_TYPE_DICT'], {'key': value.identity}, children=[value]) if role == 'key' else value
-        format_obj = model.new(ABI['PY_TYPE_BYTEARRAY'] if role == 'bytearray' else ABI['PY_TYPE_STR'],
-                               b'%s' if role == 'bytearray' else '%(key)s' if role == 'key' else '%s')
-        baseline = {identity: obj['refs'] for identity, obj in model.objects.items()}
-        result = model.env['py_bytes_mod' if role == 'bytearray' else 'py_str_mod'](format_obj, arguments)
-        model.finish(result)
-        assert result is None
-    assert model.lease_failed and model.pending == 'lease-error'
-    assert all(model.objects[identity]['refs'] == refs for identity, refs in baseline.items())
-    assert all(obj['refs'] == 0 for identity, obj in model.objects.items() if identity not in baseline)
 
 
 @pytest.mark.parametrize('relocate', (False, True))

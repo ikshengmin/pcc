@@ -910,8 +910,10 @@ def test_real_entry_and_body_ir_enforce_the_slot_boundary(tmp_path, monkeypatch)
                            if any(symbol in line for symbol in forbidden)]
         assert not offending_lines, (name, offending_lines)
     managed = '\n'.join(managed_bodies.values())
-    assert '@pcc_gc_root_copy_lease(' in managed
-    assert '@pcc_gc_root_copy_borrowed_lease(' in managed
+    # One collector: status-only copies and no lease (item 2 (d)).
+    assert '@pcc_gc_root_copy(' in managed
+    assert '@pcc_gc_root_copy_borrowed(' in managed
+    assert not re.search(r'call [^\n]*@pcc_gc_\w*_lease\w*\(', managed)
     assert '@pcc_capi_method_invoke_into(' in managed
     assert '@py_tls_exc_swap_slot(' in managed
 

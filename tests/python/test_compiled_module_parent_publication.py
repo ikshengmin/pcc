@@ -32,8 +32,6 @@ class _Block:
 class _Memory:
     def __init__(self, *, phase="", fail=""):
         self.frames = []
-        self.leases = {}
-        self.next_lease = 1
         self.globals = {}
         self.attrs = {}
         self.objects = []
@@ -41,7 +39,7 @@ class _Memory:
         self.error = None
         self.cleanup_callback = None
         self.phase, self.fail = phase, fail
-        self.moves = 0
+        self.collections = 0
         self.decoy = self.object("decoy")
         self.module_cache = self.object("dict")
         self.none = self.object("none")
@@ -64,7 +62,6 @@ class _Memory:
             "stack_alloc": self.malloc, "global_addr": lambda name: name,
             "memset": lambda ptr, value, size: ptr.bytes.__setitem__(slice(0, size), bytes([value])*size),
             "pcc_gc_frame_enter": self.frame_enter,
-            "py_sys_modules_owner_adopt": self.owner_adopt,
             "py_sys_modules_owner_drop": self.owner_drop,
             "py_sys_modules_owner_finish": self.owner_finish,
             "global_load_ptr": self.globals.get,
@@ -96,34 +93,22 @@ class _Memory:
         assert len(slots.bytes) == 48
         self.frames.append(slots)
 
-    def owner_adopt(self, slots, tokens, index):
-        value = self.read(slots, index * 8)
-        if isinstance(value, _Block):
-            token = self.next_lease
-            self.next_lease += 1
-            self.leases[token] = value
-            self.write(tokens, index * 8, token)
-
-    def owner_drop(self, slots, tokens, index):
-        token = tokens.fields.pop(index * 8, -1)
-        if token >= 0:
-            self.leases.pop(token)
+    def owner_drop(self, slots, index):
+        # py_sys_modules_owner_drop: clear the root; the one collector takes
+        # no lease (item 2 (d)).
         value = self.read(slots, index * 8)
         self.write(slots, index * 8, None)
         self.decref(value)
 
-    def owner_finish(self, slots, tokens):
+    def owner_finish(self, slots):
         error, self.error = self.error, None
         if error is not None:
-            self.owner_drop(slots, tokens, 4)
+            self.owner_drop(slots, 4)
         for index in (0, 1, 2, 3, 5):
-            self.owner_drop(slots, tokens, index)
+            self.owner_drop(slots, index)
         self.clear_error()
         self.error = error
         value = self.read(slots, 32)
-        token = tokens.fields.pop(32, -1)
-        if token >= 0:
-            self.leases.pop(token)
         self.write(slots, 32, None)
         assert self.frames.pop() is slots
         return value
@@ -134,24 +119,12 @@ class _Memory:
         return value
 
     def gate(self, phase):
+        # A collection point of the one collector: it never moves an object
+        # and frees nothing that a counted reference still owns.
         if phase != self.phase:
             return
-        for old in list(self.objects):
-            if not old.alive or old.pin or old in self.leases.values() or old.kind not in ("module", "decoy"):
-                continue
-            new = self.object(old.kind)
-            new.fields, new.refs = old.fields.copy(), old.refs
-            # Heap edges are traced; unregistered raw C registry/local pointers
-            # deliberately are not, which exposes missing module pins.
-            for owner in self.objects:
-                if owner.alive:
-                    owner.fields = {k: new if v is old else v for k, v in owner.fields.items()}
-            for frame in self.frames:
-                frame.fields = {k: new if v is old else v for k, v in frame.fields.items()}
-            if old is self.decoy:
-                self.decoy = new
-            old.alive = False
-            self.moves += 1
+        assert all(obj.refs > 0 for obj in self.objects if obj.alive)
+        self.collections += 1
 
     def malloc(self, size):
         if self.live_modules() and (
@@ -485,7 +458,7 @@ def test_failed_parent_publication_retains_only_the_completed_cache_owner():
 
 
 @pytest.mark.parametrize("phase", ("allocation", "store", "string", "setattr", "parent"))
-def test_registry_module_addresses_survive_each_relocation_gate(phase):
+def test_registry_modules_survive_each_collection_point(phase):
     m = _Memory(phase=phase)
     m.register("pkg")
     m.register("pkg.child")
@@ -494,7 +467,7 @@ def test_registry_module_addresses_survive_each_relocation_gate(phase):
     assert m.namespace(parent)["child"] is child
     assert len(m.live_modules()) == 2
     assert all(not obj.pin for obj in m.live_modules())
-    assert m.moves > 0  # independent live object actually moved at this gate
+    assert m.collections > 0  # the collection point actually ran
 
 
 def test_unknown_module_does_not_materialize_a_namespace():

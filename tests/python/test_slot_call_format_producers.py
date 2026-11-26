@@ -58,7 +58,6 @@ class _CallbackModel:
         self.refs = {'value': 1, 'spec': 1}
         self.relocate = relocate
         self.lookup_after_registration = False
-        self.lease = {}
         self.pending = None
         self.callback_count = 0
         self.disposed = []
@@ -81,21 +80,6 @@ class _CallbackModel:
         self.refs[name] = 1
         return name
 
-    def acquire(self, slot):
-        assert any(base <= slot < base + count * 8 for base, count in self.frames if count > 0)
-        value = self.load(slot, 0)
-        if value is not None:
-            assert self.refs[value] > 0
-            self.lease[slot] = self.lease.get(slot, 0) + 1
-            return 1
-        return 0
-
-    def release(self, slot, token):
-        if token:
-            assert self.lease[slot] == 1
-            del self.lease[slot]
-        return 0
-
     def drop(self, slot, value):
         assert value is None
         old = self.load(slot, 0)
@@ -117,10 +101,12 @@ class _CallbackModel:
                     self.pending = 'disposal-error'
 
     def copy(self, destination, source):
+        # pcc_gc_root_copy_borrowed: a status only; no lease (item 2 (d)).
+        assert any(base <= destination < base + count * 8 for base, count in self.frames if count > 0)
         value = self.load(source, 0)
         self.refs[value] += 1
         self.store(destination, 0, value)
-        return self.acquire(destination)
+        return 0
 
     def swap(self, slot):
         self.pending, self.memory[slot] = self.load(slot, 0), self.pending
@@ -181,9 +167,7 @@ class _CallbackModel:
                     global_addr=lambda name: -2 if 'borrowed' in name else 6,
                     global_load_ptr=lambda name: None,
                     pcc_gc_frame_enter=enter, pcc_gc_frame_leave=leave,
-                    pcc_gc_foreign_lease_acquire=self.acquire,
-                    pcc_gc_foreign_lease_release=self.release,
-                    pcc_gc_root_copy_borrowed_lease=self.copy,
+                    pcc_gc_root_copy_borrowed=self.copy,
                     pcc_gc_store_root=self.drop,
                     pcc_py_gc_minor_graph_lock=lambda: None,
                     pcc_py_gc_minor_graph_unlock=lambda: None,
@@ -212,7 +196,7 @@ def test_actual_format_callback_owner_disposal_and_error(failure, relocate):
         # explicit c_ptr is reserved for the slot-address helper parameters.
         assert all(arg.annotation is None for arg in functions[name].args.args)
         assert functions[name].returns is None
-    names = {'_format_callback_adopt', '_format_callback_drop',
+    names = {'_format_callback_drop',
              '_format_callback_body', '_call_object_format'}
     selected = ast.Module(body=[node for node in tree.body
                                if isinstance(node, ast.FunctionDef) and node.name in names],
@@ -222,7 +206,7 @@ def test_actual_format_callback_owner_disposal_and_error(failure, relocate):
     env['pcc_gc_note_root_slot_barrier'] = locked_root_slot_barrier(env)
     exec(compile(selected, str(path), 'exec'), env)
     result = env['_call_object_format']('value', None if failure == 'empty' else 'spec')
-    assert model.frames == set() and model.lease == {}
+    assert model.frames == set()
     assert model.refs['method'] == 0 and model.refs['spec'] == 1
     assert model.refs['moved-value' if relocate else 'value'] == 1
     assert model.lookup_after_registration

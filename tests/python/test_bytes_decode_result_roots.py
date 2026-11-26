@@ -82,7 +82,7 @@ class _DecoderModel(BufferModel):
     """Execute current decoder/codec bodies over the existing moving model.
 
     The raw scratch allocator follows py_substrate's malloc/free wrappers;
-    managed ownership boundaries still relocate every unleased/unpinned object.
+    managed ownership boundaries still relocate every unpinned object.
     No codec operation is replaced with Python's decoder: CPython is the oracle.
     """
     def __init__(self, kind='bytes', data=b'abc', *, relocate=True, failure=None):
@@ -164,14 +164,6 @@ class _DecoderModel(BufferModel):
         error = self.error('UnicodeEncodeError', reason)
         error[0].details = (encoding, payload, start, end, reason)
         self.raise_owned(error)
-
-    def acquire(self, slot):
-        if self.failure == 'decode-lease':
-            self.boundary()
-            value = self.load(slot, 0)
-            if value is not None and value[0].name == 'decoded':
-                return -1
-        return super().acquire(slot)
 
     def drop(self, value):
         super().drop(value)
@@ -271,14 +263,14 @@ def test_decoder_validation_and_explicit_unsupported_handlers(kind, encoding, er
     model.close()
 
 
-@pytest.mark.parametrize('failure', ('copy', 'allocation', 'raw-allocation', 'string-allocation', 'decode-lease'))
+@pytest.mark.parametrize('failure', ('copy', 'allocation', 'raw-allocation', 'string-allocation'))
 def test_decoder_partial_failure_balances_every_owner_and_preserves_error(failure):
     model = _DecoderModel('bytearray', b'abc', failure=failure)
     model.cleanup_error = True
     assert model.run_decode() is None
     assert model.pending[0].kind == 19
     assert model.pending[0].message != 'cleanup callback error'
-    if failure in ('raw-allocation', 'string-allocation', 'decode-lease'):
+    if failure in ('raw-allocation', 'string-allocation'):
         assert not model.cleanup_error, 'cleanup callback control did not run'
     model.close()
 

@@ -10,7 +10,10 @@ RUNTIME = Path(__file__).resolve().parents[2] / 'pcc/runtime/py/py_obj_stubs.py'
 class BufferModel:
     def __init__(self, kind='bytes', *, relocate=True, failure=None, pending=None, initial_refs=1):
         self.relocate, self.failure = relocate, failure
-        self.memory, self.frames, self.leases, self.raw = {}, {}, {}, {}
+        self.memory, self.frames, self.raw = {}, {}, {}
+        # No runtime path takes a lease (item 2 (d)): no lease ABI is bound,
+        # so a call fails, and this stays empty for the dependents' checks.
+        self.leases = {}
         self.objects, self.pins, self.events = [], set(), []
         self.fresh, self.pending = None, None
         self.next_address, self.allocations, self.raises = 10000, 0, 0
@@ -42,9 +45,7 @@ class BufferModel:
             pcc_gc_frame_enter=self.enter, pcc_gc_frame_leave=self.leave,
             pcc_gc_frame_enter_local=self.enter, pcc_gc_frame_leave_local=self.leave,
             pcc_gc_resolve_borrowed_root_slot_unlocked=self.load,
-            pcc_gc_root_copy_lease=self.copy, pcc_gc_root_copy_borrowed_lease=self.copy,
             pcc_gc_root_copy=self.root_copy, pcc_gc_root_copy_borrowed=self.root_copy,
-            pcc_gc_foreign_lease_acquire=self.acquire, pcc_gc_foreign_lease_release=self.release,
             pcc_gc_root_move=self.move, pcc_gc_store_root=self.clear_root,
             pcc_gc_note_slot_write_barrier=self.barrier,
             pcc_py_gc_minor_graph_lock=self.boundary, pcc_py_gc_minor_graph_unlock=self.boundary,
@@ -219,34 +220,6 @@ class BufferModel:
         self.boundary()
         self.frames.pop(base)
 
-    def acquire(self, slot):
-        self.boundary()
-        value = self.load(slot, 0)
-        if value is None:
-            return 0
-        self.check(value)
-        if self.failure == 'lease-result' and value[0].name == 'result':
-            return -1
-        self.leases[slot] = 1
-        return 1
-
-    def release(self, slot, token):
-        self.boundary()
-        if token:
-            assert self.leases.pop(slot) == token
-        return 0
-
-    def copy(self, destination, source):
-        self.boundary()
-        if self.failure == 'copy':
-            return -1
-        value = self.load(source, 0)
-        if value is not None:
-            self.check(value)
-            value[0].refs += 1
-        self.store(destination, 0, value)
-        return self.acquire(destination)
-
     def root_copy(self, destination, source):
         # The one collector's status-only copy: no lease (item 2 (d) 4c).
         self.boundary()
@@ -264,8 +237,6 @@ class BufferModel:
         assert self.load(destination, 0) is None
         self.store(destination, 0, self.load(source, 0))
         self.store(source, 0, None)
-        if source in self.leases:
-            self.leases[destination] = self.leases.pop(source)
         return 0
 
     def clear_root(self, slot, value):
@@ -448,7 +419,7 @@ def test_buffer_copy_holds_actual_payload_owner_through_allocation(kind, expecte
     model = BufferModel(kind, relocate=relocate)
     result = model.run(mode)
     assert model.content(result) == expected
-    assert model.pending is None and not model.leases and not model.pins and not model.raw
+    assert model.pending is None and not model.pins and not model.raw
     assert model.frames == {model.external: 2}
     if kind == 'bytes' and mode == 0:
         assert result[0] is model.source[0] and result[0].refs == 2
@@ -484,7 +455,7 @@ def test_buffer_copy_cannot_mix_payloads_across_allocating_clear(mode, relocate)
     # Either complete snapshot is valid; the terminator written by clear()
     # must never be combined with a length read before the allocation.
     assert model.content(result) in (before, clears[0])
-    assert model.pending is None and not model.leases and not model.pins and not model.raw
+    assert model.pending is None and not model.pins and not model.raw
     model.clear_root(model.external, None)
     model.clear_root(model.external + 8, None)
     assert all(obj.refs == 0 for obj in model.objects)
@@ -509,7 +480,6 @@ def test_memoryview_factory_retains_base_before_source_disposal(kind, relocate):
     ('list', 'raw-allocation', 'byte sequence: out of memory'),
     ('list', 'allocation', 'bytes: out of memory'),
     ('list', 'index', 'index-callback-error'),
-    ('list', 'lease-result', 'buffer conversion: cannot lease owner'),
     ('memoryview', 'copy', 'buffer conversion: cannot retain owner'),
     ('bad-sequence', None, 'bytes must be in range(0, 256)'),
     ('overflow-sequence', None, 'bytes must be in range(0, 256)'),
@@ -519,7 +489,7 @@ def test_buffer_failure_keeps_primary_error_through_free_and_owner_cleanup(kind,
     model = BufferModel(kind, failure=failure, relocate=relocate)
     assert model.run() is None
     assert model.pending[0].message == message
-    assert not model.raw and not model.leases and not model.pins
+    assert not model.raw and not model.pins
     assert model.frames == {model.external: 2}
     model.clear_root(model.external, None)
     model.clear_error()
@@ -575,4 +545,4 @@ def test_private_buffer_factories_keep_boolean_mutability_contract(function, kin
     result = model.load(model.external, 8)
     assert result[0].tag == (10 if mutable else 9)
     assert model.content(result) == expected
-    assert not model.leases and not model.pins and not model.raw
+    assert not model.pins and not model.raw

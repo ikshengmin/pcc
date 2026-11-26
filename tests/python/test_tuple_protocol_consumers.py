@@ -135,6 +135,14 @@ class ConsumerModel:
         return 0
 
     def copy(self, destination, source):
+        status = self.root_copy(destination, source)
+        if status < 0:
+            return status
+        return self.acquire(destination)
+
+    def root_copy(self, destination, source):
+        # pcc_gc_root_copy(_borrowed): a status only; the one collector takes
+        # no lease (item 2 (d)).
         assert self.registered(destination, owning=True)
         assert self.load(destination) is None
         self.park('copy')
@@ -144,7 +152,17 @@ class ConsumerModel:
         value = self.load(source)
         self.inc(value)
         self.store(destination, 0, value)
-        return self.acquire(destination)
+        return 0
+
+    def rooted(self, value):
+        # A lease protects the protocol paths not yet converted; the one
+        # collector's lease-free paths keep the value in a registered root.
+        obj = self.obj(value)
+        if obj['leases'] or obj['immortal']:
+            return True
+        return any(self.memory.get(base + index * 8) == value
+                   for base, count in self.frames.items() if count > 0
+                   for index in range(count))
 
     def drop(self, slot, value):
         assert value is None
@@ -155,9 +173,9 @@ class ConsumerModel:
         self.dec(old)
 
     def heap_store(self, owner, slot, value):
-        assert self.obj(owner)['leases']
+        assert self.rooted(owner)
         if value is not None:
-            assert self.obj(value)['leases'] or self.obj(value)['immortal']
+            assert self.rooted(value)
         self.park('heap-store')
         old = self.load(slot)
         self.inc(value)
@@ -196,7 +214,7 @@ class ConsumerModel:
         return self.special(left, name, None, None, output, handled)
 
     def tuple_next(self, wrapper, index):
-        assert self.obj(wrapper)['leases']
+        assert self.rooted(wrapper)
         if index >= len(self.obj(wrapper)['value']):
             self.pending = self.new('stop', 80, (8, ''))
             return None
@@ -287,6 +305,8 @@ class ConsumerModel:
                    pcc_gc_foreign_lease_release=self.release,
                    pcc_gc_root_copy_borrowed_lease=self.copy,
                    pcc_gc_root_copy_lease=self.copy,
+                   pcc_gc_root_copy_borrowed=self.root_copy,
+                   pcc_gc_root_copy=self.root_copy,
                    pcc_gc_store_root=self.drop, pcc_gc_store_ptr=self.heap_store,
                    pcc_gc_note_slot_write_barrier=lambda *args: None,
                    pcc_py_gc_minor_graph_lock=lambda: self.park('graph-lock'),

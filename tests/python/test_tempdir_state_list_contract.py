@@ -46,7 +46,6 @@ class ActualLists:
             'pcc_threads_enabled': lambda: self.threads,
             'pcc_gc_alloc': self.allocate,
             'pcc_gc_pointer_is_managed': lambda p: int(isinstance(p, (Ptr, Obj))),
-            'pcc_gc_foreign_lease_acquire': self.acquire,
             'pcc_gc_note_slot_write_barrier': lambda *args: None,
             'pcc_gc_backend4_zpage_register_owner_payload_span': lambda *args: 0,
             'pcc_gc_publish_initialized': lambda *args: None,
@@ -77,9 +76,6 @@ class ActualLists:
         self.runtime.write(value, abi.PYOBJECTHEADER_FLAGS_OFFSET, flags)
         self.lists.append(value)
         return value
-
-    def acquire(self, slot):
-        return self.runtime.copy_lease(slot, slot)
 
     def lock(self):
         self.lock_depth += 1
@@ -255,7 +251,7 @@ def test_initialization_failure_cleans_owner_and_state_cycle(tmp_path, platform,
 
 
 @pytest.mark.parametrize('platform', ('posix', 'windows'))
-@pytest.mark.parametrize('boundary', ('header', 'items', 'lease'))
+@pytest.mark.parametrize('boundary', ('header', 'items'))
 @pytest.mark.parametrize('pending', (False, True))
 def test_actual_list_factory_failure_rolls_back_directory(tmp_path, platform, boundary, pending):
     runtime, lists, root = make_runtime(platform, tmp_path, backend=4)
@@ -263,14 +259,13 @@ def test_actual_list_factory_failure_rolls_back_directory(tmp_path, platform, bo
     primary = Obj('exception', (19, 'injected list factory error'))
 
     def fail_factory(capacity):
-        name = {'header': 'pcc_gc_alloc', 'items': 'malloc',
-                'lease': 'pcc_gc_foreign_lease_acquire'}[boundary]
+        name = {'header': 'pcc_gc_alloc', 'items': 'malloc'}[boundary]
         original = runtime.ns[name]
 
         def fail(*args):
             if pending:
                 runtime.error = primary
-            return -1 if boundary == 'lease' else None
+            return None
 
         runtime.ns[name] = fail
         try:

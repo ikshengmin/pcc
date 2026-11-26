@@ -1,4 +1,4 @@
-"""Execute the production iterator-extension transaction at moving boundaries."""
+"""Execute the production iterator-extension transaction at collection points."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -23,8 +23,9 @@ class _Object:
 class _ExtensionModel:
     def __init__(self, failure, relocate, alias):
         self.failure, self.relocate = failure, relocate
-        self.memory, self.frames, self.leases = {}, {}, {}
+        self.memory, self.frames = {}, {}
         self.range_tickets = {}
+        self.collections = 0
         self.objects, self.items, self.events = [], [], []
         self.pending, self.fresh = None, None
         self.next_address, self.next_count, self.copy_count = 100, 0, 0
@@ -50,9 +51,7 @@ class _ExtensionModel:
             'pcc_gc_frame_roots_disabled_fast': lambda: 0,
             'pcc_gc_native_root_bind_range': self.bind_range,
             'pcc_gc_native_root_unbind': self.unbind_range,
-            'pcc_gc_root_copy_borrowed_lease': self.copy,
-            'pcc_gc_foreign_lease_acquire': self.acquire,
-            'pcc_gc_foreign_lease_release': self.release,
+            'pcc_gc_root_copy_borrowed': self.copy,
             'pcc_gc_note_slot_write_barrier': self.barrier,
             'pcc_gc_store_root': self.clear,
             'py_obj_iter': self.iterator, 'py_obj_next': self.next,
@@ -67,8 +66,8 @@ class _ExtensionModel:
             'pcc_platform_abort': lambda: pytest.fail('invariant abort'),
         }
         _functions(Path(__file__).resolve().parents[2] / 'pcc/runtime/py/py_list.py',
-                   {'_list_extend_drop', '_list_extend_acquire',
-                    '_list_extend_bind_range', '_list_extend_iterable'}, self.ns)
+                   {'_list_extend_drop', '_list_extend_bind_range',
+                    '_list_extend_iterable'}, self.ns)
 
     def new(self, name, *, fresh=True, immortal=False):
         obj = _Object(name, immortal=immortal)
@@ -86,24 +85,12 @@ class _ExtensionModel:
         return value
 
     def boundary(self):
+        # The one collector never moves an object (item 2 (d)): a runtime
+        # boundary is a collection point, counted, and raw pointers stay
+        # valid. Disposed values still fail check().
         assert self.fresh is None, 'runtime boundary before NEW result publication'
-        if not self.relocate:
-            return
-        pinned = {self.load(slot, 0)[0] for slot in self.leases}
-        moved = {obj for obj in self.objects if obj.refs and not obj.immortal and obj not in pinned}
-        for obj in moved:
-            obj.generation += 1
-        def update(value):
-            if isinstance(value, tuple) and value[0] in moved:
-                return value[0].pointer()
-            return value
-        # Authoritative frame/TLS/container slots are rewritten, SSA is not.
-        for base, count in self.frames.items():
-            for offset in range(abs(count)):
-                address = base + offset * 8
-                self.memory[address] = update(self.memory.get(address))
-        self.pending = update(self.pending)
-        self.items = [update(value) for value in self.items]
+        if self.relocate:
+            self.collections += 1
 
     def alloc(self, size):
         self.next_address += 100
@@ -141,24 +128,8 @@ class _ExtensionModel:
     def unbind_range(self, ticket):
         self.leave(self.range_tickets.pop(ticket))
 
-    def acquire(self, slot):
-        self.boundary()
-        value = self.check(self.load(slot, 0))
-        if value is None:
-            return 0
-        if self.failure == 'lease-' + value[0].name:
-            return -1
-        assert slot not in self.leases
-        self.leases[slot] = 1
-        return 1
-
-    def release(self, slot, token):
-        self.boundary()
-        if token:
-            assert self.leases.pop(slot) == 1
-        return 0
-
     def copy(self, destination, source):
+        # pcc_gc_root_copy_borrowed: a status only; no lease (item 2 (d)).
         self.boundary()
         self.copy_count += 1
         if self.failure == 'copy-' + str(self.copy_count):
@@ -166,7 +137,7 @@ class _ExtensionModel:
         value = self.check(self.load(source, 0))
         value[0].refs += 1
         self.store(destination, 0, value)
-        return self.acquire(destination)
+        return 0
 
     def barrier(self, owner, slot, value):
         self.boundary()
@@ -256,12 +227,12 @@ class _ExtensionModel:
 @pytest.mark.parametrize('alias', (False, True))
 @pytest.mark.parametrize('failure', (
     None, 'copy-1', 'copy-2', 'iter', 'next', 'append',
-    'lease-iterator', 'lease-item', 'lease-StopIteration',
 ))
 def test_list_extend_iteration_owns_every_live_value(failure, relocate, alias):
     model = _ExtensionModel(failure, relocate, alias)
     model.run()
-    assert model.frames == {} and model.range_tickets == {} and model.leases == {} and model.fresh is None
+    assert model.collections > 0 if relocate else model.collections == 0
+    assert model.frames == {} and model.range_tickets == {} and model.fresh is None
     assert model.destination[0].refs == model.source[0].refs == 1
     if failure is None:
         assert model.pending is None
@@ -272,9 +243,6 @@ def test_list_extend_iteration_owns_every_live_value(failure, relocate, alias):
             'copy-1': 'cannot retain list extension input',
             'copy-2': 'cannot retain list extension input',
             'iter': 'iter-error', 'next': 'next-error', 'append': 'append-error',
-            'lease-iterator': 'cannot lease list extension value',
-            'lease-item': 'cannot lease list extension value',
-            'lease-StopIteration': 'StopIteration',
         }
         assert model.pending[0].name == expected[failure]
     survivors = {obj.name for obj in model.objects if obj.refs and not obj.immortal}
@@ -357,7 +325,7 @@ def test_extend_checks_pending_error_before_any_cleanup_or_next_call(name):
             if call.data[2] != "py_list_extend":
                 continue
             matched += 1
-            # Any lease/root retirement may run a finalizer, and any later
+            # Any root retirement may run a finalizer, and any later
             # user call can overwrite the iterator's TLS exception. Inspect
             # the pending error first and branch before either can occur.
             assert index + 1 < len(calls), "extend does not inspect its exception"

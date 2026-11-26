@@ -71,7 +71,9 @@ class MkdirRuntime(FileRuntime):
     def pathlike(self, value, events=None, error=None):
         owner = self.instance(Obj('class'))
         def fspath(captures, args):
-            assert self.leases.get(id(owner), 0) > 0
+            # One collector: the receiver is owned by a registered frame
+            # root, not leased (item 2 (d)).
+            assert not self.leases.get(id(owner), 0)
             assert self.frames
             if events is not None: events.append('path')
             if error is not None: self.error = error; return None

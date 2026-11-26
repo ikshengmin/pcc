@@ -9,7 +9,7 @@ RUNTIME = Path(__file__).resolve().parents[2] / 'pcc/runtime/py'
 class ListFactoryModel:
     def __init__(self, failure, pending, relocate):
         self.failure, self.pending, self.relocate = failure, pending, relocate
-        self.memory, self.frames, self.leases, self.refs = {}, {}, {}, {}
+        self.memory, self.frames, self.refs = {}, {}, {}
         self.native_frames, self.native_owners = [], {}
         self.no_park_depth = 0
         self.global_words = {
@@ -39,8 +39,6 @@ class ListFactoryModel:
             'pcc_gc_native_frame_bind_map': self.native_bind_map,
             'pcc_gc_native_frame_unbind_map': self.native_unbind_map,
             'pcc_gc_alloc': self.allocate, 'malloc': self.malloc,
-            'pcc_gc_foreign_lease_acquire': self.acquire,
-            'pcc_gc_foreign_lease_release': self.release,
             'pcc_gc_note_slot_write_barrier': self.barrier,
             'pcc_gc_backend4_zpage_register_owner_payload_span': self.span,
             'py_gc_track': self.track, 'pcc_gc_publish_initialized': self.track,
@@ -48,6 +46,7 @@ class ListFactoryModel:
             'pcc_py_gc_minor_graph_unlock': self.boundary,
             'pcc_gc_load_ptr': lambda owner, slot: self.load(slot, 0),
             'pcc_gc_pin': self.pin, 'pcc_gc_take_pinned_slot': self.take,
+            'pcc_gc_take_slot': self.take_slot,
             'py_err_occurred': lambda: self.pending is not None,
             'cstr': lambda value: value,
             'py_exc_new': self.exception, 'py_raise_owned': self.raise_owned,
@@ -118,7 +117,7 @@ class ListFactoryModel:
             self.check_shape(obj)
         if not self.relocate:
             return
-        protected = self.pins | {self.load(slot, 0) for slot in self.leases}
+        protected = set(self.pins)
         for obj in list(self.objects - protected):
             moved = obj + 100000
             for offset in (12, 16, 24, 32):
@@ -170,18 +169,6 @@ class ListFactoryModel:
         self.boundary()
         return None if self.failure == 'items' else self.stack(size)
 
-    def acquire(self, slot):
-        self.boundary()
-        if self.failure == 'lease':
-            return -1
-        self.leases[slot] = 1
-        return 1
-
-    def release(self, slot, token):
-        self.boundary()
-        assert self.leases.pop(slot) == token
-        return 0
-
     def barrier(self, owner, slot, value):
         self.boundary()
         assert self.load(slot, 0) == value and value in self.objects
@@ -230,6 +217,13 @@ class ListFactoryModel:
         assert obj in self.objects
         self.pins.add(obj)
 
+    def take_slot(self, slot):
+        # pcc_gc_take_slot: transfer the owner; nothing pinned (item 2 (d)).
+        obj = self.load(slot, 0)
+        assert obj in self.objects and obj not in self.pins
+        self.store(slot, 0, None)
+        return obj
+
     def take(self, slot, prior):
         obj = self.load(slot, 0)
         assert obj in self.pins and prior == 0
@@ -240,13 +234,13 @@ class ListFactoryModel:
 
 @pytest.mark.parametrize('relocate', (False, True))
 @pytest.mark.parametrize('pending', (None, 'original-error'))
-@pytest.mark.parametrize('failure', ('header', 'items', 'lease'))
+@pytest.mark.parametrize('failure', ('header', 'items'))
 def test_list_factory_failure_preserves_error_and_disposes_partial_header(failure, pending, relocate):
     model = ListFactoryModel(failure, pending, relocate)
     assert model.ns['py_list_new'](4) is None
     assert model.pending == (pending or 'list: out of memory')
     assert model.disposals == (0 if failure == 'header' else 1)
-    assert not model.objects and not model.frames and not model.leases and not model.pins
+    assert not model.objects and not model.frames and not model.pins
 
 
 @pytest.mark.parametrize('relocate', (False, True))
@@ -254,24 +248,21 @@ def test_list_factory_success_transfers_current_owner_after_frame_leave(relocate
     model = ListFactoryModel(None, None, relocate)
     result = model.ns['py_list_new'](4)
     assert result in model.objects and model.refs[result] == 1
-    assert not model.frames and not model.leases and not model.pins
+    assert not model.frames and not model.pins
     assert model.pending is None and model.disposals == 0
 
 
 @pytest.mark.parametrize('relocate', (False, True))
-def test_list_factory_handoff_reuses_live_address_lease(relocate):
+def test_list_factory_handoff_takes_its_owner_without_graph_transaction(relocate):
     model = ListFactoryModel(None, None, relocate)
     def forbidden_lock():
-        pytest.fail('a private leased factory result needs no graph transaction')
-    def leased_pin(obj):
-        assert any(model.load(slot, 0) == obj for slot in model.leases)
-        model.pin(obj)
+        pytest.fail('a private factory result needs no graph transaction')
     model.ns['pcc_py_gc_minor_graph_lock'] = forbidden_lock
     model.ns['pcc_py_gc_minor_graph_unlock'] = forbidden_lock
-    model.ns['pcc_gc_pin'] = leased_pin
+    model.ns['pcc_gc_pin'] = lambda obj: pytest.fail('the one collector takes no terminal pin')
     result = model.ns['py_list_new'](4)
     assert result in model.objects and model.refs[result] == 1
-    assert not model.frames and not model.leases and not model.pins
+    assert not model.frames and not model.pins
 
 
 @pytest.mark.parametrize('pending', (None, 'original-error'))
@@ -289,7 +280,7 @@ def test_single_allocation_factories_raise_only_when_no_error_pending(module, fu
         assert model.run(2) is None
         assert model.pending[0].message == (pending or message)
         assert model.allocations == 1 and model.raises == int(pending is None)
-        assert not model.leases and not model.pins
+        assert not model.pins
         model.clear_root(model.external, None)
         model.clear_error()
         assert all(value.refs == 0 for value in model.objects)

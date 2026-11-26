@@ -146,13 +146,13 @@ def test_owned_list_factory_moves_each_reference_before_publication(values, relo
     assert owner in model.objects and model.refs[owner] == 1
     assert model.owned_children() == model.children
     assert model.publications == 2
-    assert model.frames == model.initial_frames and not model.leases and not model.pins
+    assert model.frames == model.initial_frames and not model.pins
     assert model.pending is None
 
 
 @pytest.mark.parametrize('relocate', (False, True))
 @pytest.mark.parametrize('pending', (None, 'original-error'))
-@pytest.mark.parametrize('failure', ('header', 'items', 'lease'))
+@pytest.mark.parametrize('failure', ('header', 'items'))
 def test_owned_list_factory_failure_preserves_sources_and_pending_error(failure, pending, relocate):
     model = OwnedListFactoryModel(('a', 'b', 'a'), failure, pending, relocate)
     assert model.ns['py_list_from_owned_roots'](model.sources, 3, model.output) == -1
@@ -162,7 +162,7 @@ def test_owned_list_factory_failure_preserves_sources_and_pending_error(failure,
     assert model.pending == (pending or 'list: out of memory')
     assert model.disposals == (0 if failure == 'header' else 1)
     assert model.publications == 0
-    assert model.frames == model.initial_frames and not model.leases and not model.pins
+    assert model.frames == model.initial_frames and not model.pins
 
 
 @pytest.mark.parametrize('backend', (1, 2))
@@ -172,4 +172,4 @@ def test_count_free_nonmoving_construction_uses_markers_container_transaction(ba
     assert model.lock_events == ['container'] * 3
     assert model.owned_children() == model.children
     assert model.publications == 2
-    assert model.frames == model.initial_frames and not model.leases and not model.pins
+    assert model.frames == model.initial_frames and not model.pins

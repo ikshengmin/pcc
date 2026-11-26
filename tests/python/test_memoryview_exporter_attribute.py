@@ -73,8 +73,8 @@ def test_exporter_lookup_failure_leaves_view_and_exporter_owned(fail_at):
     calls = []
     def copy(dst, src):
         calls.append(None)
-        return -1 if len(calls) == fail_at else m.copy(dst, src)
-    m.ns.update(pcc_gc_root_copy_borrowed_lease=copy, pcc_gc_root_copy_lease=copy)
+        return -1 if len(calls) == fail_at else m.root_copy(dst, src)
+    m.ns.update(pcc_gc_root_copy_borrowed=copy, pcc_gc_root_copy=copy)
     assert _get(m, 2) is None and m.pending is not None
     assert len(calls) == fail_at and not m.leases and not m.pins
     assert [v.refs for v in m.objects[:len(before)]] == before

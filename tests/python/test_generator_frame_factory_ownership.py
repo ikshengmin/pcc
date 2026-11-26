@@ -150,7 +150,7 @@ def test_frame_factory_failure_preserves_pending_error(failure, message, pending
     assert model.pending == (pending or message)
     assert model.disposals == (0 if failure == 'header' else 1)
     assert model.exception_kinds == ([19] if failure in ('header', 'items') and pending is None else [])
-    assert not model.objects and not model.frames and not model.leases and not model.pins
+    assert not model.objects and not model.frames and not model.pins
     model.assert_local_pair()
 
 
@@ -164,7 +164,7 @@ def test_frame_factory_success_transfers_filled_current_owner(count, relocate):
     assert model.memory[result + 16] == count
     assert (model.collections > 0) == relocate
     assert model.pending is None and model.disposals == 0
-    assert not model.frames and not model.leases and not model.pins
+    assert not model.frames and not model.pins
     model.assert_local_pair()
 
 
@@ -178,7 +178,7 @@ def test_frame_factory_handoff_takes_its_owner_without_graph_transaction(relocat
     result = model.ns['py_gen_frame_new'](7)
     assert result in model.objects and model.refs[result] == 1
     model.check_shape(result)
-    assert not model.frames and not model.leases and not model.pins
+    assert not model.frames and not model.pins
     model.assert_local_pair()
 
 
@@ -188,7 +188,7 @@ def test_frame_factory_rejects_invalid_size_before_allocation(count, pending):
     model = FrameFactoryModel(count, pending=pending)
     assert model.ns['py_gen_frame_new'](count) is None
     assert model.pending == (pending or 'invalid generator frame size')
-    assert not model.objects and not model.frames and not model.leases and not model.pins
+    assert not model.objects and not model.frames and not model.pins
     assert model.local_events == []
 
 
@@ -202,7 +202,7 @@ def test_inline_entry_uses_one_local_pair_including_delegated_collectors(count, 
     length_offset = PYINLINEGENOBJECT_LENGTH_OFFSET if backend == 0 else 16
     assert model.memory[result + length_offset] == count
     model.assert_local_pair()
-    assert not model.frames and not model.leases and not model.pins
+    assert not model.frames and not model.pins
     assert model.pending is None and model.disposals == 0
 
 
@@ -216,7 +216,7 @@ def test_inline_factory_failure_retires_local_roots_and_preserves_error(failure,
     assert model.pending == (pending or message)
     assert model.disposals == (0 if failure == 'header' else 1)
     model.assert_local_pair()
-    assert not model.objects and not model.frames and not model.leases and not model.pins
+    assert not model.objects and not model.frames and not model.pins
 
 
 @pytest.mark.parametrize('count', (-1, 134217729))

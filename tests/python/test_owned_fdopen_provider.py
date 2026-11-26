@@ -56,6 +56,7 @@ class FileRuntime(Runtime):
             'pcc_platform_abort':lambda:pytest.fail('owned runtime aborted'),
             'pcc_gc_alloc':self.alloc_object,
             'pcc_gc_root_copy_borrowed_lease':self.copy_lease,
+            'pcc_gc_root_copy_borrowed':self.root_copy,
             'pcc_gc_foreign_lease_acquire':self.acquire,
             'py_bool_from_bit':lambda bit:self.true if bit else self.false,
             'py_text_codec_id':lambda obj:0 if obj.value.lower() in ('utf-8','utf8') else 1,

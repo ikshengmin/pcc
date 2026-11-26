@@ -21,8 +21,6 @@ class CacheMemory(_Memory):
     def __init__(self):
         super().__init__()
         self.frames = []
-        self.leases = {}
-        self.next_lease = 1
         self.registered_globals = set()
         self.mutex_bits = 0
         self.globals["py_None"] = self.none
@@ -48,12 +46,9 @@ class CacheMemory(_Memory):
             py_tls_exc_swap_slot=self.swap_error,
             pcc_gc_load_ptr=lambda _owner, slot: self.read(slot, 0),
             pcc_gc_scheduler_root_register_handle=self.register_global,
-            pcc_gc_root_copy_lease=self.copy_lease,
-            pcc_gc_foreign_lease_acquire=self.acquire,
-            pcc_gc_foreign_lease_release=self.release,
+            pcc_gc_root_copy=self.copy,
             pcc_py_gc_minor_graph_lock=lambda: None,
             pcc_py_gc_minor_graph_unlock=lambda: None,
-            pcc_platform_abort=lambda: (_ for _ in ()).throw(AssertionError("lease corruption")),
             py_obj_setattr=self.current_setattr,
             py_exc_new=lambda tag, message: (tag, self.text(message)),
         )
@@ -63,7 +58,6 @@ class CacheMemory(_Memory):
                       or node.name == "_module_name_key")]
         exec(compile(ast.Module(body=nodes, type_ignores=[]), str(CACHE), "exec"), self.ns)
         self.ns.update(
-            py_sys_modules_owner_adopt=self.ns["_sys_modules_adopt"],
             py_sys_modules_owner_drop=self.ns["_sys_modules_drop"],
             py_sys_modules_owner_finish=self.ns["_sys_modules_finish"],
         )
@@ -74,29 +68,15 @@ class CacheMemory(_Memory):
         self.registered_globals.add(slot)
         return self.malloc(8)
 
-    def acquire(self, slot):
-        value = self.read(slot, 0)
-        if not isinstance(value, _Block):
-            return 0
-        assert value.alive
-        token = self.next_lease
-        self.next_lease += 1
-        self.leases[token] = value
-        return token
-
-    def release(self, slot, token):
-        if token == 0:
-            return 0
-        value = self.leases.pop(token)
-        assert value is self.read(slot, 0) and value.alive
-        return 0
-
-    def copy_lease(self, dest, source):
+    def copy(self, dest, source):
+        # pcc_gc_root_copy: a status only; the one collector takes no lease.
         value = self.read(source, 0)
         assert self.read(dest, 0) is None
+        if isinstance(value, _Block):
+            assert value.alive
         self.incref(value)
         self.write(dest, 0, value)
-        return self.acquire(dest)
+        return 0
 
     def cas_mutex(self, slot, offset, expected, value, *_orders):
         old = self.mutex_bits
@@ -275,7 +255,7 @@ def test_replaced_parent_receives_child_in_its_current_namespace():
     child = m.import_module("pkg.child")
     assert replacement.fields["child"] is child
     assert "child" not in m.namespace(original)
-    assert not m.frames and not m.leases
+    assert not m.frames
 
 
 def test_removal_during_successful_initialization_raises_lookup_error():
@@ -427,7 +407,7 @@ def test_parent_importing_then_deleting_child_cannot_bypass_reinitialization_gua
     assert m.import_module("pkg.child") is None
     assert calls == ["child"]
     assert "per-instance globals" in m.error.text[1]
-    assert escaped[0].alive and not m.frames and not m.leases
+    assert escaped[0].alive and not m.frames
 
 
 def test_initializing_compiled_creator_survives_alias_header_unpin_and_collection():
@@ -437,7 +417,7 @@ def test_initializing_compiled_creator_survives_alias_header_unpin_and_collectio
         alias = m.import_module("provider")
         seen.append(alias)
         # A consumer retiring its own temporary header pin cannot retire the
-        # initializer's independent counted lease.
+        # initializer's independent counted owner.
         alias.pin = False
         m.phase = "initializer"
         m.gate("initializer")
@@ -445,10 +425,10 @@ def test_initializing_compiled_creator_survives_alias_header_unpin_and_collectio
     m.register("provider", initialize)
     result = m.import_module("provider")
     assert result is seen[0] and result.alive and not result.pin
-    assert m.moves > 0 and not m.frames and not m.leases
+    assert m.collections > 0 and not m.frames
 
 
-def test_extension_creator_keeps_independent_lease_through_exec_callback():
+def test_extension_creator_keeps_independent_owner_through_exec_callback():
     def execute(m, module):
         module.pin = False
         m.phase = "extension-exec"
@@ -457,35 +437,28 @@ def test_extension_creator_keeps_independent_lease_through_exec_callback():
     m = ExtensionMemory(execute)
     module = m.load_extension()
     assert module.alive and not module.pin
-    assert m.moves > 0 and not m.frames and not m.leases
-    assert all(value.kind != "raw" for value in m.leases.values())
+    assert m.collections > 0 and not m.frames
 
 
-def test_public_cache_reloads_registered_owner_after_alias_unpin_and_relocation():
+def test_public_cache_returns_registered_owner_after_alias_unpin():
     m = CacheMemory()
     alias = m.ns['py_sys_modules']()
     alias.pin = True
     m.unpin(alias)
     m.decref(alias)
-    old = m.globals['pcc_sys_modules_cache']
+    cache = m.globals['pcc_sys_modules_cache']
     assert 'pcc_sys_modules_cache' in m.registered_globals
-    copied = []
-    original_copy = m.copy_lease
-    def move_before_copy(destination, source):
-        assert source == 'pcc_sys_modules_cache'
-        assert old not in m.leases.values() and not old.pin
-        moved = m.object('dict')
-        moved.fields, moved.refs = old.fields.copy(), old.refs
-        for name in m.registered_globals:
-            if m.globals.get(name) is old:
-                m.globals[name] = moved
-        old.alive = False
-        copied.append(moved)
+    sources = []
+    original_copy = m.copy
+    def record_copy(destination, source):
+        sources.append(source)
         return original_copy(destination, source)
-    m.ns['pcc_gc_root_copy_lease'] = move_before_copy
+    m.ns['pcc_gc_root_copy'] = record_copy
+    refs = cache.refs
     result = m.ns['py_sys_modules']()
-    assert result is copied[0] and result.alive and not old.alive
-    assert not m.frames and not m.leases
+    assert result is cache and result.alive and not result.pin
+    assert sources == ['pcc_sys_modules_cache'] and cache.refs == refs + 1
+    assert not m.frames
 
 
 def test_registered_dotted_module_without_compiled_parent_remains_importable():
@@ -495,7 +468,7 @@ def test_registered_dotted_module_without_compiled_parent_remains_importable():
     assert module is m.module_cache.fields['filtered_parent.child']
     assert m.error is None
     assert 'filtered_parent' not in m.module_cache.fields
-    assert not m.frames and not m.leases
+    assert not m.frames
 
 
 def test_missing_parent_probe_preserves_real_allocation_error():
@@ -513,7 +486,7 @@ def test_missing_parent_probe_preserves_real_allocation_error():
     assert m.import_module('filtered_parent.child') is None
     assert m.error is errors[-1]
     assert m.error.text == 'parent lookup allocation failure'
-    assert not m.frames and not m.leases
+    assert not m.frames
 
 
 def test_absent_parent_does_not_replace_initializer_error():
@@ -526,4 +499,4 @@ def test_absent_parent_does_not_replace_initializer_error():
     assert m.import_module('filtered_parent.child') is None
     assert m.error is seen[0]
     assert 'filtered_parent.child' not in m.module_cache.fields
-    assert not m.frames and not m.leases
+    assert not m.frames

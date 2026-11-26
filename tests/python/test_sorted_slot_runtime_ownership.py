@@ -175,12 +175,12 @@ class SortModel(_ExtensionModel):
     def boundary(self):
         # The one collector never moves an object (item 2 (d) 4c): a runtime
         # boundary is a collection point, counted, and raw pointers stay
-        # valid. The base model's relocation still serves py_list's tests.
+        # valid, as in the base model.
         assert self.fresh is None, 'runtime boundary before NEW result publication'
         if getattr(self, 'depth', 0):
             return
         if self.relocate:
-            self.collections = getattr(self, 'collections', 0) + 1
+            self.collections += 1
 
     def fresh_copy(self, value):
         self.check(value)
@@ -297,8 +297,6 @@ class SortModel(_ExtensionModel):
         assert self.load(destination, 0) is None
         self.store(destination, 0, self.load(source, 0))
         self.store(source, 0, None)
-        if source in self.leases:
-            self.leases[destination] = self.leases.pop(source)
         return 0
 
     def drop(self, value):
@@ -346,7 +344,7 @@ def test_sorted_slots_stable_owners(values, key, compare, key_alias, reverse, re
     assert len(model.retargets) == int(len(values) > 1)
     assert model.depth == 0
     assert model.pending is None
-    assert model.leases == {} and model.frames == {model.external: 4}
+    assert model.frames == {model.external: 4}
     assert all(v[0].refs == 2 for v in result[0].payload)
     assert all(obj.refs == 0 for obj in model.objects
                if obj.name in ('list', 'arguments', 'key-result', 'comparison-result') and obj is not result[0])
@@ -369,7 +367,7 @@ def test_sorted_slots_error_preserves_primary_during_disposal(failure, relocate)
         'values-allocation': 'sorted: missing owned value',
         'retarget': 'sorted: cannot retarget work list payload',
     }[failure]
-    assert model.leases == {} and model.frames == {model.external: 4}
+    assert model.frames == {model.external: 4}
     source = model.load(model.external, 0)
     assert all(v[0].refs == 1 for v in source[0].payload)
     assert all(obj.refs == 0 for obj in model.objects
@@ -387,4 +385,4 @@ def test_sorted_registers_a_previously_unregistered_gc4_payload(relocate):
     ]
     assert model.payload_registrations == [(result.payload_base, result.capacity * 8)]
     assert result.payload_base not in model.freed
-    assert model.leases == {} and model.depth == 0
+    assert model.depth == 0
