@@ -1095,7 +1095,7 @@ in the relevant section or issue and removes the entry.
    COMPLETE5.630s/95928320 B. No production or gate change.
 
    Claims:
-   - none
+   - Scaffold integer ABI current ordinary result publication and exact argument cleanup model: Codex, Linux IR, 2026-11-26T20:01Z, area ci-scaffold-int-abi
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
