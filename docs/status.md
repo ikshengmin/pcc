@@ -992,8 +992,25 @@ in the relevant section or issue and removes the entry.
    on unchanged production source (3.73s); no hosted acceptance
    inferred.
 
+   Generator frame root initialization (real IR, 2026-11-26):
+   hosted coverage artifact15145043938 all25 FAIL obsolete "borrowed
+   owner overwritten" model reproduced on current unchanged codegen
+   locally (4.91s). Production emit_generator_borrowed_owner_retirement
+   deliberately clears both private nonowning ABI copies at completed
+   resume return, after last use; activation failure never publishes.
+   Model still requires original borrowed values before registration,
+   full owning NULL initialization, exact restore/reload/publication,
+   and now exact local/mapped ABI CFG retirement. Each reachable rooted
+   return must clear both borrowed physical slots once, only after
+   frame retirement with no following read/callback/effect except
+   recursion cleanup; activation-failure return must stay uninitialized.
+   All original20 real IR shape/toggle/target cases and five mutation
+   controls preserved; three new controls reject absent/early/read
+   after terminal clear. All28 PASS (5.23s) on unchanged production.
+   No native GC coverage claim or gate waiver.
+
    Claims:
-   - Generator borrowed ABI terminal retirement and root initialization CFG model: Codex, Linux IR, 2026-11-26T19:34Z, area ci-generator-root-init
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and

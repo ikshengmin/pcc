@@ -105,20 +105,57 @@ def _check(text):
                 roots.require_owning(identity)
                 owning.add(identity)
 
-        # Incoming gen/frame are borrowed, not empty owned cells. Prove their
-        # original ABI values remain in their distinct registered cells.
+        # Incoming gen/frame are borrowed, not empty owned cells. Their
+        # original ABI values remain until the completed body's terminal
+        # retirement; the activation-failure return never publishes them.
+        exits = roots.assert_frame_exits(exact_abi=True)
+        assert all(len(kinds) == 1 for kinds in exits.values())
+        rooted_returns = {name for name, kinds in exits.items() if kinds == {True}}
+        assert rooted_returns, "resume must reach a rooted return"
+        assert any(kinds == {False} for kinds in exits.values()), (
+            "fixture must exercise the uninitialized activation failure"
+        )
         assert len(borrowed) == 1 and borrowed[0][3] == 2
         registration, base, offset, _ = borrowed[0]
         borrowed_cells = [(base, offset), (base, offset + roots.POINTER_BYTES)]
+        retirement = {}
         for parameter, identity in zip(function.args, borrowed_cells, strict=True):
             stores = [(block, index, ins) for block, index, ins in roots.rows
                       if ins.kind == "store" and roots.slot(ins.data[3]) == identity]
-            assert len(stores) == 1, "borrowed ABI owner was overwritten"
-            block, index, ins = stores[0]
-            assert block.name == "entry" and index < registration
+            incoming = [(block, index, ins) for block, index, ins in stores
+                        if block.name == "entry" and index < registration]
+            assert len(incoming) == 1, "borrowed ABI owner initialized exactly once"
+            block, index, ins = incoming[0]
             assert ins.data[0].is_ptr and ins.data[1] == parameter.name, (
                 "borrowed ABI owner must retain its incoming value"
             )
+            clears = [(block, index, ins) for block, index, ins in stores
+                      if not (block.name == "entry" and index < registration)]
+            assert len(clears) == len(rooted_returns), (
+                "borrowed ABI owner must clear once on every rooted return"
+            )
+            assert {block.name for block, _, _ in clears} == rooted_returns, (
+                "borrowed ABI owner may clear only at its rooted return"
+            )
+            for block, index, ins in clears:
+                assert ins.data[0].is_ptr and ins.data[1] == "null", (
+                    "borrowed ABI owner terminal clear must not overwrite with a value"
+                )
+                retirement.setdefault(block.name, []).append(index)
+
+        # Exact ABI frame ledger proved that every root frame was retired on
+        # all reachable returns. The borrowed NULL stores are terminal, not
+        # a source-owner release: no read, callback, frame leave, or other
+        # effect is permitted after the first clear except recursion cleanup.
+        for name, clears in retirement.items():
+            block = next(block for block in blocks if block.name == name)
+            assert len(clears) == 2
+            for index, ins in enumerate(block.instructions):
+                if index < min(clears):
+                    continue
+                assert index in clears or roots.called(ins, "py_recursion_leave"), (
+                    "borrowed ABI owner cleared before its terminal retirement"
+                )
 
         # Frame takes identify the physical legacy local cells independently
         # of source-variable spelling, generated-name prefixes or SSA indices.
@@ -155,7 +192,6 @@ def _check(text):
         # later explicit thread/GC safepoint, not merely the eventual restore.
         assert any(roots.called(ins, "pcc_thread_safepoint_gate")
                    or roots.called(ins, "pcc_gc_safepoint") for _, _, ins in roots.rows)
-        roots.assert_frame_exits()
         records.append((function, roots, legacy, borrowed_cells))
     return records
 
@@ -171,6 +207,7 @@ def test_frame_roots_are_empty_before_publication_and_preserve_restores(
 
 @pytest.mark.parametrize("mutation", (
     "missing-null", "late-null", "borrowed-cleared", "restore-dropped", "owner-cleared",
+    "borrowed-retire-dropped", "borrowed-retire-early", "borrowed-retire-read",
 ))
 def test_root_initialization_contract_rejects_unsafe_changes(tmp_path, monkeypatch, mutation):
     text = _emit(tmp_path, monkeypatch, "ordinary", "1", TARGETS[0])
@@ -192,6 +229,26 @@ def test_root_initialization_contract_rejects_unsafe_changes(tmp_path, monkeypat
         parameter = function.args[0].name
         store = re.search(r"^  store ptr %" + re.escape(parameter) + r", ptr %[^\n]+\n", body, re.M).group(0)
         body = body.replace(store, store.replace("%" + parameter, "null", 1), 1)
+    elif mutation in ("borrowed-retire-dropped", "borrowed-retire-early", "borrowed-retire-read"):
+        retirement = next(ins for block, _, ins in roots.rows
+                          if block.terminator.kind in ("ret", "ret_void")
+                          and ins.kind == "store" and ins.data[1] == "null"
+                          and roots.slot(ins.data[3]) == borrowed[0])
+        clear = re.search(
+            r"^  store ptr null, ptr %" + re.escape(retirement.data[3]) + r"\n",
+            body, re.M,
+        )
+        assert clear is not None
+        if mutation == "borrowed-retire-dropped":
+            body = body[:clear.start()] + body[clear.end():]
+        elif mutation == "borrowed-retire-read":
+            read = "  %test.borrowed.after.retirement = load ptr, ptr %" + retirement.data[3] + "\n"
+            body = body[:clear.end()] + read + body[clear.end():]
+        else:
+            enter = re.search(r"^  call void[^\n]*@pcc_gc_frame_enter(?:_local)?(?:_mapped)?\([^\n]*, ptr %"
+                              + re.escape(borrowed[0][0]) + r"\)\n", body, re.M)
+            assert enter is not None
+            body = body[:enter.end()] + clear.group(0) + body[enter.end():]
     else:
         restore = next(ins for _, _, ins in roots.rows
                        if roots.called(ins, "py_gen_frame_take"))
