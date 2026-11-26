@@ -2230,12 +2230,20 @@ in the relevant section or issue and removes the entry.
    0.05479 s. Exact record/word/token outputs agree; assembled. 616
    focused typed tests passed; old implementation fails new work-count
    witness; changed module emits x86 Linux IR. Whole-stage CI pending.
-   Next: typed publish and remaining high-share owners, equal-ceiling
-   Stage2/3 CI.
+   Typed publish screen on actual 200,634 post-pass records from the same
+   frozen current compiler IR, fresh builder/identical metadata per arm:
+   caching ordinary relocation symbol validation 0.52782 -> 0.53579 CPU s
+   (3/5 wins; copy control noisy); scalar-lane fast path 0.50127 -> 0.48655 s
+   (4/5; copy control also faster). Exact sections, symbols and counters
+   agreed but neither candidate has compelling normalized benefit; neither
+   is admitted. Next: higher-share instruction selection and stack-map/link
+   owners, equal-ceiling Stage2/3 CI. This status/release commit intentionally
+   triggers current master validation of the accumulated reviewed changes;
+   no new production change in this unit, no CI acceptance implied.
    [Phase investigation](investigations/stage2-worker-budget-parity-45643044565.md).
 
    Claims:
-   - AArch64 typed publication compile-time optimization: Codex, Linux, 2026-11-26T15:02Z, area backend
+   - none
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
