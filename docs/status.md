@@ -2233,7 +2233,19 @@ in the relevant section or issue and removes the entry.
    C++ expression capabilities remain explicit frontiers. Actual unchanged
    NumPy 2.4.4 halffloat.cpp (cef1d814...cd26) moves from missing assert.h
    to missing stdlib.h, not an emitted object or NumPy build. Next NumPy
-   C++: owned C header spelling of cstdlib, then real generated config.
+   C++ follow-up: owned `<stdlib.h>` acquires the same `<cstdlib>`
+   declarations and explicitly imports its std-only callback, abs and div
+   overload sets into global scope, retaining canonical symbol identities,
+   language linkage and unsupported value/function/locale contracts. Both
+   inclusion orders and repeated header control pass. The wide `::abs(long)`
+   emits its genuine i64 std overload relocation, not a narrowed C `abs` or
+   fake implementation. 84 focused host tests passed. Real Linux ELF
+   `::abs(-::atoi("25"))+std::atoi("17")` returned 42 with empty streams
+   using a bounded owned runtime archive with current `atoi` source/object
+   hashes; independent G++ 14.2 agrees. Strict whole-current-runtime fixture
+   is added, hosted execution pending. Unchanged NumPy halffloat.cpp now
+   passes stdlib.h acquisition and stops on string.h (same original SHA).
+   Next NumPy C++: owned string.h spelling, then real generated config.
    The opt-in Go source probe reached `internal/bytealg/bytealg.go:9:2`; no dependency-closure executable exists.
    See the
    [closure audit](investigations/go-math-bits-original-closure-frontier.md).
@@ -2271,7 +2283,7 @@ in the relevant section or issue and removes the entry.
    neither an external token nor a caller-provided crate named core waives it.
 
    Claims:
-   - Owned C++ stdlib.h spelling and overload ownership (NumPy halffloat next blocker): Codex, Linux, 2026-11-26T16:16Z, area frontend-cpp
+   - none
 5. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:
