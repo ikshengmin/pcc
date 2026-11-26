@@ -4164,12 +4164,39 @@ in the relevant section or issue and removes the entry.
    2.315s / 76,566,528B; quiet measurement 21.771s / 17,391,616B,
    unchanged 1 GiB tree guard / 2 GiB reserve. REJECT this complex
    per-thread accounting proposal below the 3% ceiling; no production
-   source change and no actual-handler speed claim. Next attribute the
-   terminal release/finish ownership chain or another larger structural
-   lifecycle owner before selecting the next candidate.
+   source change and no actual-handler speed claim.
+
+   Actual terminal decref owner screen (Linux, Codex). Existing exact
+   managed terminal free attribution after a5b2bb00 is 34.45/request,
+   the full upper count for all direct and prepared finish paths. Owned
+   C native ELF e5c80cacaaf6047b3282fbdc4ddf0b34899f17b62f380d7015139203aea6613a,
+   archive fa4ef058 (py_obj/dealloc/GC backend/thread-kernel source
+   byte-identical to current ae2be257, not current whole compiler).
+   Three exact sole-owner float, empty list, two-tagged-item tuple
+   shapes; 1M complete allocate+release operations per arm, five
+   alternating blocks with same-binary unchanged public decref
+   control. All 75 runs exact allocation telemetry, no double frees,
+   identical requested/usable balance after subtracting actual 8 KiB
+   young-log chunks. Existing proven release_known relative to ordinary
+   py_decref saves 2.901/11.685/7.167 ns, manually identical prepared
+   finish record 3.181/-9.587/8.492 ns. A controlled callback-free
+   reference keeps count-zero mark, freeing note, untrack and actual
+   trash/deallocation owner in order, but omits general finish
+   dispatch and record plumbing ONLY on these three exact no-weakref
+   fixture objects; its savings 15.251/8.433/17.248 ns each 5/5,
+   max unchanged control drift 14.440/12.297/7.433 ns. It cannot
+   substitute a general terminal ABI. Even generously weighting
+   largest controlled difference by every terminal free gives
+   0.594 us/request (1.05% of ~56.4 us), before mandatory callback,
+   weakref, audit, resurrection paths and real direct-owner fraction.
+   Guarded build2.845s / 76,115,968 B, measurement19.689s /
+   20,430,848 B, unchanged 1 GiB tree cap / 2 GiB reserve.
+   REJECT terminal refactor; no production code or handler speed claim.
+   Next seek structural compiler ownership/allocation elimination on
+   actual remaining high-count sites rather than repeat tiny terminal,
+   accounting, TLS, empty-root or factory candidates.
 
    Claims:
-   - Actual native terminal decref and prepared finish owner attribution: Codex, Linux, 2026-11-26T23:13Z, area runtime-gc-terminal-release
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
    - Hosted Stage1 inline error-edge route parity: Codex, Linux, 2026-11-26T22:42Z, area selfhost (bootstrap_platform.py only; existing direct inline edge semantics and actual class_gen A/B before enablement)
 4. **Source-language frontends**, in parallel with item 2 (different files;
