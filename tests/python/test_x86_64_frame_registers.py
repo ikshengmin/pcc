@@ -730,7 +730,7 @@ def test_private_analysis_temporaries_retire_before_later_allocations():
     # would itself extend the lifetimes this test is intended to verify.
     scan = ("overlapped", "block_starts", "starts", "end_falls", "falls",
             "labels", "ends", "end_targets", "depth_delta", "slot_widths",
-            "rejected", "roots", "weights")
+            "rejected", "roots", "weights", "block_by_start", "depth_points")
     retired = {
         "block_events": scan,
         "live_in": scan + ("block_first",),
@@ -829,3 +829,32 @@ def test_retired_analysis_executes_loop_pointer_read_and_callee_saves(tmp_path):
         executable.chmod(0o755)
         result = subprocess.run([str(executable)], capture_output=True, timeout=10)
         assert result.returncode == sum(range(1, 5)) + 7, (name, result.stderr)
+
+
+def test_sparse_ownership_with_prefix_aliases_and_overlapping_backedges():
+    # Textual label prefixes before the first instruction still map to the
+    # entry block. Two coincident-depth loop starts and an outer/prefix
+    # backedge must leave the same register ranking and pointer retirement.
+    prefix = PROLOGUE[:6] + [".Lprefix:", ".Lalias:"] + PROLOGUE[6:-1]
+    body = [
+        "  mov QWORD PTR [rbp - 8], rdi",
+        ".Louter:", "  mov QWORD PTR [rbp - 16], 4",
+        ".Linner:", ".Lsamepos:", "  mov r10, QWORD PTR [rbp - 16]",
+        "  sub r10, 1", "  mov QWORD PTR [rbp - 16], r10", "  jne .Linner",
+        "  mov rax, QWORD PTR [rbp - 8]", "  test rax, rax", "  jne .Louter",
+        "  jne .Lprefix",
+    ]
+    lines = prefix + PROLOGUE[-1:] + body + EPILOGUE
+    result = keep_frame_slots_in_registers(
+        lines, _func((8, PTR), (16, I64)), _plan(), windows=False,
+    )
+    assert result == prefix + [
+        "  mov QWORD PTR [rbp - 16], 0", "  mov QWORD PTR [rbp - 8], 0",
+        PROLOGUE[-1], "  mov QWORD PTR [rsp + 16], r12",
+        "  mov r12, rdi",
+        ".Louter:", "  mov rbx, 4",
+        ".Linner:", ".Lsamepos:", "  mov r10, rbx",
+        "  sub r10, 1", "  mov rbx, r10", "  jne .Linner",
+        "  mov rax, r12", "  test rax, rax", "  jne .Louter",
+        "  jne .Lprefix",
+    ] + EPILOGUE[:1] + ["  mov r12, QWORD PTR [rsp + 16]"] + EPILOGUE[1:]

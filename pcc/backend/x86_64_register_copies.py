@@ -669,14 +669,9 @@ def _dead_moves(
     while block_id < block_count:
         block_last.append(block_first[block_id + 1] - 1 if block_id + 1 < block_count else count - 1)
         block_id += 1
-    line_block = [0] * count
-    block_id = 0
-    while block_id < block_count:
-        line_index = block_first[block_id]
-        while line_index <= block_last[block_id]:
-            line_block[line_index] = block_id
-            line_index += 1
-        block_id += 1
+    # Only terminators and label coordinates need owners. A terminator
+    # precedes the exact next block start (or EOF); every label is a start.
+    block_by_start = {start: block for block, start in enumerate(block_first)}
     successors: list[list[int]] = []
     falls = [1] * block_count
     block_id = 0
@@ -685,13 +680,13 @@ def _dead_moves(
         block_id += 1
     end_index = 0
     while end_index < len(ends):
-        owner = line_block[ends[end_index]]
+        owner = block_by_start.get(ends[end_index] + 1, block_count) - 1
         target = end_targets[end_index]
         if target:
             target_line = labels.get(target, -1)
             if target_line < 0:
                 return None
-            successors[owner].append(line_block[target_line])
+            successors[owner].append(block_by_start[target_line])
         falls[owner] = end_falls[end_index]
         end_index += 1
     block_id = 0
@@ -699,6 +694,9 @@ def _dead_moves(
         if falls[block_id]:
             successors[block_id].append(block_id + 1)
         block_id += 1
+
+    # Block owner coordinates are no longer needed by the liveness solver.
+    block_by_start.clear()
 
     # Strong liveness: a droppable move contributes its reads only while what
     # it writes is live, so moves that only feed each other (a byte write

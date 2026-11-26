@@ -490,3 +490,29 @@ def test_written_destination_expires_without_killing_other_index_copy():
         "  mov r10, r12", "  add r10, 1",
         "  mov rdi, QWORD PTR [r10 + r13*8]", "  call g", "  ret",
     ]
+
+
+def test_sparse_owner_coordinates_match_dense_reference_for_gaps_and_aliases():
+    # Empty text blocks between adjacent labels, sparse terminators and
+    # targets reached by more than one label. Include the EOF terminator.
+    count = 37
+    reads = [0] * count
+    writes = [0] * count
+    kinds = [0] * count
+    reads[31] = copies._RAX
+    writes[2] = copies._RAX
+    kinds[2] = 1
+    writes[21] = copies._RCX
+    kinds[21] = 1
+    labels = {"entry": 0, "a": 9, "alias": 9, "adjacent": 10, "last": 31}
+    ends = [5, 15, 24, 36]
+    targets = ["alias", "last", "entry", ""]
+    falls = [1, 0, 1, 0]
+    args = (count, reads, writes, kinds, labels, ends, targets, falls)
+    assert copies._dead_moves(*args) == reference_dead_moves(*args)
+    # Owner lookup is not sensitive to terminator metadata iteration order.
+    order = [2, 0, 3, 1]
+    reordered = (count, reads, writes, kinds, labels,
+                 [ends[i] for i in order], [targets[i] for i in order],
+                 [falls[i] for i in order])
+    assert copies._dead_moves(*reordered) == reference_dead_moves(*reordered)

@@ -333,18 +333,6 @@ def _rewrite_slot_move(text: str, register: str) -> str:
     return "  mov " + first + ", " + register
 
 
-def _block_of(block_first: list[int], line_index: int) -> int:
-    low = 0
-    high = len(block_first) - 1
-    while low < high:
-        middle = (low + high + 1) // 2
-        if block_first[middle] <= line_index:
-            low = middle
-        else:
-            high = middle - 1
-    return low
-
-
 def _solve_frame_liveness(
     successors: list[list[int]], uses: list[int], kills: list[int],
     live_in: list[int], live_out: list[int],
@@ -521,6 +509,9 @@ def keep_frame_slots_in_registers(
         if not block_first or block_first[len(block_first) - 1] != start:
             block_first.append(start)
     block_count = len(block_first)
+    # Every terminator's next line (except EOF) and every later label is
+    # an exact block start. Prefix labels belong to the first block.
+    block_by_start = {start: block for block, start in enumerate(block_first)}
 
     successors: list[list[int]] = []
     falls: list[bool] = []
@@ -531,13 +522,13 @@ def keep_frame_slots_in_registers(
         block_id += 1
     end_index = 0
     while end_index < len(ends):
-        owner = _block_of(block_first, ends[end_index])
+        owner = block_by_start.get(ends[end_index] + 1, block_count) - 1
         target = end_targets[end_index]
         if target:
             target_line = labels.get(target, -1)
             if target_line < 0:
                 return lines
-            successors[owner].append(_block_of(block_first, target_line))
+            successors[owner].append(block_by_start.get(target_line, 0))
         falls[owner] = end_falls[end_index]
         end_index += 1
     block_id = 0
@@ -546,26 +537,30 @@ def keep_frame_slots_in_registers(
             successors[block_id].append(block_id + 1)
         block_id += 1
 
-    # Loop depth from backward jumps weights each access.
-    depth_delta = [0] * (count + 1)
+    # Loop depth from backward jumps weights each access. Only endpoints
+    # can change depth; merge their ordered coordinates with access events
+    # rather than visiting every intervening (often unrelated) text line.
+    depth_delta: dict[int, int] = {}
     end_index = 0
     while end_index < len(ends):
         target = end_targets[end_index]
         if target:
             target_line = labels[target]
             if target_line <= ends[end_index]:
-                depth_delta[target_line] += 1
-                depth_delta[ends[end_index] + 1] -= 1
+                depth_delta[target_line] = depth_delta.get(target_line, 0) + 1
+                after = ends[end_index] + 1
+                depth_delta[after] = depth_delta.get(after, 0) - 1
         end_index += 1
     weights: dict[int, int] = {}
     depth = 0
+    depth_points = sorted(depth_delta)
     position = 0
     access_index = 0
     access_total = len(access_lines)
     while access_index < access_total:
         line_index = access_lines[access_index]
-        while position <= line_index:
-            depth += depth_delta[position]
+        while position < len(depth_points) and depth_points[position] <= line_index:
+            depth += depth_delta[depth_points[position]]
             position += 1
         offset = access_offsets[access_index]
         if offset in slot_widths and offset not in rejected and offset not in roots:
@@ -587,12 +582,14 @@ def keep_frame_slots_in_registers(
     overlapped.clear()
     block_starts.clear()
     starts.clear()
+    block_by_start.clear()
     end_falls.clear()
     falls.clear()
     labels.clear()
     ends.clear()
     end_targets.clear()
     depth_delta.clear()
+    depth_points.clear()
     slot_widths.clear()
     rejected.clear()
     roots.clear()
@@ -607,10 +604,15 @@ def keep_frame_slots_in_registers(
     uses = [0] * block_count
     kills = [0] * block_count
     access_index = 0
+    owner = 0
     while access_index < access_total:
         bit = bit_of.get(access_offsets[access_index], -1)
         if bit >= 0:
-            owner = _block_of(block_first, access_lines[access_index])
+            line_index = access_lines[access_index]
+            # Accesses arrive in increasing text order, so the owner
+            # cursor visits each intervening block start only once.
+            while owner + 1 < block_count and block_first[owner + 1] <= line_index:
+                owner += 1
             block_events[owner].append(access_index)
             mask = 1 << bit
             if access_stores[access_index]:

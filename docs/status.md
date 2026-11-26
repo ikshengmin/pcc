@@ -2662,9 +2662,54 @@ in the relevant section or issue and removes the entry.
        direct capture 40 functions/6,950 blocks/25,329 instructions, zero
        fallback/no libpython edge, native ELF emitted (873,432 bytes,
        sha256 6a58aa90d0abcb2df299967fda68736ba8af312271e0883df560b6e4de06aee0).
+       Sparse x64 block ownership (Codex, Linux, 2026-11-26, base
+       f0b17ed3): replace frame-promotion binary searches for every
+       access/branch and dense loop depth line sweep with exact block-start
+       coordinate maps, sorted loop-boundary events and a monotone access
+       cursor. Remove dead-move liveness's per-line block-owner array:
+       every terminator precedes the next block start (or EOF), and labels
+       are starts (frame prefix labels map to entry). Retire new private
+       maps and events before liveness allocations. Preserve overlapping
+       backedges, duplicate/adjacent labels, partial pointer retirements,
+       unknown destinations and existing ordering. Current 625-source
+       strict direct contextual snapshot (zero fallback/no py_cpy edge):
+       c_codegen and worker_resource_plan indexed input hashes unchanged
+       from prior unit. Actual streamed c_codegen base capture across
+       1,039 functions: frame input 1,732,758 lines -> 1,696,653, copy
+       input 1,632,673 -> 1,519,962. Five quiet alternating identical
+       input replay triples plus same-base control: combined owner CPU
+       9.268 -> 8.739 s (-5.708%,5/5), control9.505, normalized -6.587%
+       5/5 vs control drift3.208%; wall normalized -7.933%5/5.
+       Frame alone CPU4.221 -> 3.665 s (-13.166%,5/5), control4.339,
+       normalized -13.782%5/5 vs drift4.258%; copy owner alone neutral
+       (normalized -0.464%4/5 within drift3.480%). Replay peak RSS
+       63,720 -> 63,656 KiB, control63,736, normalized -0.129%4/5.
+       All15 exact line digests for both owners (frame sha256
+       578e41d42737077195833624461f4892ad01b4c1b000e795be48c401585fcfb6;
+       copy ba54e21e1ab6b7d926c1e85dd3792cc755ea1acbe068515974dfd7c524025a81).
+       Actual large c_codegen streamed ELF byte-identical (13,508,968 bytes,
+       sha256 8b6b5c7627edd2d289dd507d7d6522cabc7aaf26f421bf184c08a962cbba2277).
+       Five quiet full streamed worker_resource_plan triples: backend+obj
+       CPU5.830 -> 5.532 s (-5.112%,5/5), control5.627, normalized -1.975%
+       5/5 within control drift3.823%; full CPU normalized -2.832%5/5,
+       wall -3.372%5/5; peak RSS81,156 -> 81,100 KiB, control81,360,
+       normalized -0.212%4/5. All15 ELF objects exact (1,739,176 bytes,
+       sha256 42d60bb810624c8f1b6ac655d6a554ee98a09c32b709acebeb5c974a1b2b58cc).
+       Full worker directional improvement within drift, not a whole
+       Stage1 or native-compiler speed claim. 389 focused tests pass,
+       including dense-reference sparse labels/terminators and overlapping
+       prefix/backedges with pointer-lifetime checks. Exact changed source
+       625-closure direct capture frame43 functions/8,475 blocks/30,178
+       instructions and copy40/7,078/25,918, zero fallback/no libpython;
+       actual native ELF objects emitted: frame1,054,088 bytes sha256
+       978a5e7d045ed7555baaff841499fc5795d4c0caba9def75a2376e0253b14ae4,
+       copy893,824 bytes sha256
+       543f5edee108d37661c050a68c974a2457075a71b2625f2875808729d6ca4298.
        Next (latest actual Linux CI codegen priority): (1) the remaining
-       1,546.7 worker-s function-emission owner, especially dead-move
-       and frame-promotion repeated block/ownership scans; (2) J2 (e) one error
+       1,546.7 worker-s function-emission owner, particularly x64 packed
+       stack-map emission routes currently recreating stable text hash
+       buckets for every block instead of using the existing integer route
+       spans (AArch64 indexed owner already uses these); (2) J2 (e) one error
        landing per function after registering temporaries once, measured
        against the actual CI block inventory; (3) the allocation model
        toward LLVM parity, then remove passes that no longer fire;
@@ -2790,7 +2835,6 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Ordinary list/tuple/iterator ownership allocation attribution and generic non-escape proof: Codex, Linux, 2026-11-26T18:31Z, area runtime-codegen-allocation
-   - Stage1 x64 sparse block ownership and frame event projections: Codex, Linux, 2026-11-26T18:26Z, area backend-x64-frame
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
