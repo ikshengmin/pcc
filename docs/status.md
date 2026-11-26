@@ -4229,8 +4229,38 @@ in the relevant section or issue and removes the entry.
    timed; no production or actual-handler speed claim. Continue
    representation-preserving structural lifecycle attribution.
 
+   Actual class special-call temporary root-group owner ceiling (Linux,
+   Codex). Existing actual raw allocator attribution 2.1 continuation
+   registry nodes/request, 352.8 requested B (168 B average, consistent
+   with 56 B header +14 roots; class _special_open uses14, dict groups7/16).
+   Raw allocation alone measured only ~0.15us/request, not a structural
+   candidate. Existing C ABI archive fa4ef058 py_class, root registry and
+   root operations exact current blobs 5b49f0c2/e4e84fb1/b487c637.
+   Native C screen calls the archive's actual private _special_open/close
+   functions, 500k iterations, five alternating blocks including exact
+   unchanged controls per shape; ELF
+   4910b273de8fe4e2f4ce9ac55facf7b307115af662e693394cc4011264bdf294.
+   50 formal runs +7 smoke all passed, exact root-head restoration,
+   requested/usable accounting, retained outer-list count, no managed
+   allocation/double frees or error. All-empty base367.642ns, same registry
+   live-only cleanup reference295.368ns, paired saving60.148ns (4/5,
+   max control drift36.342ns); whole no-callback all-empty reference
+   without registration188.444ns, paired174.482ns (5/5). One tagged
+   binding live-only saving51.874ns (5/5, control22.822ns), three-slot
+   two-counted+tagged saving77.202ns (5/5, control105.992ns, inconclusive).
+   The whole-empty reference is not valid for a general callback-bearing
+   special call. Even weighting every actual registry node by this
+   generous whole-empty saving gives 0.366us/request (~0.65% of56.4us);
+   weighting by largest entire measured baseline incl. live publication
+   and required releases (463.482ns) gives 0.973us (~1.73%), below3%.
+   Complete guard11.774s/73,793,536B, unchanged1GiB cap/2GiB reserve.
+   REJECT costly source occupancy probe and stack/cleanup specialization;
+   no production source or whole-handler performance claim. Next use
+   cold opt-in live object-family slab size histogram to identify actual
+   Stage2 allocator internal padding before any size-class redesign.
+
    Claims:
-   - Actual native class special-call root-group owner cost/occupancy attribution: Codex, Linux, 2026-11-26T23:36Z, area runtime-gc-special-root-group-attribution
+   - Actual live managed object-family slab size histogram (cold coordinator manifests-ready diagnostic only): Codex, Linux, 2026-11-26T23:43Z, area runtime-gc-managed-size-attribution
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
    - Hosted Stage1 inline error-edge route parity: Codex, Linux, 2026-11-26T22:42Z, area selfhost (bootstrap_platform.py only; existing direct inline edge semantics and actual class_gen A/B before enablement)
 4. **Source-language frontends**, in parallel with item 2 (different files;
