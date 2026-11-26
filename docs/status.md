@@ -2538,9 +2538,45 @@ in the relevant section or issue and removes the entry.
        All15 full streamed ELF objects byte-identical (1,739,192 bytes,
        sha256 11b507bf67fd12674abef4d977a093bc7261cd6e58b052a695727383f77eac63).
        No whole Stage1 bootstrap timing or native compiler speed claim.
-       Next (latest actual Linux CI codegen priority): (1) the 1,546.7
-       worker-s function-emission owner, especially x64 register-copy,
-       dead-move and frame-promotion repeated scans; (2) J2 (e) one error
+       Register-copy sparse active state (Codex, Linux, 2026-11-26, base
+       ca08b6b9): the actual c_codegen x64 function emission profile found
+       562 samples in copy forwarding and 156 in instruction effects.
+       Replace repeated 16-register copy/immediate invalidation and
+       address-presence scans with live bitmasks: clear written destinations
+       and constants in a mask operation, examine only live source
+       dependencies, never consult a stale array row. Preserve partial
+       writes, label/unknown-instruction barriers and address/index rules.
+       Current strict contextual 625-source direct indexed capture
+       (no fallback or py_cpy edge) c_codegen 1,039 functions, 95,041
+       blocks, 358,843 instructions, worker_resource_plan 105/13,050/47,696.
+       Capture actual base streamed function input: 1,632,673 assembly
+       lines across 1,039 functions, 1,519,962 output lines. Five quiet
+       base/candidate/same-base control triples (alternating order) replay
+       identical inputs: owner CPU 5.799 -> 5.318 s (-8.294%,5/5), control
+       7.056; normalized -10.913%5/5, control drift5.591%; normalized wall
+       -10.339%5/5. Replay peak RSS174,448 -> 174,624 KiB, control174,448,
+       normalized +0.079% (tiny replay variation, no memory win claimed).
+       All15 owner output digests exact (sha256
+       ba54e21e1ab6b7d926c1e85dd3792cc755ea1acbe068515974dfd7c524025a81).
+       Actual full c_codegen ELF exact 13,508,968 bytes, sha256
+       8b6b5c7627edd2d289dd507d7d6522cabc7aaf26f421bf184c08a962cbba2277.
+       Five quiet full streamed worker_resource_plan triples: backend+object
+       CPU5.992 -> 5.971 s (-0.364%,4/5), control5.909, normalized -0.827%
+       3/5 within control drift1.692%; full CPU normalized -1.321%3/5,
+       full wall -0.676%3/5; peak RSS81,024 -> 80,756 KiB, control81,052,
+       normalized -0.039%3/5 within control drift0.650%. All15 objects
+       exact (1,739,176 bytes, sha256
+       42d60bb810624c8f1b6ac655d6a554ee98a09c32b709acebeb5c974a1b2b58cc).
+       Full worker neutral, not a whole Stage1 or native-compiler speed
+       claim. 387 focused tests including five added state-expiry cases,
+       plus 3,000 scratch seeded exact comparisons against the old two
+       forwarding entrypoints. Final changed source strict 625-source
+       direct capture 40 functions/6,950 blocks/25,329 instructions, zero
+       fallback/no libpython edge, native ELF emitted (873,432 bytes,
+       sha256 6a58aa90d0abcb2df299967fda68736ba8af312271e0883df560b6e4de06aee0).
+       Next (latest actual Linux CI codegen priority): (1) the remaining
+       1,546.7 worker-s function-emission owner, especially dead-move
+       and frame-promotion repeated block/ownership scans; (2) J2 (e) one error
        landing per function after registering temporaries once, measured
        against the actual CI block inventory; (3) the allocation model
        toward LLVM parity, then remove passes that no longer fire;
@@ -2635,7 +2671,6 @@ in the relevant section or issue and removes the entry.
    on 2026-11-26.
 
    Claims:
-   - Stage1 Linux x64 function emission register-copy/frame repeated scans: Codex, Linux, 2026-11-26T18:08Z, area backend-x64-function
    - Closed-world continuation factory immediate result handoff proof and narrow candidate: Codex, Linux, 2026-11-26T17:39Z, area runtime-codegen-factory
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;

@@ -136,17 +136,10 @@ def _memory_registers(operand: str) -> int:
     return mask
 
 
-def _forward_memory(operand: str, sources: list[int]) -> str:
+def _forward_memory(operand: str, sources: list[int], copies: int) -> str:
     """``operand`` with each address register that holds a full copy of
     another register replaced by that register (never r12 as an index)."""
-    mask = _memory_registers(operand)
-    held = False
-    base = 0
-    while base < 16:
-        if mask & (1 << base) and sources[base] >= 0:
-            held = True
-        base += 1
-    if not held:
+    if not _memory_registers(operand) & copies:
         return operand
     open_ = operand.find("[")
     close = operand.find("]", open_)
@@ -158,7 +151,7 @@ def _forward_memory(operand: str, sources: list[int]) -> str:
         star = token.find("*")
         name = token if star < 0 else token[:star]
         base = _REG_BASE.get(name, -1)
-        if base >= 0 and _REG_WIDTH[name] == 8 and sources[base] >= 0:
+        if base >= 0 and _REG_WIDTH[name] == 8 and copies & (1 << base):
             source = sources[base]
             # r12 as a scaled or second register would be an SIB index.
             is_index = star >= 0 or index > 0
@@ -436,7 +429,7 @@ def _forward_register_copies(lines: list[str], retarget_scratch: bool) -> list[s
     followable = True
     sources = [-1] * 16
     widths = [0] * 16
-    # Number of registers that currently hold a copy.
+    # Bitmask of registers that currently hold a copy.
     copies = 0
     # Registers known to hold an immediate, at the width it was written.
     values = [0] * 16
@@ -453,11 +446,7 @@ def _forward_register_copies(lines: list[str], retarget_scratch: bool) -> list[s
             if line.endswith(":"):
                 labels[line[:len(line) - 1]] = index
                 if copies or constants:
-                    base = 0
-                    while base < 16:
-                        sources[base] = -1
-                        value_widths[base] = 0
-                        base += 1
+                    # Stale array entries are ignored unless their bit is live.
                     copies = 0
                     constants = 0
             index += 1
@@ -502,11 +491,6 @@ def _forward_register_copies(lines: list[str], retarget_scratch: bool) -> list[s
         packed = _effects(mnemonic, first_text, second_text, operands)
         if packed < 0:
             if copies or constants:
-                base = 0
-                while base < 16:
-                    sources[base] = -1
-                    value_widths[base] = 0
-                    base += 1
                 copies = 0
                 constants = 0
             reads_of[index] = _EVERYTHING
@@ -517,21 +501,21 @@ def _forward_register_copies(lines: list[str], retarget_scratch: bool) -> list[s
         if copies:
             if packed & _FIRST_FORWARDABLE:
                 base = _REG_BASE.get(first_text, -1)
-                if base >= 0 and sources[base] >= 0 and _REG_WIDTH[first_text] <= widths[base]:
+                if base >= 0 and copies & (1 << base) and _REG_WIDTH[first_text] <= widths[base]:
                     first_text = _GP_NAMES[sources[base]][_WIDTH_SLOTS[_REG_WIDTH[first_text]]]
                     changed = True
             if packed & _SECOND_FORWARDABLE:
                 base = _REG_BASE.get(second_text, -1)
-                if base >= 0 and sources[base] >= 0 and _REG_WIDTH[second_text] <= widths[base]:
+                if base >= 0 and copies & (1 << base) and _REG_WIDTH[second_text] <= widths[base]:
                     second_text = _GP_NAMES[sources[base]][_WIDTH_SLOTS[_REG_WIDTH[second_text]]]
                     changed = True
             if operands and "[" in first_text:
-                forwarded = _forward_memory(first_text, sources)
+                forwarded = _forward_memory(first_text, sources, copies)
                 if forwarded is not first_text:
                     first_text = forwarded
                     changed = True
             if operands > 1 and "[" in second_text:
-                forwarded = _forward_memory(second_text, sources)
+                forwarded = _forward_memory(second_text, sources, copies)
                 if forwarded is not second_text:
                     second_text = forwarded
                     changed = True
@@ -539,14 +523,16 @@ def _forward_register_copies(lines: list[str], retarget_scratch: bool) -> list[s
                 packed = _effects(mnemonic, first_text, second_text, operands)
             writes = (packed >> _WRITES_SHIFT) & _MASK_17
             if writes:
-                base = 0
-                while base < 16:
-                    if sources[base] >= 0 and (
-                        writes & (1 << base) or writes & (1 << sources[base])
-                    ):
-                        sources[base] = -1
-                        copies -= 1
-                    base += 1
+                # Written destinations expire directly. For remaining
+                # copies, examine only the live sparse source dependencies.
+                copies &= ~writes
+                active = copies
+                while active:
+                    bit = active & -active
+                    base = bit.bit_length() - 1
+                    if writes & (1 << sources[base]):
+                        copies ^= bit
+                    active ^= bit
         if constants and operands == 2 and (
             mnemonic == "mov" or (
                 mnemonic in _IMMEDIATE_ALU and first_text in _REG_BASE
@@ -555,7 +541,7 @@ def _forward_register_copies(lines: list[str], retarget_scratch: bool) -> list[s
         ):
             base = _REG_BASE.get(second_text, -1)
             width = _REG_WIDTH[second_text] if base >= 0 else 0
-            if base >= 0 and value_widths[base] == width:
+            if base >= 0 and constants & (1 << base) and value_widths[base] == width:
                 value = values[base]
                 low = _IMMEDIATE_RANGES[width][0]
                 high = _IMMEDIATE_RANGES[width][1]
@@ -564,13 +550,7 @@ def _forward_register_copies(lines: list[str], retarget_scratch: bool) -> list[s
                     changed = True
                     packed = _effects(mnemonic, first_text, second_text, operands)
         writes = (packed >> _WRITES_SHIFT) & _MASK_17
-        if constants and writes:
-            base = 0
-            while base < 16:
-                if value_widths[base] and writes & (1 << base):
-                    value_widths[base] = 0
-                    constants -= 1
-                base += 1
+        constants &= ~writes
         if (
             mnemonic == "mov" and operands == 2 and first_text == second_text
             and first_text in _REG_BASE and _REG_WIDTH[first_text] != 4
@@ -587,8 +567,7 @@ def _forward_register_copies(lines: list[str], retarget_scratch: bool) -> list[s
                 immediate = "0" if mnemonic == "xor" else second_text
                 digits = immediate[1:] if immediate.startswith("-") else immediate
                 if digits.isdecimal():
-                    if not value_widths[target]:
-                        constants += 1
+                    constants |= 1 << target
                     values[target] = int(immediate)
                     value_widths[target] = _REG_WIDTH[first_text]
         if mnemonic == "mov" and operands == 2:
@@ -599,8 +578,7 @@ def _forward_register_copies(lines: list[str], retarget_scratch: bool) -> list[s
                 and not (1 << source) & _FRAME and not (1 << target) & _FRAME
                 and _REG_WIDTH[first_text] == _REG_WIDTH[second_text]
             ):
-                if sources[target] < 0:
-                    copies += 1
+                copies |= 1 << target
                 sources[target] = source
                 widths[target] = _REG_WIDTH[first_text]
         if changed or retargeted:

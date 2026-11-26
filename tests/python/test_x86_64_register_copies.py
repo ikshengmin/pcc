@@ -448,3 +448,45 @@ def test_shared_scan_matches_sequential_passes_for_mixed_blocks():
         lines.extend([".Ldone:", "  ret"])
         expected = forward_register_copies(copies.retarget_scratch_definitions(lines))
         assert copies.retarget_and_forward_register_copies(lines) == expected, lines
+
+
+def test_active_copy_dependencies_expire_independently_of_other_facts():
+    # Writing one source expires its dependent address copy, but a live
+    # independent index copy and immediate still forward in the same block.
+    lines = [
+        "  mov r10, r12", "  mov r11, r13", "  mov r8, 91",
+        "  add r12, 1", "  mov rdi, QWORD PTR [r10 + r11*8]",
+        "  mov rsi, r8", "  call g", "  ret",
+    ]
+    assert copies.retarget_and_forward_register_copies(lines) == [
+        "  mov r10, r12", "  mov r8, 91", "  add r12, 1",
+        "  mov rdi, QWORD PTR [r10 + r13*8]", "  mov rsi, 91",
+        "  call g", "  ret",
+    ]
+
+
+@pytest.mark.parametrize("barrier", [
+    [".Lnext:"],
+    ["  pcc_retire_pointer_register r12"],
+    ["  mov r10b, 4", "  mov r11b, 7"],
+])
+def test_stale_copy_and_constant_rows_never_forward(barrier):
+    # Invalidation must cover memory operands and constants, even after
+    # a partial-register overwrite or an unknown lifetime marker.
+    lines = [
+        "  mov r10, rbx", "  mov r11, 91", *barrier,
+        "  mov rdi, QWORD PTR [r10]", "  mov rsi, r11",
+        "  call g", "  ret",
+    ]
+    assert copies.retarget_and_forward_register_copies(lines) == lines
+
+
+def test_written_destination_expires_without_killing_other_index_copy():
+    lines = [
+        "  mov r10, r12", "  mov r11, r13", "  add r10, 1",
+        "  mov rdi, QWORD PTR [r10 + r11*8]", "  call g", "  ret",
+    ]
+    assert copies.retarget_and_forward_register_copies(lines) == [
+        "  mov r10, r12", "  add r10, 1",
+        "  mov rdi, QWORD PTR [r10 + r13*8]", "  call g", "  ret",
+    ]
