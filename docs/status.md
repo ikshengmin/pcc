@@ -3688,6 +3688,23 @@ in the relevant section or issue and removes the entry.
    costs and instrument backend subphases independently, with exact input
    and fixed guards. No increased limits/concurrency, no extra full bootstrap.
    
+   Same-route host comparator (diagnostic, concurrent independent builds;
+   not a formal causal A/B against the exclusive native timeout): old
+   exact source 6cbafc4a, same reconstructed context and native target AST,
+   same one-worker oversized indexed-assembly route and unchanged guard.
+   COMPLETE 89.110456 s, wait4 CPU 83.877012 s, peak isolated process
+   tree 845,185,024 B; published 57,304,557-byte assembly SHA256
+   7165f5ed623388294453b9a74154db3e9562185daf3d9f446b03c35811777e16.
+   Exact same indexed CFG counts as authentic native replay. Host infer
+   3.427 s, prepare 0.742 s, ClassLowering class body 12.977 s,
+   capture 3.963 s; backend inclusive 56.522973 s, with existing
+   aggregates verify 4.413454, layout 2.201835, stack-map 15.328429,
+   function emit inclusive 34.088760, finalization 0.076371 s.
+   These are completed host owner phase observations, not uncensored
+   native backend phase durations. Native 400-second timeout was
+   described above. This confirms the exact phase shape and motivates
+   bounded real backend progress receipts and actual class method traces.
+
    Claims:
    - Stage2 class_gen same-route host comparator and method attribution: Codex, Linux, 2026-11-26T18:30Z, area selfhost
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
