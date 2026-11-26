@@ -2411,8 +2411,25 @@ in the relevant section or issue and removes the entry.
    type equality and exact root binding/order. Do not adopt without
    controlled reader/writer CPU and RSS evidence.
 
+   Correction before descriptor DAG work: the streaming metadata writer had
+   opened the destination before metadata conversion completed, violating the
+   prior destination-preservation contract (42 failure-path regressions).
+   It now converts/render rows separately into a list of strings before
+   opening, releases each wire tree immediately, and clears rendered lines
+   after writing metadata; original metadata-failure boundary restored.
+   Against original eager wire trees on the same frozen 29,513,459-byte
+   indexed-wire fixture, host CPython 3.13.5, five alternating fresh-process
+   pairs: peak RSS median 90,544 -> 80,088 KiB (-11.5%, 5/5); exact SHA256
+   8d3dfa41075b17d52016af866f8288fc28fb70297c4c4bcbb0e4b6a2813e0705.
+   CPU median 1.067 -> 0.779 s (4/5), noisy legacy writer control, no speed
+   claim. All 121 host tests across indexed-owned-wire and pipeline-export
+   contracts pass (one native integration not run), including 42 failure
+   witnesses and prior tree-lifetime / closure-slice witnesses; changed
+   writer emits owned x86 Linux IR. This correction supersedes the earlier
+   streaming writer's RSS receipt. DAG transport remains Next.
+
    Claims:
-   - Stage2 versioned immutable descriptor DAG transport: Codex, Linux, 2026-11-26T15:59Z, area selfhost
+   - none
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its

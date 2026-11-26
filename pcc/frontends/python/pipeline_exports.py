@@ -1504,9 +1504,9 @@ def _write_indexed_native_exports_wire(
     ):
         raise ValueError("invalid indexed external class preload index")
 
-    # Keep the owned semantic values, not all temporary JSON-wire trees.
-    # Each row is independent and can release its converted tree before
-    # converting the next row or any module payload.
+    # Preserve the preflight boundary: every metadata conversion must
+    # succeed before opening the destination. Retain rendered lines, not
+    # their larger temporary JSON-wire trees, during that preflight.
     metadata_rows = (
         ("D", derived_class_map),
         ("F", function_object_uses),
@@ -1516,10 +1516,15 @@ def _write_indexed_native_exports_wire(
         ("C", contextual_modules),
         ("H", contextual_host_exports),
     )
+    metadata_lines = []
+    for tag, value in metadata_rows:
+        metadata_lines.append(tag + "\t" + json.dumps(_native_export_to_wire(value)) + "\n")
     with open(path, "w", encoding="utf-8") as stream:
         stream.write(_NATIVE_EXPORT_INDEXED_SCHEMA + "\n")
-        for tag, value in metadata_rows:
-            stream.write(tag + "\t" + json.dumps(_native_export_to_wire(value)) + "\n")
+        for row_line in metadata_lines:
+            stream.write(row_line)
+        row_line = ""
+        metadata_lines.clear()
         for module_name in native_exports:
             clean_name = _native_export_indexed_module_name(module_name)
             root_delta = preload_roots.get(module_name)
