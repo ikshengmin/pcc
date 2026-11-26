@@ -2272,6 +2272,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Stage2 native repeated preload and resource parity: Codex, Linux, 2026-11-26T15:46Z, area selfhost
+   - Stage1 Mach-O stack-map/link preparation attribution and scoped optimization (pcc/backend/macho_obj.py and precise_stackmap.py, disjoint from Stage2 preload): Codex, Linux, 2026-11-26T15:46Z, area backend
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
