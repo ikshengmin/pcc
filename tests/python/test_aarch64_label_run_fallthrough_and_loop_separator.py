@@ -34,6 +34,8 @@ from pcc.backend.self_backend_parse import parse_self_backend_module
 
 class Events:
     """Typed-pass fixture: provenance supplied directly, never parsed."""
+    # The CFG helpers cache decoded records below this ID; the model has none.
+    decoded_limit = 0
 
     def __init__(self):
         self.names = []

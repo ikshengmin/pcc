@@ -14,6 +14,18 @@ from .self_backend_aarch64_semantics import (
 # The context supplies validated record IDs and transactional typed emission.
 # No instruction is rendered or parsed by these passes.
 def _branch(ctx, record_id):
+    # Cached for records older than the pass (TypedPassContext.decoded_limit).
+    if 0 <= record_id < ctx.decoded_limit:
+        cache = ctx.branches
+        if record_id in cache:
+            return cache[record_id]
+        decoded = _decode_branch(ctx, record_id)
+        cache[record_id] = decoded
+        return decoded
+    return _decode_branch(ctx, record_id)
+
+
+def _decode_branch(ctx, record_id):
     opcode = ctx.opcode(record_id)
     # opcode() has validated this record; only branch operands are read.
     if opcode != "b" and not opcode.startswith("b.") and opcode not in ("cbz", "cbnz"):
@@ -32,6 +44,17 @@ def _branch(ctx, record_id):
 
 
 def _local(ctx, record_id):
+    if 0 <= record_id < ctx.decoded_limit:
+        cache = ctx.local_labels
+        if record_id in cache:
+            return cache[record_id]
+        decoded = _decode_local(ctx, record_id)
+        cache[record_id] = decoded
+        return decoded
+    return _decode_local(ctx, record_id)
+
+
+def _decode_local(ctx, record_id):
     label = ctx.label(record_id)
     return label if label is not None and ctx.symbol(label).startswith("L_") else None
 
@@ -44,6 +67,17 @@ def _function(ctx, record_id):
 
 
 def _boundary(ctx, record_id):
+    if 0 <= record_id < ctx.decoded_limit:
+        cache = ctx.boundaries
+        if record_id in cache:
+            return cache[record_id]
+        decoded = _decode_boundary(ctx, record_id)
+        cache[record_id] = decoded
+        return decoded
+    return _decode_boundary(ctx, record_id)
+
+
+def _decode_boundary(ctx, record_id):
     return _local(ctx, record_id) is not None or _function(ctx, record_id) or ctx.is_directive(record_id)
 
 

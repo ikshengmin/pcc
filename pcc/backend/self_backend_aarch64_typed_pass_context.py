@@ -17,6 +17,9 @@ from .self_backend_value_arena import CompilerInt4, CompilerIntArena
 
 
 class TypedPassContext:
+    # A context built without __init__ shares no decoded records.
+    decoded_limit: int = 0
+
     def __init__(self, fragments, semantics):
         self.fragments = fragments
         self.semantics = semantics
@@ -25,6 +28,18 @@ class TypedPassContext:
         self.verify_each = bool(getattr(semantics, "verify_each", True))
         semantics.require_complete(fragments.records, len(fragments.symbol_names))
         self.replacements = fragments.new_fragment()
+        # Records below this ID existed when the pass began. A pass only
+        # appends records and rolls back only its own failed appends, so the
+        # decoded view of these IDs (opcode, local label, branch, boundary)
+        # never changes. The fragments keep it across the ~25 passes, each
+        # of which sweeps every record. Off for another semantics owner and
+        # under the per-read debug validation.
+        shared = semantics is fragments.semantics and not self.verify_each
+        self.decoded_limit: int = fragments.records._length // 4 if shared else 0
+        self.opcodes: dict = fragments.decoded_opcodes
+        self.local_labels: dict = fragments.decoded_local_labels
+        self.branches: dict = fragments.decoded_branches
+        self.boundaries: dict = fragments.decoded_boundaries
 
     def record(self, record_id):
         if record_id < 0 or record_id >= self.fragments.records._length // 4:
@@ -52,6 +67,16 @@ class TypedPassContext:
         return record
 
     def opcode(self, record_id):
+        if 0 <= record_id < self.decoded_limit:
+            cache = self.opcodes
+            if record_id in cache:
+                return cache[record_id]
+            decoded = self._decode_opcode(record_id)
+            cache[record_id] = decoded
+            return decoded
+        return self._decode_opcode(record_id)
+
+    def _decode_opcode(self, record_id):
         record: CompilerInt4 = self.record(record_id)
         if record.second < 0:
             return ""
@@ -124,9 +149,14 @@ class TypedPassContext:
             self.fragments.copy_record_ids(span, ids)
             records = []
             index = 0
+            limit = self.fragments.records._length // 4
             while index < ids._length:
                 record_id = ids.get_unchecked(index)
-                self.record(record_id)
+                if self.verify_each:
+                    self.record(record_id)
+                elif record_id < 0 or record_id >= limit:
+                    # record()'s check; producers validated the content.
+                    raise EncodeError("AArch64 typed pass record ID is invalid")
                 records.append(record_id)
                 index += 1
             return records

@@ -8,6 +8,9 @@ from pcc.backend.self_backend_aarch64_semantics import TOKEN_REGISTER, TOKEN_SYM
 
 class Events:
     """Fixture provenance supplied before encoding, never decoded from text."""
+    # The CFG helpers cache decoded records below this ID; the model has none.
+    decoded_limit = 0
+
     def __init__(self):
         self.names = []
         self.events = []

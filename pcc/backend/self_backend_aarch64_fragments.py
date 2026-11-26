@@ -100,6 +100,13 @@ class AArch64EmissionFragments:
         self.symbol_ids: dict[str, int] = symbol_ids
         self.closed: bool = False
         self.semantics: AArch64InstructionSemantics | None = None
+        # Decoded views of records, shared by the typed passes (see
+        # TypedPassContext.decoded_limit). A record's content never changes
+        # once a pass can see it; reset() empties these with the records.
+        self.decoded_opcodes: dict = {}
+        self.decoded_local_labels: dict = {}
+        self.decoded_branches: dict = {}
+        self.decoded_boundaries: dict = {}
         if capture_semantics:
             try:
                 self.semantics = AArch64InstructionSemantics()
@@ -425,6 +432,10 @@ class AArch64EmissionFragments:
         self.spans.reset()
         self.records.clear()
         self.cursor.clear()
+        self.decoded_opcodes.clear()
+        self.decoded_local_labels.clear()
+        self.decoded_branches.clear()
+        self.decoded_boundaries.clear()
         if self.semantics is not None:
             self.semantics.reset()
         self.symbol_names.clear()
