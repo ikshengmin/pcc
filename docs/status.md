@@ -1953,7 +1953,7 @@ in the relevant section or issue and removes the entry.
    on 2026-11-26.
 
    Claims:
-   - B3 then B2, four-worker negative scaling (the user, 2026-11-26: "按你的顺序来吧"): instance creation's class reference counts, then sleep's scheduler shared state; each measured with `pcc_perf.py prim`/`table`: Claude, macOS, 2026-11-26T13:19Z, area runtime-gc
+   - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
