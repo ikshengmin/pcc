@@ -640,7 +640,7 @@ in the relevant section or issue and removes the entry.
    under the unchanged 90 s / 1 GiB guard. Hosted verification pending.
 
    Claims:
-   - none
+   - Worker-prior scalar arena direct length proof regression: Codex, Linux, 2026-11-26T17:45Z, area checkpoint
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
