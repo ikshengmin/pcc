@@ -171,10 +171,27 @@ non-skip receipt queued the new integrated source in
 head `c20c2c01`, alongside the older comparison (maintainer allows
 accumulating CI; no current useful run canceled). At 17:31 UTC on
 2026-11-26, run 45856871699 is in progress (23 green, 10 red, 4 active).
-Linux x86_64 Stage1 step succeeded in 21m50s versus prior 28m14s;
-Linux ARM64 Stage1 step succeeded in 29m01s versus 30m33s. These are
-job-step wall times, not exact compile-time or peak RSS receipts. Both
-Stage2 owner steps active, Windows Stage1 still active. Run 45862787448
+All three native Stage1 bundles have now been downloaded and exact
+receipt/log hashes checked against their manifests (artifact IDs
+15140867848 Linux x64, 15140084999 Linux ARM64, 15140984244 Windows x64).
+Same four workers, actual shared stage receipt compile seconds and peak
+tree bytes, prior run 45844665220→45856871699:
+Linux x64 1571.926864→1206.445611 (-23.25%), RSS2936516608→2877579264
+(-2.01%); Linux ARM64 1736.298260→1644.478621 (-5.29%),
+RSS4598730752→4676341760 (+1.69%); Windows x64 1181.080718→1738.978787
+(+47.24%), RSS3627479040→3730415616 (+2.84%). Windows wall regression
+requires diagnosis: 604/606 matched codegen modules slower, median
+1.757x (p10 1.618/p90 1.880); infer median1.553x, all major phases
+including export/link slower. Windows observer has no own CPU or
+affinity/quota measurement, so no causal source vs machine conclusion.
+Linux x64 runner image also changed; do not attribute all speedup to
+source. Actual codegen worker wall1096.943s (91% of Linux x64 compile),
+export62.352, link34.983. 625 module records sum infer149.1s,
+codegen3752.082s; indexed receipts backend2728.8 worker-seconds,
+function emission1546.7, stackmap plan640.36, prepare verification351.2,
+layout128.95. Prioritize actual codegen worker common owners rather than
+minor link changes; stage1 target 5m six-worker not yet met.
+All three Stage2 owners active in run 45856871699. Run 45862787448
 is pending. Since c20c2c01 a substantial additional independent batch
 landed: actual native class-preload private compact wire `16f2386b`
 (80.08% worker CPU and 81.20% RSS reduction across 5/5 pairs), real
@@ -1507,22 +1524,48 @@ in the relevant section or issue and removes the entry.
    29.0% of count and 56.6% of requested bytes. <=64-byte objects
    28.3/38.45 (73.6%). No slow free path in this workload. Diagnostic
    instrumentation restored; no timing or production change claimed.
-   Next high-value structural candidate: the 4.05 ordinary GEN objects
-   at 56 bytes, distinct from 4.10 inline frames. The only source owner
-   is py_gen_new, called by py_gen_completed, inline-factory fallback
-   and non-inline codegen. Gateway source fork (2 inner +1 batch) and
-   close (1 inner +1/20 batch) have the immediate completed branch;
-   these source counts predict 4.05 but do not prove dynamic attribution.
-   First attribute py_gen_completed vs py_gen_from_inline_frame fallback
-   and actual callers, then measure real completed create/take/release
-   primitive cost and ceiling. If justified, design a private proven
-   immediate-result/real-continuation handoff for closed-world factory
-   calls eliminating temporary wrapper and associated ownership work,
-   preserving public generator representation and pending error,
-   cancellation, finalization and carrier handoff semantics. No
-   package-specific shortcuts, no unsound result tagging; test exact
-   failure and deferred branches, audit and concurrent gates. If below
-   floor, move to actual allocation owners of list/tuple/iterator.
+   Completed continuation allocation attribution (Codex, Linux,
+   source 5be4d177, exact gateway b1490486). Diagnostic counters in
+   py_gen_completed, py_gen_new, py_gen_from_inline_frame, take and
+   synchronous take, disabled after carrier shutdown before report.
+   Source-matched static self ELF SHA
+   748ca8d56150c6a9df790183e9dae6445f4bf4b815814630c8ad9cd955b7e3e2.
+   All five alternating C20 10/50 delta800 pairs on both w1/w4: 4.05
+   completed enters/successes, 4.05 py_gen_new enters/successes, 4.10
+   inline from enters/successes, ZERO inline fallback, 4.05 successful
+   take_completed, zero synchronous take successes. Total take attempts
+   w1 6.25, w4 median6.745 (scheduling variation). Thus all ordinary GEN
+   allocations in this workload are temporary completed wrappers, and
+   all are immediately consumed by delegated caller, not escaped.
+   Separate uninstrumented native owned C primitive on exact same clean
+   source: two registered roots, create+take borrowed+retaining replace
+   releasing wrapper+clear vs direct rooted value+clear, 2M iterations,
+   five alternating base/wrapper/identical-base control triples, both
+   modes exact identity/output and exactly 2M vs zero allocations.
+   None CPU base19.7055/wrapper302.5025/control17.1675ns, paired net
+   283.207ns (absolute paired control drift3.255ns); counted list
+   base36.1645/wrapper360.778/control35.631ns, paired net324.5955ns
+   (control drift0.916ns). Static ELF SHA
+   42e3f95f4bd6923bc2fb5157983958209ac89852258c9d351e4a712f1388bd70.
+   Weighted 4.05 actual wrappers cost 1.147--1.315us/request on these
+   reference modes (2.38--2.73% of earlier w1 48.185us; estimated source
+   mix 3 counted fork and 1.05 None close, ~1.277us). This is a primitive
+   ceiling, not whole-handler speed or actual counted/None timing
+   attribution. Runtime diagnostic restored; no production change.
+   Next: inspect exact closed-world factory return and direct delegated
+   call owner. Prototype only source-proven immediate-result/deferred
+   handoff using an explicit status/result slot (no pointer tagging,
+   public generator/ordinary factory ABI stays valid; no implicit TLS
+   side channel). Admit only proven tail completed/continuation choices;
+   arbitrary or escaped factory results keep original ABI. Preserve
+   result ownership before argument/receiver release, pending exceptions,
+   deferred suspension, finally, cancellation, and cross-carrier tests.
+   This removes 10.5% of allocation count plus wrapper protocol, but the
+   observed local CPU ceiling is modest: measure actual emitted call and
+   allocation reduction and 5 native paired A/B with unchanged control
+   before merge, do not undertake a broad ABI redesign to chase <3%.
+   If no narrow safe route, reject and move to measured list/tuple/iter
+   allocation owner attribution.
    Exact proven retain candidate (Codex, Linux): symmetrical early return
    in `_gc_retain` for the same SSA proof used by `_gc_release`,
    preserving exact identity and ptr type, with unknown same-spelling
@@ -2498,7 +2541,6 @@ in the relevant section or issue and removes the entry.
    Claims:
    - #13 described-layout atomic managed allocation/publication and complete collector lifecycle: Codex, Linux, 2026-11-26T17:37Z, area runtime-gc-described-layout
    - J2s actual Linux x64 Stage1 indexed worker stack-map planning repeated-work attribution (self_backend_precise_stackmaps x64 only, disjoint from runtime GC and AArch64 selection): Codex, Linux, 2026-11-26T17:35Z, area stage1-codegen
-   - Native completed-continuation allocation attribution and create/take/release cost: Codex, Linux, 2026-11-26T17:25Z, area runtime-gc
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
