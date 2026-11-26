@@ -1094,8 +1094,27 @@ in the relevant section or issue and removes the entry.
    policy controls PASS, 9/9 under unchanged90s/1GiB guard
    COMPLETE5.630s/95928320 B. No production or gate change.
 
+   Scaffold integer ABI result ownership (real owned ELF, 2026-11-26):
+   hosted artifact15145043938 eight old pin/publication-failure-label
+   assertions reproduced on current frozen5a0d90f4 source (8 FAIL/12
+   PASS,90s/1GiB guard COMPLETE31.918s/90099712 B). The sole collector
+   publishes result by an infallible direct store to the registered
+   activation local; dead old publication failure labels cannot prove
+   lifetime. All original provider ABI, one len/one box, strict native
+   no CPython and raw/manual rejection controls retained. New physical
+   result proof checks exact registration/bounds, borrowed first arg
+   group, actual pending-error CFG, one boxed owner release on EVERY
+   reachable post-producer exit (no release of borrowed arg), exact
+   exception-preserving result cleanup before leave, success fresh
+   same-cell load for caller sink or owner take after argument cleanup,
+   and full local/mapped/LIFO CFG frame ledger. Three mutations of
+   actual emitted IR reject missing publication, double release and
+   missing error cleanup. All20 PASS, guard COMPLETE29.719s/88203264 B
+   unchanged production and resource policy; host ELF model, not a
+   native runtime/hosted CI acceptance claim.
+
    Claims:
-   - Scaffold integer ABI current ordinary result publication and exact argument cleanup model: Codex, Linux IR, 2026-11-26T20:01Z, area ci-scaffold-int-abi
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and

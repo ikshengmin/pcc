@@ -135,34 +135,167 @@ def test_scaffold_constant_adapts_raw_value_with_imprecise_semantic_type_once(tm
     assert len(boxes) == 1, body
     assert re.search(r'@user_pcc_ir_ir_scaffold_Constant_i64\(ptr [^,]+, ptr ' + re.escape(boxes[0]) + r'\)', body), body
 
-    calls = list(re.finditer(r"(%[^\s]+) = call ptr [^\n]*@user_pcc_ir_ir_scaffold_Constant_i64\([^\n]*\)\n", body))
-    assert len(calls) == 1, body
-    # The first instruction publishes the result before a lease, TLS check,
-    # unpin, release, or other operation that can park or report an error.
-    publication = body[calls[0].end():]
-    assert publication.lstrip().startswith("store ptr " + calls[0].group(1) + ", ptr "), body
-    cleanup_target = re.search(r"label %(call\.publication\.arguments\.cleanup[^,\s]+)", publication)
-    assert cleanup_target is not None, body
-    cleanup = re.search(r"^" + re.escape(cleanup_target.group(1)) + r":\n(.*?)(?=^\S|\Z)", body, re.M | re.S)
-    assert cleanup is not None and cleanup.group(1).count("@pcc_gc_unpin(") == 2, body
-    assert cleanup.group(1).count("@pcc_gc_release(") == 1, body
-    # Both publication failure and the provider's pending-error path release
-    # the two argument pins once and then enter the same output-root cleanup.
-    target = re.search(r"br label %([^\s]+)", cleanup.group(1)).group(1)
-    pending_target = re.search(r"br i1 [^\n]*label %(call\.err\.cleanup[^,\s]+)", publication)
-    assert pending_target is not None, body
-    pending_cleanup = re.search(r"^" + re.escape(pending_target.group(1)) + r":\n(.*?)(?=^\S|\Z)", body, re.M | re.S).group(1)
-    assert pending_cleanup.count("@pcc_gc_unpin(") == 2, body
-    assert pending_cleanup.count("@pcc_gc_release(") == 1, body
-    assert "br label %" + target in pending_cleanup, body
-    # On success, output reloading/taking happens only after both argument
-    # owners have been retired. The result remains in its registered slot.
-    ready = re.search(r"^call\.cont\.[^:]+:\n(  call void \(ptr\) @pcc_gc_unpin[\s\S]*?)(?=^\S|\Z)", publication, re.M)
-    assert ready is not None, body
-    assert ready.group(1).count("@pcc_gc_unpin(") == 2, body
-    assert "@pcc_gc_release(" in ready.group(1), body
-    assert "scaffold.current" in ready.group(1) if caller_sink else "call.slot.take.current" in ready.group(1)
+    evidence = _assert_scaffold_constant_owner_protocol(text, nested or caller_sink)
+    if not (contextual or nested or caller_sink):
+        # Mutate the real successful lowering to prove the model detects
+        # missing publication, double release and missing preserved cleanup.
+        result, output, boxed, ready = evidence
+        store = "  store ptr %" + result + ", ptr %" + output + "\n"
+        assert body.count(store) == 1
+        boxed_text = boxed if boxed.startswith("%") else "%" + boxed
+        release = re.search(
+            r"^" + re.escape(ready) + r":\n(  call[^\n]*@pcc_gc_release(?:_known)?\(ptr " + re.escape(boxed_text) + r"\)\n)",
+            body, re.M,
+        )
+        assert release is not None
+        cleanup = re.search(
+            r"^  call[^\n]*@py_cleanup_one_root_preserving_exception\(ptr %" + re.escape(output) + r"\)\n",
+            body, re.M,
+        )
+        assert cleanup is not None
+        mutations = (
+            body.replace(store, "", 1),
+            body.replace(release.group(0), release.group(0) + release.group(1), 1),
+            body.replace(cleanup.group(0), "", 1),
+        )
+        for mutant in mutations:
+            assert mutant != body
+            with pytest.raises(AssertionError):
+                _assert_scaffold_constant_owner_protocol(text.replace(body, mutant, 1), False)
     assert not re.search(r"\bcall [^\n]*@py_cpy_", body)
+
+
+def _assert_scaffold_constant_owner_protocol(text, caller_owned_sink):
+    """Check the actual CFG and physical slot, not retired pin block names."""
+    from tests.owned_ir_validation import verify_ir_text
+    from tests.python.iterator_root_contract import _dominated, parsed_root_contract
+
+    module = verify_ir_text(text)
+    function = next(fn for fn in module.functions if fn.name == "user_probe_probe")
+    roots = parsed_root_contract(module, function)
+    result_calls = [row for row in roots.rows
+                    if roots.called(row[2], "user_pcc_ir_ir_scaffold_Constant_i64")]
+    assert len(result_calls) == 1
+    call = result_calls[0]
+    block, index, producer = call
+    borrowed, boxed = roots.args(producer)
+    result = producer.data[0]
+    publication = block.instructions[index + 1]
+    # Plain activation-local publication cannot fail or park: the NEW
+    # provider result's very next instruction is a store to its live root.
+    assert publication.kind == "store" and publication.data[0].is_ptr
+    assert publication.data[1] == result
+    output = roots.slot(publication.data[3])
+    roots.require_owning(output, allow_lifo=True)
+    entries = [row for row in roots.rows
+               if roots.called(row[2], "pcc_gc_frame_enter_lifo")
+               and roots.slot(roots.args(row[2])[1]) == output]
+    assert len(entries) == 1 and _dominated(roots, entries[0], call)
+    assert roots.frame_abi(entries[0][2])[1], "result root is activation-local"
+
+    # The first parameter is borrowed, the single boxed len result is NEW.
+    # No pin protocol is needed for either; only the boxed owner is released.
+    borrowed_read = roots.definitions[borrowed]
+    assert roots.called(borrowed_read, "pcc_gc_load_borrowed_ptr")
+    borrowed_cell = roots.slot(roots.args(borrowed_read)[1])
+    borrowed_entries = []
+    for row in roots.rows:
+        ins = row[2]
+        if not roots.called(ins, "pcc_gc_frame_enter"):
+            continue
+        base, offset = roots.slot(roots.args(ins)[1])
+        descriptor = roots.globals[roots.symbol(roots.args(ins)[0]).lstrip("@")]
+        count = int(descriptor.initializer)
+        if count < 0 and base == borrowed_cell[0] and offset <= borrowed_cell[1] < offset - count * roots.POINTER_BYTES:
+            borrowed_entries.append(row)
+    assert len(borrowed_entries) == 1 and _dominated(roots, borrowed_entries[0], call), (
+        "borrowed parameter must be in its registered borrowed group"
+    )
+    assert roots.called(roots.definitions[boxed], "py_int_from_i64")
+    assert not any(ins.kind == "call" and ins.data[2] in (
+        "pcc_gc_pin", "pcc_gc_unpin", "pcc_gc_pin_slot_for_take", "pcc_gc_take_pinned_slot",
+    ) for _, _, ins in roots.rows)
+
+    # The real pending-error test after immediate publication determines the
+    # two paths. A dead former publication-failure label proves nothing.
+    status = block.instructions[index + 2]
+    comparison = block.instructions[index + 3]
+    assert roots.called(status, "py_err_occurred")
+    assert comparison.kind == "icmp" and comparison.data[0] == "ne"
+    assert tuple(comparison.data[3:]) == (status.data[0], "0")
+    assert block.terminator.kind == "br_cond" and block.terminator.data[0] == comparison.data[1]
+    error_start, ready_start = block.terminator.data[1:]
+    blocks = {item.name: item for item in roots.blocks}
+
+    def release_of(ins, value):
+        return ins.kind == "call" and ins.data[2] in ("pcc_gc_release", "pcc_gc_release_known") and roots.args(ins) == [value]
+
+    # Success reloads or takes the exact result cell after releasing the
+    # boxed length; the nested/caller-owned sink must not take another owner.
+    ready = blocks[ready_start]
+    releases = [i for i, ins in enumerate(ready.instructions) if release_of(ins, boxed)]
+    assert len(releases) == 1
+    uses = []
+    for i, ins in enumerate(ready.instructions):
+        if caller_owned_sink and ins.kind == "load" and roots.slot(ins.data[3]) == output:
+            uses.append(i)
+        if not caller_owned_sink and roots.called(ins, "pcc_gc_take_slot") and roots.slot(roots.args(ins)[0]) == output:
+            uses.append(i)
+    assert uses and releases[0] < min(uses)
+    if caller_owned_sink:
+        assert not any(roots.called(ins, "pcc_gc_take_slot") and roots.slot(roots.args(ins)[0]) == output
+                       for ins in ready.instructions)
+    else:
+        assert len(uses) == 1
+
+    def prove_exits(start, pending_error):
+        pending = [(start, 0, False, False)]
+        visited = set()
+        returned = 0
+        while pending:
+            state = pending.pop()
+            if state in visited:
+                continue
+            visited.add(state)
+            name, released, cleared, left = state
+            current = blocks[name]
+            for ins in current.instructions:
+                if release_of(ins, boxed):
+                    released += 1
+                    assert released == 1, "boxed owner released more than once"
+                assert not release_of(ins, borrowed), "borrowed argument must not be released"
+                if (ins.kind == "call" and ins.data[2].startswith("py_cleanup_")
+                        and ins.data[2].endswith("_preserving_exception")
+                        and any(roots.slot(arg) == output for arg in roots.args(ins))):
+                    assert not left and released == 1
+                    cleared = True
+                abi = roots.frame_abi(ins)
+                if abi is not None and "frame_leave" in abi[0] and roots.slot(roots.args(ins)[0]) == output:
+                    assert not left
+                    if pending_error:
+                        assert cleared, "pending error must clear exact result preserving exception"
+                    left = True
+            term = current.terminator
+            if term.kind in ("ret", "ret_void"):
+                assert released == 1 and left, "every provider exit retires the boxed and result owners"
+                if pending_error:
+                    assert cleared and term.kind == "ret" and term.data[-1] == "null"
+                returned += 1
+                continue
+            successors = []
+            if term.kind == "br":
+                successors = [term.data[0]]
+            elif term.kind == "br_cond":
+                successors = list(term.data[1:])
+            elif term.kind == "switch":
+                successors = [term.data[2], *(target for _, target in term.data[3])]
+            pending.extend((target, released, cleared, left) for target in successors)
+        assert returned
+
+    prove_exits(error_start, True)
+    prove_exits(ready_start, False)
+    roots.assert_frame_exits(exact_abi=True)
+    return result, publication.data[3], boxed, ready_start
 
 
 @pytest.mark.parametrize("manual", [False, True])
