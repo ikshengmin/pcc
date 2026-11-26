@@ -712,7 +712,7 @@ in the relevant section or issue and removes the entry.
    under the unchanged 90 s / 1 GiB guard. Hosted verification pending.
 
    Claims:
-   - none
+   - Windows Stage1 same-job process own CPU observation with explicit unavailable semantics: Codex, Linux source/tests, 2026-11-26T18:21Z, area ci-stage1-observer
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
