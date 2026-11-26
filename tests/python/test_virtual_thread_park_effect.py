@@ -1161,6 +1161,51 @@ def test_transitive_park_resume_routes_exception_through_parent_handler(
     assert ran.stdout.strip().splitlines() == ["CAUGHT_FINALLY", "42"]
 
 
+def test_compiled_virtual_thread_facade_preserves_native_alias_lowering(tmp_path: Path) -> None:
+    from pcc.frontends.python.pipeline import compile_python_multi
+
+    source = tmp_path / "facade_probe.py"
+    output = tmp_path / "facade_probe.ll"
+    source.write_text(
+        """import pcc.virtual_thread as vt
+import sys
+
+def child():
+    return 7
+
+def shadowed(vt):
+    return vt.result(0)
+
+def main():
+    t = vt.spawn(child)
+    vt.run(1, 32)
+    print(vt.result(t))
+
+main()
+""",
+        encoding="utf-8",
+    )
+    # The executable's normal closure can include the public host facade.
+    # Its functions intentionally trap; a proven intrinsic must win over
+    # generic compiled-sibling method dispatch, including the imported alias.
+    compile_python_multi(
+        [str(source), str(REPO / "pcc" / "virtual_thread.py")],
+        str(output),
+        module_names=["facade_probe", "pcc.virtual_thread"],
+        entry_module="facade_probe",
+        ir_scaffold_mode="on",
+        emit_llvm_only=True,
+    )
+    text = output.read_text(encoding="utf-8")
+    main = text.split("@user_facade_probe_main() {", 1)[1].split("\n}", 1)[0]
+    shadowed = text.split("@user_facade_probe_shadowed(ptr", 1)[1].split("\n}", 1)[0]
+    assert "@py_continuation_new_typed(" in main
+    assert "@py_virtual_thread_run_carrier_pool(" in main
+    assert "@py_virtual_thread_result(" in main
+    assert "import.method.spawn" not in main
+    assert "@py_virtual_thread_result(" not in shadowed
+
+
 def test_cross_module_may_park_uses_generator_abi_and_resumes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -849,6 +849,13 @@ class MethodCallExpressionLoweringMixin:
         native_inspect_call = self._maybe_emit_native_inspect_call(expr)
         if native_inspect_call is not None:
             return native_inspect_call
+        # A lexically proven virtual-thread builtin must lower to the native
+        # scheduler even when its public Python facade is a compiled sibling.
+        # That facade deliberately traps on host-only execution; generic
+        # module alias dispatch would otherwise call its stub.
+        native_virtual_thread_call = self._emit_native_virtual_thread_call(expr)
+        if native_virtual_thread_call is not None:
+            return native_virtual_thread_call
         native_module_alias_call = self._maybe_emit_native_module_alias_call(expr)
         if native_module_alias_call is not None:
             return native_module_alias_call
@@ -885,9 +892,6 @@ class MethodCallExpressionLoweringMixin:
         native_threading_call = self._emit_native_threading_call(expr)
         if native_threading_call is not None:
             return native_threading_call
-        native_virtual_thread_call = self._emit_native_virtual_thread_call(expr)
-        if native_virtual_thread_call is not None:
-            return native_virtual_thread_call
         native_subprocess_call = self._emit_native_subprocess_call(expr)
         if native_subprocess_call is not None:
             return native_subprocess_call

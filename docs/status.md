@@ -1390,6 +1390,22 @@ in the relevant section or issue and removes the entry.
        calls, and the diagnostics-log call `py_obj_getattr` makes while the
        log is off; about 1.2 us of json's 6.8 (self-time guess). Parts in
        `py_list.py` wait for the (d) 4b claim.
+   Linux handler correctness blocker (Codex, source `e5a2ca85`, gateway
+   `b1490486`): a fresh self-compiled native handler linked successfully
+   (runtime 85.65s, total 219.22s) but trapped in public host-only
+   `pcc.virtual_thread.spawn`. A minimal import of `pcc.virtual_thread as
+   vt` plus `sys` reproduced the same error; single-source IR correctly
+   lowered the primitive, explicit closure including the compiled public
+   facade incorrectly used generic imported method dispatch (the facade
+   deliberately raises). Give lexically proven native vthread calls
+   precedence over generic compiled module alias dispatch; shadowed local
+   aliases continue through the existing proof and generic method path.
+   New real-facade multi-IR regression and eight adjacent host analysis
+   cases pass; candidate runtime rebuilt with matching codegen provenance,
+   native minimal executable ran with empty environment/PATH nonexistent
+   and printed 7 (base exited 1 with trap). No full handler/QPS claim yet:
+   next compile the actual handler with this fix; compare Linux allocations
+   and root/refcount operations per request once smoke passes.
    Lifecycle allocation unit (Codex, Linux x86_64, source `605ddc2f`):
    on the cached object-family take/put path, fold the intrusive head/count
    updates into the callers and reuse the incremented scalar for the drain
@@ -2083,7 +2099,6 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
-   - Linux handler blocker: builtin virtual-thread alias before compiled facade dispatch (method_call_expression_lowering.py, disjoint generator files): Codex, Linux, 2026-11-26T15:55Z, area frontend-python
    - J2 Stage1 IR reduction: consolidate generator frame-save programs with identical slot/flag plans, disjoint from runtime and preload; Claude resting per maintainer, previous claim retained: Codex, Linux, 2026-11-26T15:50Z, area frontend-python
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
