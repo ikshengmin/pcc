@@ -820,8 +820,24 @@ in the relevant section or issue and removes the entry.
    Larger collection module parser/assertion-rewrite footprint remains
    a hypothesis, not another authorized scope split.
 
+   Stale sorted-slot ownership model correction (one collector):
+   actual unchanged production function at baseline720111d2 and current
+   e0628130 no longer retargets/registers GC4 payloads. Independently
+   reproduced original 20 failures/48 PASS locally (15.28s). The model
+   now witnesses actual publication under graph lock: old and new exact
+   owned pointer multisets, poisoned raw allocation tail must be cleared,
+   publication before freeing old backing after unlock, new remains
+   owned until result owner disposal. Failed result-root transfer must
+   free both raw backings in order; replace unreachable obsolete retarget
+   fault with two live validation errors (changed work-list shape and
+   missing payload). All prior ordering/key/compare/alias/reverse,
+   collections, root/disposal and primary TLS assertions retained; same
+   production source, 70/70 PASS (16.24s), two additional live error
+   witnesses, no test deletion or gate change. Native execution not
+   inferred from source model; no optimization claim.
+
    Claims:
-   - sorted slot transaction one-collector ownership model (remove obsolete GC4 hooks, retain live failures): Codex, Linux, 2026-11-26T19:06Z, area ci-sorted-slot-model
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
