@@ -261,6 +261,16 @@ class _GetterMemory:
             self.pins -= 1
         return value
 
+    def take_slot(self, slot):
+        # pcc_gc_take_slot: the slot's owner moves to the caller; the one
+        # collector pinned nothing, so no pin is dropped.
+        owner, offset = self.pointer(slot)
+        value = self.read(owner, offset)
+        self.write(owner, offset, None)
+        if isinstance(value, _Object):
+            assert value.alive
+        return value
+
     def take_list_item(self, _owner, slot):
         owner, offset = self.pointer(slot)
         value = self.read(owner, offset)
@@ -298,6 +308,7 @@ class _GetterMemory:
             "pcc_gc_retain_plan_prepare_locked": self.retain,
             "pcc_gc_retain_plan_finish": self.retain_finish,
             "pcc_gc_pin": self.pin, "pcc_gc_take_pinned_slot": self.take,
+            "pcc_gc_take_slot": self.take_slot,
             "py_incref": self.incref, "pcc_gc_try_take_ptr": self.take_list_item,
             "cstr": lambda text: text, "py_exc_new": lambda tag, text: (tag, text),
             "py_raise_owned": lambda error: setattr(self, "error", error),
