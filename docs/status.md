@@ -2854,9 +2854,52 @@ in the relevant section or issue and removes the entry.
    list/tuple/iterator ownership, prove a generic non-escaping candidate
    before attempting removal. No benchmark-specific shortcuts.
 
+   Follow-up ordinary container allocation attribution, exact source
+   `720111d2` (Linux, 2026-11-26): actual five 10/50 round differences
+   (C20, 800 requests) in each of w1/w4. Total38.45 allocations/request:
+   list7.10, tuple6.10 (arity0=0,1=1.05,2=5.05), iterator3.05 (all
+   ordinary list). Dict items materializes 2 lists plus 4 two-item
+   tuples/request, and plain sorted copies 2 lists. Direct primitive
+   with same sorted two-key output and allocation counts 3 versus4
+   measures whole extra sorted path plus necessary comparison
+   495–501ns/occurrence (2/request, upper bound ~1us/request).
+   Candidate generic direct `sorted(stable_parameter.items())` exact
+   native dict tag branch marks an unexposed intermediate; ordinary
+   user method/subclass and public sorted ABI unchanged. Runtime
+   admits unique bounded exact list (<=16), nonmoving atomic mode;
+   callback-free sort borrowed scratch before root transfer/permutation,
+   fallback leaves original unmodified. Actual C baseline/candidate
+   1M operations x5 alternating triples/mode (identical control):
+   string-value CPU2146.388 ->1751.051ns, normalized -19.302% vs
+   max control7.843%; counted-list-value CPU2160.350 ->1844.038ns,
+   normalized -15.753% vs9.531%; 5/5 each, exact allocation4->3.
+   Actual handler allocations/request 38.45->36.45, both carriers
+   and known/provenance audits pass. 44 host tests, 65 scoped tests
+   pass; 20 pre-existing exact baseline failures in old GC4
+   retarget/register model reproduced with exact original runtime
+   source, not caused by candidate; pcc1 native test unrun. 625-source
+   contextual five changed compiler modules all zero fallback.
+   Final candidate SHA9d759e33f38706783e117c71c284a0b5a1dbe2c73a6a41049dbd874a23b97e38,
+   baseline SHA2b0255f7b524f4a595d5ae44c6c7cb7b35aa3ca0872eeb2eeda20fcf1f136412.
+   RX +2512 bytes, same mapped RW start/size.
+   Actual complete C100*2000 5 triples/worker: w1 QPS18168.25->18049.38
+   (3/5), CPU55.1492->55.1187us (4/5), paired normalized+5.543%/
+   -5.024% within max control14.611%/12.066%; RSS36,798,464->
+   36,667,392B (norm -0.345% vs control0.045%). w4 QPS37635.02->
+   38166.37 (4/5), CPU99.0337->97.6979 (4/5), normalized+2.467%/
+   -2.129% within max control8.208%/11.682%; RSS41,517,056->
+   41,553,920B within control0.867%. Max STW both within paired
+   max control. Whole-handler result INCONCLUSIVE, no merge and no
+   speed/regression claim despite exact primitive reduction. Preserve
+   focused patch+receipts for a genuinely quieter host; do not weaken
+   threshold or keep retrying the same micro change.
+   Next: attribute all3.05 ordinary list iterator allocations to
+   actual consumer, measure owner cost, consider generic nonescaping
+   loop cursor preserving live lengths, mutation, dynamic dispatch,
+   finalizer and suspension semantics. No benchmark-specific bypass.
+
    Claims:
    - Stage1 x64 direct packed integer stack-map emission routes: Codex, Linux, 2026-11-26T18:51Z, area backend-x64-emit-routes
-   - Ordinary list/tuple/iterator ownership allocation attribution and generic non-escape proof: Codex, Linux, 2026-11-26T18:31Z, area runtime-codegen-allocation
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
