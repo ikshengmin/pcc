@@ -774,8 +774,33 @@ in the relevant section or issue and removes the entry.
    resource/worker/timeout/guard/expected-output change. Other memory
    failures remain unresolved. Hosted verification pending.
 
+   Weakset exact memory follow-up (no policy change): clean source6cbafc4a
+   and actual hosted pcc1/runtime admitted using original manifest
+   9254520b6c746e7a9c2f804552797f196328553a346d456d5fcf076d5792313e.
+   Local automatic guard rejected before launch (cgroup unavailable);
+   documented explicit same 90s/1GiB plus stricter 2GiB Linux physical
+   reserve. Whole six selected nodes were attempted twice with six
+   workers/loadgroup, but local CPython3.13/pytest9.2/xdist3.8 did not
+   produce stock @worker_resource_fixtures scheduling suffix; concurrent
+   bodies hit MEMORY_LIMIT1076617216 B at12.91s and1083281408 B at5.46s.
+   Invalid serial-group comparison; do not infer hosted reproduction.
+   Diagnostic same exact weakset_order-pcc1 node alone under both original
+   collection modules vs weakset-only module; both retained six controller
+   workers, same admitted pcc1 and original cap/deadline. Both timed out:
+   90.52s peak912191488 B vs90.32s peak822894592 B. Sampled controller
+   plus six direct pytest worker RSS medians485322752→361226240 B
+   (-124096512 B, -25.57%; 330/337 active samples). Pre-child last sample
+   481419264→352882688 B; native child subtree peak426868736→461668352 B,
+   largest individual native worker237613056→232562688 B. Parent
+   import overhead is real, but hosted exact WorkerMemoryError and
+   complete success not reproduced. Neither result is a passing weakset
+   node, nor authority to split scopes for extra time or weaken resource
+   constraints. Next: reduce unnecessary collection imports while
+   preserving all nodes/groups/workers; qualify on exact pinned hosted
+   CPython/pytest with unchanged resource envelope.
+
    Claims:
-   - ci-contracts integration exact weakset authentic pcc1 worker memory and fixture import attribution: Codex, Linux, 2026-11-26T18:39Z, area ci-weakset-resource-admission
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
