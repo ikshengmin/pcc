@@ -884,8 +884,8 @@ in the relevant section or issue and removes the entry.
    27.8 us of processor time a request. One screening run without a
    control, so not an A/B result; the 2026-11-25 arm measured 55,124 and
    139,821 under load 7.3.
-   (d) U4's `py_obj_ops_dispatch` (Claude, local Mac, `ea05029e0`, tests
-   `4e764ca9d`): truth of a root slot, bitwise dispatch, the sync and
+   (d) U4's `py_obj_ops_dispatch` (Claude, local Mac, `7b5c95f95`, tests
+   `d5d2d57f2`): truth of a root slot, bitwise dispatch, the sync and
    bound-method constructors, the bound list/method/property/descriptor
    result handoffs drop their pins and take through `pcc_gc_take_slot`;
    `_bitwise_pin_result`, `_py_sync_pin` and `_py_sync_unpin` are gone, and
