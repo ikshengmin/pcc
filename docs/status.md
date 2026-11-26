@@ -3375,9 +3375,36 @@ in the relevant section or issue and removes the entry.
    and container lock count/cost by hot owned path before proposing
    proof of any lock/check removal, preserve shared-thread semantics.
 
+   Actual managed provenance and container-lock count/cost (source
+   62e17cf2, diagnostic only). All five C20 10/50 round pairs delta800
+   each w1/w4 reconcile exact owner counters. w1 public managed checks
+   124.75375/request: 117.70375 live slab and 7.05 managed-index positive;
+   no null/tagged/singleton/locked fallback. Owners list54.5, class49.10125,
+   dict11.0525, tuple10.1, residual0. w4 124.875 (117.825 slab/7.05 index).
+   w1 container lock/unlock96.955 pairs, all uncontended first CAS;
+   list62.3525, class field10.1, dict read13.0525/write2, obj field9.45,
+   pair0.05, residual0. w4 97.0275 pairs, 96.13625 first CAS and
+   .875 contended in perturbed diagnostic (not actual timing).
+   Clean exact source rebuild190.386s peak831664128B, static native
+   primitive all seven modes and both controls correct. Five quiet
+   alternating triples each, pinned CPU, same indirect baseline and
+   unchanged control: paired incremental ns per call slab4.6338,
+   index36.7405, uncontended lock+unlock15.988, singleton35.4274,
+   tagged0.8607, null0.6200, raw negative183.1735. Max control drift
+   respectively .4055,2.588,1.7645,.5576,.1065,.1745,3.0785ns.
+   Weighted observed w1 isolated removable ceiling 0.545us slab +
+   .259us index +1.550us lock =2.355us/request (~4.4% earlier
+   measured 53.547us CPU/request); this is NOT measured whole-handler
+   gain or permission to remove safety checks/locks. Public raw input
+   provenance and nonmoving thread registration/publication preserved.
+   Diagnostic instrumentation restored; no production runtime change.
+   Next quantify actual TLS access owners and same-source cost before
+   any thread-state caching design. Preserve virtual thread exception,
+   root, worker/carrier migration and external thread semantics.
+
    Claims:
    - Stage1 ARM typed final publication and contiguous word runs: Codex, Linux, 2026-11-26T19:56Z, area backend-aarch64-publish
-   - Actual managed provenance and container lock attribution by owner: Codex, Linux, 2026-11-26T19:43Z, area runtime-gc-provenance
+   - Actual runtime thread-local access count and owner cost: Codex, Linux, 2026-11-26T20:01Z, area runtime-gc-tls
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
