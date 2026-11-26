@@ -38,6 +38,7 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_capi_is_cext_type_tag",
     "pcc_capi_visit_cext_object_slots_i64",
     "pcc_gc_load_ptr",
+    "pcc_gc_described_visit_slots_slice",
 }
 RAW_GLOBAL_IMPORTS = {"py_set_dummy"}
 
@@ -107,6 +108,20 @@ def _compile_object(tmp_path: Path, emitter: str) -> Path:
     )
     assert result.returncode == 0, result.stdout + result.stderr
     return obj
+
+
+def _described_object(tmp_path: Path) -> Path:
+    # This is a real second owner, not a test stub for the new dispatch.
+    from pcc.backend.owned_object_emit import emit_owned_object
+    from tests.owned_runtime_c_fixture import runtime_ir
+    from pcc.frontends.python.pipeline_targets import host_target_triple
+    owner = RUNTIME_DIR / "py" / "freestanding_gc_described_layout.py"
+    ir = tmp_path / "described.ll"
+    target = host_target_triple()
+    runtime_ir(owner, ir, target)
+    output = tmp_path / "described.o"
+    output.write_bytes(emit_owned_object(ir.read_text(),target))
+    return output
 
 
 def _exported_symbols(source: str) -> set[str]:
@@ -247,7 +262,7 @@ int main(void) {
         encoding="utf-8",
     )
     build = subprocess.run(
-        ["clang", str(harness), str(obj), "-o", str(executable)],
+        ["clang", str(harness), str(obj), str(_described_object(tmp_path)), "-o", str(executable)],
         capture_output=True,
         text=True,
         timeout=30,
@@ -326,7 +341,7 @@ int main(void) {
         encoding="utf-8",
     )
     build = subprocess.run(
-        ["clang", str(harness), str(obj), "-o", str(executable)],
+        ["clang", str(harness), str(obj), str(_described_object(tmp_path)), "-o", str(executable)],
         capture_output=True,
         text=True,
         timeout=30,
@@ -474,7 +489,7 @@ int main(void) {
         encoding="utf-8",
     )
     build = subprocess.run(
-        ["clang", str(harness), str(obj), "-o", str(executable)],
+        ["clang", str(harness), str(obj), str(_described_object(tmp_path)), "-o", str(executable)],
         capture_output=True,
         text=True,
         timeout=30,
@@ -586,7 +601,7 @@ int main(void) {
         encoding="utf-8",
     )
     build = subprocess.run(
-        ["clang", str(harness), str(obj), "-o", str(executable)],
+        ["clang", str(harness), str(obj), str(_described_object(tmp_path)), "-o", str(executable)],
         capture_output=True,
         text=True,
         timeout=30,

@@ -32,6 +32,7 @@ from pcc.runtime.py.py_abi_constants import (
     PY_TYPE_COROUTINE,
     PY_TYPE_CPY_HANDLE,
     PY_TYPE_DICT,
+    PY_TYPE_DESCRIBED_LAYOUT,
     PY_TYPE_ELLIPSIS,
     PY_TYPE_NOTIMPLEMENTED,
     PY_TYPE_EXC,
@@ -68,6 +69,7 @@ from pcc.unsafe import (
     atomic_store_i32,
     atomic_store_i64,
     global_addr,
+    free,
     global_load_ptr,
     global_store_ptr,
     is_tagged_int,
@@ -162,6 +164,13 @@ pcc_gc_pointer_register = extern(
     c_int64,
 )
 pcc_gc_fix_backend = extern("pcc_gc_fix_backend", (), c_void)
+pcc_gc_described_extent = extern("pcc_gc_described_extent", (c_ptr,c_int64,c_int64), c_int64)
+pcc_gc_described_slot_count = extern("pcc_gc_described_slot_count", (c_ptr,c_int64,c_int64), c_int64)
+pcc_gc_described_initialize_private = extern("pcc_gc_described_initialize_private", (c_ptr,c_int64,c_ptr,c_int64,c_int64), c_int64)
+pcc_allocator_size_class = extern("pcc_allocator_size_class", (c_int64,), c_int64)
+pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
+pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
+py_gc_track = extern("py_gc_track", (c_ptr,), c_void)
 pcc_allocator_alloc_object = extern(
     "pcc_allocator_alloc_object", (c_int64,), c_ptr
 )
@@ -393,7 +402,7 @@ def _gc_graph_leaf_tag(tag: int) -> int:
 
 @c_abi_export("pcc_gc_alloc")
 def pcc_gc_alloc(size: int, type_tag: int, flags: int):
-    if size < 16:
+    if size < 16 or type_tag == PY_TYPE_DESCRIBED_LAYOUT:
         return null()
     pcc_thread_safepoint()
     pcc_gc_note_alloc(size)
@@ -450,6 +459,61 @@ def pcc_gc_alloc(size: int, type_tag: int, flags: int):
     if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
         pcc_diagnostics_runtime_log_event_code(1, 2, size, type_tag, obj)
     return obj
+
+
+@c_abi_export("pcc_gc_described_alloc_into_root")
+def pcc_gc_described_alloc_into_root(output, descriptor, descriptor_bytes: i64, repeat_count: i64) -> i64:
+    """Initialize RESERVED object geometry and header BEFORE LIVE publication.
+
+    The caller supplies an empty registered owning root. The first gate is
+    deliberately restricted to the allocator's exact object-family cells:
+    raw mapping registration may acquire/park at a graph transaction and
+    requires a separate publication proof. The normal allocation hot path
+    remains the owner for all existing Python object tags.
+    """
+    if ptr_is_null(output) != 0 or ptr_is_null(load_ptr(output,0)) == 0:
+        return 0
+    size: int = pcc_gc_described_extent(descriptor, descriptor_bytes, repeat_count)
+    if size < 32 or pcc_allocator_size_class(size) == 0:
+        return 0
+    reference_count: int = pcc_gc_described_slot_count(descriptor, descriptor_bytes, repeat_count)
+    if reference_count < 0:
+        return 0
+    pcc_thread_safepoint()
+    pcc_gc_note_alloc(size)
+    if atomic_load_i32(global_addr("pcc_gc_backend_frozen"),0,"acquire") == 0:
+        pcc_gc_fix_backend()
+    obj = pcc_allocator_alloc_object(size)
+    if ptr_is_null(obj) != 0:
+        return 0
+    pcc_thread_no_park_enter()
+    memset(obj,0,size)
+    if pcc_gc_described_initialize_private(obj,size,descriptor,descriptor_bytes,repeat_count) == 0:
+        pcc_thread_no_park_exit()
+        free(obj)  # still private RESERVED, no managed root or tag visible
+        return 0
+    store_i64(obj,PYOBJECTHEADER_REFCOUNT_OFFSET,1)
+    store_i32(obj,PYOBJECTHEADER_TYPE_TAG_OFFSET,PY_TYPE_DESCRIBED_LAYOUT)
+    store_i32(obj,PYOBJECTHEADER_FLAGS_OFFSET,0)
+    published: int = pcc_allocator_object_publish_fresh(obj)
+    if published != 1:
+        if published == 0:
+            pcc_thread_no_park_exit()
+            free(obj)  # unexpected raw mapping, not registered
+            return 0
+        pcc_platform_abort()  # corrupt allocator lifecycle, never free an unknown owner
+        return 0
+    # Release-CAS made complete geometry visible. Transfer the initial count
+    # directly into the caller's registered empty root BEFORE a possible poll.
+    store_ptr(output,0,obj)
+    pcc_thread_no_park_exit()
+    if load_i32(global_addr("pcc_debug_runtime_enabled_cache"),0) != 0:
+        pcc_debug_note_alloc_size(load_ptr(output,0),size)
+    if reference_count > 0:
+        # Track even when all slots are null: later generic field stores may
+        # introduce cycles, unlike the immutable tuple's late tracking proof.
+        py_gc_track(load_ptr(output,0))
+    return 1
 
 
 @c_abi_export("pcc_gc_publish_initialized")
@@ -2066,7 +2130,7 @@ def _py_incref_prepare(o, prepared) -> None:
     tag: int = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
     if (
         tag < PY_TYPE_NONE
-        or (tag > PY_TYPE_CPY_HANDLE and tag < PY_TYPE_USER and tag != PY_TYPE_ELLIPSIS and tag != PY_TYPE_NOTIMPLEMENTED)
+        or (tag > PY_TYPE_DESCRIBED_LAYOUT and tag < PY_TYPE_USER)
         or (tag >= (PY_TYPE_CEXT_TAG_BASE) and pcc_capi_is_cext_type_tag(tag) == 0)
     ):
         if _pcc_debug_runtime_enabled() != 0:
@@ -2189,7 +2253,7 @@ def _py_incref_checked_tail(o) -> None:
         _note_unmanaged_refcount_op()
         return
     tag: int = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
-    if tag < PY_TYPE_NONE or (tag > PY_TYPE_CPY_HANDLE and tag < PY_TYPE_USER and tag != PY_TYPE_ELLIPSIS and tag != PY_TYPE_NOTIMPLEMENTED) or (tag >= (PY_TYPE_CEXT_TAG_BASE) and pcc_capi_is_cext_type_tag(tag) == 0):
+    if tag < PY_TYPE_NONE or (tag > PY_TYPE_DESCRIBED_LAYOUT and tag < PY_TYPE_USER) or (tag >= (PY_TYPE_CEXT_TAG_BASE) and pcc_capi_is_cext_type_tag(tag) == 0):
         return
     flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
     if (tag == PY_TYPE_CONTINUATION or tag == PY_TYPE_VIRTUAL_THREAD or tag == PY_TYPE_VTHREAD_CHANNEL) and (flags & PY_FLAG_GC_TRACKED) == 0 and _untracked_task_object_is_known(o, 0) == 0:
@@ -2222,7 +2286,7 @@ def _py_decref_prepare(o, prepared) -> None:
     tag_dbg: int = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
     if (
         tag_dbg < PY_TYPE_NONE
-        or (tag_dbg > PY_TYPE_CPY_HANDLE and tag_dbg < PY_TYPE_USER and tag_dbg != PY_TYPE_ELLIPSIS and tag_dbg != PY_TYPE_NOTIMPLEMENTED)
+        or (tag_dbg > PY_TYPE_DESCRIBED_LAYOUT and tag_dbg < PY_TYPE_USER)
         or (tag_dbg >= (PY_TYPE_CEXT_TAG_BASE) and pcc_capi_is_cext_type_tag(tag_dbg) == 0)
     ):
         if _pcc_debug_runtime_enabled() != 0:
@@ -2391,7 +2455,7 @@ def _py_decref_checked_tail(o) -> None:
         _note_unmanaged_refcount_op()
         return
     tag: int = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
-    if tag < PY_TYPE_NONE or (tag > PY_TYPE_CPY_HANDLE and tag < PY_TYPE_USER and tag != PY_TYPE_ELLIPSIS and tag != PY_TYPE_NOTIMPLEMENTED) or (tag >= (PY_TYPE_CEXT_TAG_BASE) and pcc_capi_is_cext_type_tag(tag) == 0):
+    if tag < PY_TYPE_NONE or (tag > PY_TYPE_DESCRIBED_LAYOUT and tag < PY_TYPE_USER) or (tag >= (PY_TYPE_CEXT_TAG_BASE) and pcc_capi_is_cext_type_tag(tag) == 0):
         return
     flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
     if (tag == PY_TYPE_CONTINUATION or tag == PY_TYPE_VIRTUAL_THREAD or tag == PY_TYPE_VTHREAD_CHANNEL) and (flags & PY_FLAG_GC_TRACKED) == 0 and _untracked_task_object_is_known(o, 0) == 0:

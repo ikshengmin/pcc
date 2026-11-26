@@ -75,6 +75,7 @@ PUBLIC_TYPE_TAGS: dict[str, int] = {
     "PY_TYPE_CPY_HANDLE": 32,
     "PY_TYPE_ELLIPSIS": 33,
     "PY_TYPE_NOTIMPLEMENTED": 34,
+    "PY_TYPE_DESCRIBED_LAYOUT": 35,
     "PY_TYPE_USER": 100,
     "PY_TYPE_PROPERTY": 101,
     "PY_TYPE_CLASSMETHOD": 102,
@@ -655,7 +656,13 @@ def test_generated_type_tags_are_not_used_as_offsets_or_private_enum_values():
 
     private_domain_sources = {
         "freestanding_gc_mapped_roots.py": ("stack_offset >= PY_TYPE_",),
-        "freestanding_gc_relocation_payload.py": ("role == PY_TYPE_",),
+        # The retired relocation-payload module no longer owns this domain.
+        # The live bounded marker, subtraction, promotion and terminal-clear
+        # consumers all carry the numeric slot-role ABI independently of tags.
+        "freestanding_gc_backend0_incremental.py": ("role == PY_TYPE_", "role != PY_TYPE_"),
+        "freestanding_gc_backend0_slots.py": ("role == PY_TYPE_", "role != PY_TYPE_"),
+        "freestanding_gc_generational_promotion.py": ("role == PY_TYPE_", "role != PY_TYPE_"),
+        "freestanding_gc_sweep_slots.py": ("role == PY_TYPE_", "role != PY_TYPE_"),
         "freestanding_re_engine.py": ("guard >= PY_TYPE_",),
         "py_capi_cext_runtime.py": ("member_type == PY_TYPE_",),
     }

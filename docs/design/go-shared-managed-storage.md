@@ -202,3 +202,59 @@ retirement and bounded cursor. Negative descriptors must not allocate or
 publish. Add a dispatch-completeness test before enabling the tag; an ABI
 unit or C-to-runtime geometry execution alone is not the gate or an existing
 Python QPS non-regression measurement.
+
+## First managed lifecycle slice (bounded object-family cells, Linux native)
+
+The internal native tag `PY_TYPE_DESCRIBED_LAYOUT` is now admitted only by
+`pcc_gc_described_alloc_into_root`. It rejects the generic `pcc_gc_alloc`
+entry, malformed descriptors, nonempty/null outputs, and extents that would
+select the allocator's raw-mapping path (current object size classes extend
+through 16,384 bytes). A trusted caller supplies a registered empty owning
+root and immutable process-lifetime descriptor; a raw allocation result or
+bare pointer is never returned. It is not yet a Go/Java frontend ABI.
+
+The actual allocator returns an exact private RESERVED cell. Under the
+existing no-park owner, the constructor zeroes the exact requested extent,
+validates/binds metadata, sets the count/tag/flags, then uses the allocator's
+release-CAS LIVE publication. Before the no-park exit can poll, it transfers
+its initial count directly to the registered root. Only after that exit
+can it track a reference-bearing descriptor; the freshly published slots
+are null, so no untracked reference edge can appear in this interval.
+The owner is reloaded from the registered root after the park boundary.
+Pointer-free backing stays untracked. A reference-bearing layout tracks
+before returning, even when all slots are null; later writes use the existing
+counted, container-synchronized field store. Invalid input or allocation
+failure publishes no root. An impossible failed LIVE transition fails
+closed (no freeing a cell of unknown lifecycle). Large/raw mapping extent
+admission remains a separate protocol task, not an invented limit on Go or
+Java semantics.
+
+All four refcount tag checks, bounded shared slot dispatch, ordinary terminal
+and cycle-sweep deallocation, and terminal flags now agree on this tag. Its
+metadata is never a reference and remains intact through candidate clearing.
+The deallocator owns its untracked nonmoving bytes across child releases;
+collector scans obey the existing stop/lock protocol. Young and full walkers
+consume the same visited slots. Clear only owned references, never arbitrary
+scalar bytes, and retire through the ordinary allocator provenance/free owner.
+
+Linux host PCC, 193-member current-source owned archive (all self object
+writers, no host cc): test-first publication order model and real C caller
+passed. The caller used actual scheduler root registration handles, exact
+allocator requested extent (+105/-105), zero-capacity, invalid and generic
+entry rejection, pointer-free and mixed fixed/repeated geometry, exact
+reference counts, scalar bits equal to another object's address, acyclic
+terminal retirement, rooted mutual/self cycles, explicit and young
+collection, and bounded full mark/demotion handover. Two actual registered
+carriers contended on one field while collecting; the worker also allocated
+and released 100 described owners across concurrent stops. The native result
+was exit 42, empty stdout/stderr, with ten repeated successes. Three existing
+owned C collection controls (candidate revalidation/resurrection, zero-count
+pending-owner roots, ordinary list cycles) also passed against the same
+strictly admitted archive. Source tag/slot-role inventory checks were kept
+strict and the retired relocation-module audit now inspects its four live
+slot-role users. This does not establish cross-platform native execution,
+full affected-language validation, the required Python workload A/B, or
+collector-interface stability; no frontend admission until these prerequisites
+and the remaining shared-layout design obligations are reviewed. In particular,
+large backing, dynamic/shared descriptor lifetime, generic typed slice/reference
+lowering and actual unchanged Go/Java project execution remain open.

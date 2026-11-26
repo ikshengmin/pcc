@@ -2194,6 +2194,7 @@ def _cross_object_signatures_part_6():
     "pcc_gc_object_index_seen": (("c_ptr",), "c_int64"),
     "pcc_gc_index_reclaim_retired": ((), "c_int64"),
     "pcc_gc_reclaim_retired_index_tables": ((), "c_int64"),
+    "pcc_gc_described_visit_slots_slice": (("c_ptr", "c_int64", "c_int64", "c_ptr", "c_ptr", "c_ptr"), "c_int64"),
     "pcc_gc_visit_object_slots_slice": (
         ("c_ptr", "c_int64", "c_int64", "c_ptr", "c_ptr", "c_ptr"),
         "c_int64",
@@ -2357,6 +2358,7 @@ def _cross_object_signatures_part_11():
     "py_dealloc_str": (("c_ptr",), "c_void"),
     "py_dealloc_list": (("c_ptr",), "c_void"),
     "py_dealloc_tuple": (("c_ptr",), "c_void"),
+    "py_dealloc_described_layout": (("c_ptr",), "c_void"),
     "py_cleanup_two_roots_preserving_exception": (("c_ptr", "c_ptr"), "c_void"),
     "py_dealloc_dict": (("c_ptr",), "c_void"),
     "py_dealloc_set": (("c_ptr",), "c_void"),

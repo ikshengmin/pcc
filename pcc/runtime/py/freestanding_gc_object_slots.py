@@ -35,6 +35,7 @@ pcc_capi_visit_cext_object_slots_i64 = extern(
     c_int32
 )
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
+pcc_gc_described_visit_slots_slice = extern("pcc_gc_described_visit_slots_slice", (c_ptr,c_int64,c_int64,c_ptr,c_ptr,c_ptr), c_int64)
 
 
 @c_abi_export("pcc_gc_memoryview_initialize_owned_buffer")
@@ -539,6 +540,8 @@ def pcc_gc_visit_object_slots_slice(
     tag: i64 = load_i32(o, abi_constant("object.header.type_tag_offset"))
     if tag < abi_constant("object.type.none"):
         return 0
+    if tag == abi_constant("object.type.described_layout"):
+        return pcc_gc_described_visit_slots_slice(o,cursor,limit,visitor,context,state_out)
     if _has_no_pointer_slots(o) != 0:
         return 1
     if pcc_capi_is_cext_type_tag(tag) != 0:

@@ -34,12 +34,22 @@ int64_t pcc_gc_described_initialize_private(void *owner, int64_t allocation_exte
 
 /* Visit already bound immutable geometry. The owner and descriptor remain
  * live during the callback; callback receives only the exact owned slots
- * (role=1) and must obey the collector's no-park/no-retirement protocol.
+ * (role=1) and must obey its owner protocol: collector scans cannot park;
+ * terminal deallocation owns untracked nonmoving bytes until callback return.
  * state[0] is next ordinal or -1, state[1] is count examined. No recursive
  * validation of the descriptor, no payload scalar visits. Not a frontend
- * allocation or managed GC tag admission. */
+ * frontend allocation or managed GC tag admission by this raw walker. */
 typedef void (*PccDescribedSlotVisitor)(void *slot, int64_t role, void *context);
 int64_t pcc_gc_described_visit_slots_slice(void *owner, int64_t cursor,
     int64_t limit, PccDescribedSlotVisitor visitor, void *context, int64_t *state);
+
+/* Managed first-gate constructor. Output is a registered, initialized empty
+ * owning root in the admitted caller; no reference is returned in a register.
+ * The compiler-owned immutable descriptor must live at least as long as the
+ * resulting object. Only allocator object-family size classes are admitted
+ * initially; larger/raw mappings and malformed geometry fail without publication.
+ * Returns 1 on success, 0 on invalid input or allocation failure. */
+int64_t pcc_gc_described_alloc_into_root(void *output,const int64_t *descriptor,
+    int64_t descriptor_bytes,int64_t repeat_count);
 
 #endif

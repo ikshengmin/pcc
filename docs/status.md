@@ -2540,7 +2540,6 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Closed-world continuation factory immediate result handoff proof and narrow candidate: Codex, Linux, 2026-11-26T17:39Z, area runtime-codegen-factory
-   - #13 described-layout atomic managed allocation/publication and complete collector lifecycle: Codex, Linux, 2026-11-26T17:37Z, area runtime-gc-described-layout
    - J2s actual Linux x64 Stage1 indexed worker stack-map planning repeated-work attribution (self_backend_precise_stackmaps x64 only, disjoint from runtime GC and AArch64 selection): Codex, Linux, 2026-11-26T17:35Z, area stage1-codegen
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
@@ -2591,10 +2590,31 @@ in the relevant section or issue and removes the entry.
    root or concurrency claim. The existing pcc_gc_alloc publishes the
    type tag/cell before returning, so private geometry must be initialized
    before that publication, not by an unqualified after-return store.
-   Next: integrate descriptor-backed allocation + tag/slot
-   dispatch atomically, then real rooted pointer-free/reference-bearing
-   and cycle/young/full/explicit collect tests; no Go/Java frontend use
-   or production admission until complete. C++
+   Third atomic managed-lifecycle slice now admits internal tag 35 only
+   through dedicated constructor into a trusted registered empty root.
+   It restricts first admission to object-family size classes <=16,384
+   (no raw-mapping publication shortcut), zeroes RESERVED cells and binds
+   validated geometry/header before release-CAS LIVE; transfers initial
+   count to root before no-park exit; reloads rooted owner before tracking.
+   All four refcount checks, bounded visitor, ordinary/cycle dealloc,
+   terminal flags and shared sweep/young/full walker consume one layout.
+   Linux current-source self-owned 193-member archive built 149.89s/
+   282,763,264 B peak and strictly readmitted after two exact runtime
+   member rebuilds (unchanged compiler checksum). Native C witness exit
+   42/empty streams +10 repetitions: actual scheduler roots, +105/-105
+   allocator requested bytes, pointer-free/mixed references, exact counts,
+   scalar pointer-shaped bits, terminal retirement, rooted cycles,
+   explicit/young/bounded full, two registered carriers contending on
+   field and 100 allocations by worker across concurrent collection.
+   Existing native candidate/resurrection, pending zero-count roots and
+   ordinary list cycle agree; final combined guard 9.79s/172,388,352 B.
+   Ten source ABI checks pass; stale deleted relocation-module numeric
+   domain audit is strengthened against four actual slot-role users.
+   This is a bounded Linux internal lifecycle gate, not cross-platform
+   native, whole-suite, Python QPS A/B, general backing or stable collector
+   certification. Next: guard-tested raw-mapping publication/extent and
+   broader platform/native + A/B acceptance before generic Go/Java
+   lowering or unchanged upstream acceptance. C++
    [#14](https://github.com/ikshengmin/pcc/issues/14):
    implicit/explicit destructor exception specifications and the non-throwing
    override rule now select ordinary versus effect-gated D1 destruction.

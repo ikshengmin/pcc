@@ -85,6 +85,7 @@ ABI_CONSTANTS: dict[str, int] = {
     'object.type.continuation': 29,
     'object.type.coroutine': 20,
     'object.type.cpy_handle': 32,
+    'object.type.described_layout': 35,
     'object.type.dict': 6,
     'object.type.ellipsis': 33,
     'object.type.exc': 12,
@@ -210,6 +211,7 @@ PY_TYPE_COMPLEX = 16
 PY_TYPE_CONTINUATION = 29
 PY_TYPE_COROUTINE = 20
 PY_TYPE_CPY_HANDLE = 32
+PY_TYPE_DESCRIBED_LAYOUT = 35
 PY_TYPE_DICT = 6
 PY_TYPE_ELLIPSIS = 33
 PY_TYPE_EXC = 12

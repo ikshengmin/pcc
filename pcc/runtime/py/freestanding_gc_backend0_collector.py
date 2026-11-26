@@ -8,7 +8,7 @@ This module owns only the raw backend-0 collection state machine.
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.runtime.py.py_abi_constants import (
-    PY_FLAG_GC_DEALLOCATING, PY_FLAG_GC_TRACKED, PY_TYPE_DICT, PY_TYPE_LIST,
+    PY_FLAG_GC_DEALLOCATING, PY_FLAG_GC_TRACKED, PY_TYPE_DICT, PY_TYPE_DESCRIBED_LAYOUT, PY_TYPE_LIST,
     PY_TYPE_SET, PY_TYPE_TUPLE,
 )
 from pcc.unsafe import (
@@ -42,6 +42,7 @@ py_dealloc_float = extern("py_dealloc_float", (c_ptr,), c_void)
 py_dealloc_str = extern("py_dealloc_str", (c_ptr,), c_void)
 py_dealloc_list = extern("py_dealloc_list", (c_ptr,), c_void)
 py_dealloc_tuple = extern("py_dealloc_tuple", (c_ptr,), c_void)
+py_dealloc_described_layout = extern("py_dealloc_described_layout", (c_ptr,), c_void)
 py_dealloc_dict = extern("py_dealloc_dict", (c_ptr,), c_void)
 py_dealloc_set = extern("py_dealloc_set", (c_ptr,), c_void)
 py_dealloc_func = extern("py_dealloc_func", (c_ptr,), c_void)
@@ -452,6 +453,8 @@ def _dealloc_unreachable(obj) -> None:
         py_dealloc_list(obj)
     elif tag == abi_constant("object.type.tuple"):
         py_dealloc_tuple(obj)
+    elif tag == abi_constant("object.type.described_layout"):
+        py_dealloc_described_layout(obj)
     elif tag == abi_constant("object.type.dict"):
         py_dealloc_dict(obj)
     elif tag == abi_constant("object.type.set"):
@@ -705,7 +708,7 @@ def _collect(pairs, candidate_count: i64) -> i64:
             py_gc_index_remove(obj)
             flags: i64 = load_i32(obj, 12) & ~PY_FLAG_GC_TRACKED
             tag: i64 = load_i32(obj, 8)
-            if tag == PY_TYPE_LIST or tag == PY_TYPE_TUPLE or tag == PY_TYPE_DICT or tag == PY_TYPE_SET:
+            if tag == PY_TYPE_LIST or tag == PY_TYPE_TUPLE or tag == PY_TYPE_DICT or tag == PY_TYPE_SET or tag == PY_TYPE_DESCRIBED_LAYOUT:
                 # The exact verdict is final and these built-ins have had
                 # their owning slots cleared. Publish terminal ownership as
                 # the ordinary last decrement does. The free owner still

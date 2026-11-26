@@ -56,6 +56,8 @@ enum {
     PY_TYPE_ELLIPSIS = 33,
     /* Immortal, pointer-free NotImplemented singleton; no heap instances. */
     PY_TYPE_NOTIMPLEMENTED = 34,
+    /* Compiler-described backing; allocate only through its private geometry owner. */
+    PY_TYPE_DESCRIBED_LAYOUT = 35,
     PY_TYPE_USER = 100,
     PY_TYPE_PROPERTY = 101,
     PY_TYPE_CLASSMETHOD = 102,

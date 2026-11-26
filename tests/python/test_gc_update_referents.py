@@ -1084,6 +1084,8 @@ def test_current_runtime_type_tags_have_a_finite_slot_classification_source():
         "PY_TYPE_CPY_HANDLE",
     }
     slot_bearing = {
+        # Descriptors may have zero slots; the tag always uses precise geometry.
+        "PY_TYPE_DESCRIBED_LAYOUT",
         "PY_TYPE_LIST",
         "PY_TYPE_DICT",
         "PY_TYPE_TUPLE",

@@ -122,7 +122,9 @@ def pcc_gc_described_visit_slots_slice(owner, cursor: i64, limit: i64, visitor, 
     were bound by initialize_private and cannot subsequently change. This
     trusted-owner helper never validates the descriptor again, scans scalar
     bytes, reads reference contents, retains slot addresses or parks. The
-    callback must obey the collector's own no-retirement/no-park protocol.
+    callback must obey its owner protocol: collector scans cannot park; the
+    terminal deallocator owns untracked, nonmoving bytes until callback
+    return even if releasing a child runs user code.
     state_out is [next ordinal or -1, number examined], exactly the common
     collector cursor convention. Every visited slot has owned-reference role.
     """

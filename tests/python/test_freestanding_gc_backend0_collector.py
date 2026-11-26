@@ -94,6 +94,7 @@ RAW_IMPORTS = {
     "py_dealloc_str",
     "py_dealloc_task",
     "py_dealloc_tuple",
+    "py_dealloc_described_layout",
     "py_dealloc_virtual_thread",
     "py_dealloc_vthread_channel",
     "py_dealloc_weakref",

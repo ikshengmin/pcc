@@ -11,7 +11,7 @@ from pcc.extern import extern, c_abi_export, c_int32, c_int64, c_ptr, c_void
 from pcc.runtime.py.py_abi_constants import (
     PYCPYHANDLEOBJECT_FOREIGN_REF_OFFSET, PYCPYHANDLEOBJECT_SIZE,
 )
-from pcc.runtime.py.py_abi_constants import DICTENTRY_KEY_OFFSET, DICTENTRY_SIZE, DICTENTRY_VALUE_OFFSET, PYDICTOBJECT_ENTRIES_OFFSET, PYDICTOBJECT_ENTRIES_USED_OFFSET, PYDICTOBJECT_INDICES_OFFSET, PYLISTOBJECT_CAPACITY_OFFSET, PYLISTOBJECT_ITEMS_OFFSET, PYLISTOBJECT_LENGTH_OFFSET, PYOBJECTHEADER_FLAGS_OFFSET, PYOBJECTHEADER_REFCOUNT_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET, PYTUPLEOBJECT_ITEMS_OFFSET, PYTUPLEOBJECT_LEN_OFFSET, PY_FLAG_IMMORTAL, PY_TYPE_CONTINUATION, PY_TYPE_COROUTINE, PY_TYPE_CPY_HANDLE, PY_TYPE_CLASS, PY_TYPE_CLASSMETHOD, PY_TYPE_DICT, PY_TYPE_EXC, PY_TYPE_FILE, PY_TYPE_FLOAT, PY_TYPE_FUNC, PY_TYPE_GEN, PY_TYPE_INSTANCE, PY_TYPE_INT, PY_TYPE_ITER, PY_TYPE_LIST, PY_TYPE_MEMORYVIEW, PY_TYPE_PROPERTY, PY_TYPE_SET, PY_TYPE_STR, PY_TYPE_STATICMETHOD, PY_TYPE_TASK, PY_TYPE_THREAD, PY_TYPE_THREAD_CONDITION, PY_TYPE_THREAD_EVENT, PY_TYPE_THREAD_LOCK, PY_TYPE_THREAD_RLOCK, PY_TYPE_THREAD_SEMAPHORE, PY_TYPE_TUPLE, PY_TYPE_USER_CLASS_START, PY_TYPE_VALUEBOX, PY_TYPE_VIRTUAL_THREAD, PY_TYPE_VTHREAD_CHANNEL, PY_TYPE_WEAKREF
+from pcc.runtime.py.py_abi_constants import DICTENTRY_KEY_OFFSET, DICTENTRY_SIZE, DICTENTRY_VALUE_OFFSET, PYDICTOBJECT_ENTRIES_OFFSET, PYDICTOBJECT_ENTRIES_USED_OFFSET, PYDICTOBJECT_INDICES_OFFSET, PYLISTOBJECT_CAPACITY_OFFSET, PYLISTOBJECT_ITEMS_OFFSET, PYLISTOBJECT_LENGTH_OFFSET, PYOBJECTHEADER_FLAGS_OFFSET, PYOBJECTHEADER_REFCOUNT_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET, PYTUPLEOBJECT_ITEMS_OFFSET, PYTUPLEOBJECT_LEN_OFFSET, PY_FLAG_IMMORTAL, PY_TYPE_CONTINUATION, PY_TYPE_COROUTINE, PY_TYPE_CPY_HANDLE, PY_TYPE_CLASS, PY_TYPE_CLASSMETHOD, PY_TYPE_DICT, PY_TYPE_DESCRIBED_LAYOUT, PY_TYPE_EXC, PY_TYPE_FILE, PY_TYPE_FLOAT, PY_TYPE_FUNC, PY_TYPE_GEN, PY_TYPE_INSTANCE, PY_TYPE_INT, PY_TYPE_ITER, PY_TYPE_LIST, PY_TYPE_MEMORYVIEW, PY_TYPE_PROPERTY, PY_TYPE_SET, PY_TYPE_STR, PY_TYPE_STATICMETHOD, PY_TYPE_TASK, PY_TYPE_THREAD, PY_TYPE_THREAD_CONDITION, PY_TYPE_THREAD_EVENT, PY_TYPE_THREAD_LOCK, PY_TYPE_THREAD_RLOCK, PY_TYPE_THREAD_SEMAPHORE, PY_TYPE_TUPLE, PY_TYPE_USER_CLASS_START, PY_TYPE_VALUEBOX, PY_TYPE_VIRTUAL_THREAD, PY_TYPE_VTHREAD_CHANNEL, PY_TYPE_WEAKREF
 from pcc.unsafe import (
     atomic_load_i64,
     atomic_rmw_i64,
@@ -45,6 +45,7 @@ py_decref = extern("py_decref", (c_ptr,), c_void)
 pcc_gc_release_nonterminal_tail = extern("pcc_gc_release_nonterminal_tail", (c_ptr, c_int64), c_int64)
 pcc_gc_free_object_memory = extern("pcc_gc_free_object_memory", (c_ptr,), c_void)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
+pcc_gc_visit_object_slots = extern("pcc_gc_visit_object_slots", (c_ptr,c_ptr,c_ptr),c_int64)
 py_dealloc_func = extern("py_dealloc_func", (c_ptr,), c_void)
 py_dealloc_iter = extern("py_dealloc_iter", (c_ptr,), c_void)
 py_dealloc_gen = extern("py_dealloc_gen", (c_ptr,), c_void)
@@ -112,7 +113,7 @@ def _dealloc_should_defer(tag: int) -> bool:
         return False
     if tag == PY_TYPE_LIST:
         return True
-    if tag == PY_TYPE_TUPLE:
+    if tag == PY_TYPE_TUPLE or tag == PY_TYPE_DESCRIBED_LAYOUT:
         return True
     if tag == PY_TYPE_DICT:
         return True
@@ -180,6 +181,9 @@ def _dealloc_dispatch(o, tag: int) -> None:
         return
     if tag == PY_TYPE_TUPLE:
         py_dealloc_tuple(o)
+        return
+    if tag == PY_TYPE_DESCRIBED_LAYOUT:
+        py_dealloc_described_layout(o)
         return
     if tag == PY_TYPE_DICT:
         py_dealloc_dict(o)
@@ -535,6 +539,24 @@ def py_dealloc_tuple(o) -> None:
         item = pcc_gc_load_ptr(o, ptr_add(o, PYTUPLEOBJECT_ITEMS_OFFSET + i * 8))
         if ptr_is_null(item) == 0:
             py_decref(item)
+    pcc_gc_free_object_memory(o)
+
+
+def _described_release_slot(slot, role: int, owner) -> None:
+    if role != 1:
+        return
+    child = pcc_gc_load_ptr(owner, slot)
+    store_ptr(slot,0,null())
+    if ptr_is_null(child) == 0:
+        py_decref(child)
+
+
+@c_abi_export("py_dealloc_described_layout")
+def py_dealloc_described_layout(o) -> None:
+    # At terminal count the owner is already untracked and owns its bytes
+    # until this function frees them. Sweep has cleared candidate edges;
+    # ordinary terminal release clears each remaining owned reference once.
+    pcc_gc_visit_object_slots(o,_described_release_slot,o)
     pcc_gc_free_object_memory(o)
 
 
