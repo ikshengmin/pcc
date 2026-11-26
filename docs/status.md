@@ -1607,6 +1607,13 @@ in the relevant section or issue and removes the entry.
    instruction counts varied 32% between runs at load 11.8, against 0.3% at
    load 3: some request path executes more instructions when it waits
    longer, so `instr` is not load-independent; not yet located.
+   P0 Next (unit 1 closed 2026-11-26 with (c), (d), (e), (g) merged and
+   (h) parked): self executes 1.27x clang's instructions on the same
+   runtime IR, but no instruction-removing change since (c) moved cycles
+   per request beyond noise. Before another backend change, compare
+   sampled cycles per function of the self and clang builds under the same
+   conditions (`pcc_perf.py top` on both arms, then the hot function's code
+   in both) and rank by cycles; measure on an idle host with a control arm.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2
@@ -1694,7 +1701,7 @@ in the relevant section or issue and removes the entry.
    on 2026-11-26.
 
    Claims:
-   - P0 unit 1: self AArch64 register copies and immediate operands: Claude, macOS, 2026-11-25T21:10Z (renewed 2026-11-26T04:05Z), area backend (AArch64 selection, register allocation and their tests; native and bootstrap gates authorized by the user on 2026-11-26)
+   - none
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
