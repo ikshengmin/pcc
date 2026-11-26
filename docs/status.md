@@ -1019,7 +1019,7 @@ in the relevant section or issue and removes the entry.
    No native GC coverage claim or gate waiver.
 
    Claims:
-   - none
+   - Iterator root IR models follow exact local ownership and private cursor slot ABI: Codex, Linux IR and stackmaps, 2026-11-26T19:42Z, area ci-iterator-root-models
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
