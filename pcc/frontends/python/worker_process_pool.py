@@ -353,6 +353,7 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
     state_diagnostic = {}
     preflight_done = False
     available = 0
+    declined_inputs = None
     shared_admission_stream = acquire_shared_pool_slot(tree_path, tree_budget)
     try:
         # The previous independent owner's children may have just retired.
@@ -638,6 +639,17 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                 ready = ready_resource_cohort(
                     ready, pending, [item[0] for item in active], bands,
                 )
+                # choose_task reads only these, the task records (changed by
+                # a cancel, which changes the reservations, or by preparing a
+                # newly ready task) and the observations, which only grow.
+                # While none of them changed it would decline again: the
+                # loop polls every 10 ms, and re-sorting every pending
+                # estimate and appending a trace line each time cost a Stage1
+                # coordinator about 120 s of CPU.
+                decision_inputs = (tuple(ready), tuple(reservations), available,
+                                   len(observations), state is not None)
+                if decision_inputs == declined_inputs:
+                    break
                 index, demand, exclusive = choose_task(
                     ready, tasks, observations, reservations, width, available,
                     guarded_calibration=state is not None,
@@ -650,7 +662,9 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                         require_task_fits(first, estimated_task_bytes(tasks[first], observations),
                                           available, tree_budget)
                     _resource_event(trace_path, "backoff", -1, 0, sum(reservations), available, 0)
+                    declined_inputs = decision_inputs
                     break
+                declined_inputs = None
                 admission_demand = (max(1, minimum_task_bytes(tasks[index]))
                                     if exclusive and state is not None else demand)
                 require_task_fits(index, admission_demand, available, tree_budget)
