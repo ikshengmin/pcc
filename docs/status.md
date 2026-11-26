@@ -202,20 +202,6 @@ in the relevant section or issue and removes the entry.
   2026-11-26 a loaded host (load 7.1) gave a 4.2% floor, which no single
   1-3% change can pass. Claude's recommendation: yes.
 
-- P0 (c), asked by Claude 2026-11-26: the self AArch64 allocator's model
-  now limits P0 (technique log (e)): every value keeps a stack slot and a
-  register is only a projection, call operands and values crossing calls
-  live in x19-x28 and are copied into x0-x7, and no interval is split.
-  Peephole-sized changes measured 0.4-2.2% each. Replace the allocation
-  model (an LLVM-greedy-like allocator: live-range splitting, call-site
-  register constraints with a parallel-move argument setup, coalescing,
-  callee-saved shrink-wrapping), a multi-day backend change shared by
-  Darwin and Linux AArch64 and gated by the bootstrap, or keep extending the
-  current one? Claude's recommendation: replace it, starting with the
-  call-site constraints and parallel moves, which carry the "args before
-  call", "into argument register" and "result after call" copies (48% of the
-  register copies in the step trace).
-
 1. **GC correctness.** Open issues:
    [#7](https://github.com/ikshengmin/pcc/issues/7) (ownership of managed
    boxed-int direct returns) waits for a new reported native owner witness,
@@ -1540,6 +1526,26 @@ in the relevant section or issue and removes the entry.
    next arm. Tests of the signed form use the `branch_protection_on`
    fixture (tests/conftest.py); `test_self_backend_default_matches_clang_plain_arm64`
    pins the default.
+   (g) Call-site register rules in the allocator (Claude, 2026-11-26;
+   the maintainer's answer to waiting-list P0 (c): at least LLVM parity,
+   then asyncio). `call_operands_may_use_caller_registers` admits a direct,
+   non-variadic call whose arguments are all scalar register arguments and
+   whose result is not returned in memory; a value whose last use is such
+   a call's operand no longer needs x19-x28, and `emit_scalar_register_arguments`
+   writes the argument registers as one parallel move (register sources
+   first, a cycle parked in x16, then slot and constant sources). Call
+   results and returned values hold x0 when no call crosses them and no
+   other interval holds it; a cast whose operand dies there shares its
+   operand's register (the disjoint-interval merge of (e)). The allocator
+   and the call emitter share the one predicate. Measured with `instr` (load
+   5.7, three runs each), instructions per request: p1-phi 258074, signing
+   off (f) 246285 (-4.6%), call-site rule 241548 (-6.4%), x0 and cast hints
+   237065 (-8.1%; -11.7% against this morning's 268555; clang's code
+   generation of the same IR is 186681, now 1.27x). Cycles per request did
+   not follow (53631 -> 53267, inside noise): the removed instructions are
+   cheap; the cycle gap is elsewhere and is the next thing to locate. Test:
+   `tests/python/test_aarch64_call_operand_registers.py` (swap, rotation,
+   duplicate, constant and call-crossing operands, native execution).
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2

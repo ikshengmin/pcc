@@ -56,6 +56,7 @@ from .self_backend_kernel import (
     _scalar_window_is_complete,
     IndexedFunctionKernel,
     TYPE_KIND_ARRAY,
+    TYPE_KIND_FP,
     TYPE_KIND_INT,
     TYPE_KIND_PTR,
     TYPE_KIND_STRUCT,
@@ -434,6 +435,109 @@ def _interval_touches_call(
         else:
             high = middle
     return low < len(call_positions) and call_positions[low] <= end
+
+
+def call_operands_may_use_caller_registers(kernel, call_id: int) -> bool:
+    """Whether a call's operands may live in caller-saved x0-x8.
+
+    True for a direct, non-variadic call to a compiled or runtime function
+    whose every argument is a scalar register argument (at most eight GPR
+    and eight FP values) and whose result is not returned in memory. Its
+    argument setup reads only those operands, and
+    ``emit_scalar_register_arguments`` writes them as one parallel move, so
+    an operand whose interval ends at the call may stay in a caller-saved
+    register. Every other call keeps its operands in x19-x28, as before.
+    The allocator and the call emitter use this one predicate.
+    """
+
+    header: CompilerInt4 = kernel.call_header(call_id)
+    if header.third & 3:
+        return False
+    callee = kernel.call_texts[header.second]
+    if callee.startswith("llvm.") or callee.startswith("pcc_gc_frame_"):
+        return False
+    return_kind = kernel.type_kind_id(header.first)
+    if return_kind == TYPE_KIND_ARRAY or return_kind == TYPE_KIND_STRUCT:
+        return False
+    # Variadic calls were excluded by flag 2 above; span.second is only
+    # their fixed count.
+    span: CompilerInt4 = kernel.call_span(call_id)
+    gpr_count = 0
+    fpr_count = 0
+    index = 0
+    while index < span.first:
+        argument: CompilerInt4 = kernel.call_arg(header.fourth + index)
+        kind = kernel.type_kind_id(argument.first)
+        if kind == TYPE_KIND_FP:
+            fpr_count += 1
+        elif kind == TYPE_KIND_PTR:
+            gpr_count += 1
+        elif kind == TYPE_KIND_INT:
+            argument_header: CompilerInt4 = kernel.type_header(argument.first)
+            if argument_header.second > 64:
+                return False
+            gpr_count += 1
+        else:
+            return False
+        index += 1
+    return gpr_count <= 8 and fpr_count <= 8
+
+
+def _simple_call_positions(kernel, block_base: list[int]) -> set[int]:
+    """Positions of calls whose operands may stay in caller-saved registers."""
+
+    positions: set[int] = set()
+    block_id = 0
+    while block_id < len(kernel.block_names):
+        block_fact: CompilerInt4 = kernel.block_fact(block_id)
+        instruction_index = 0
+        while instruction_index < block_fact.second:
+            metadata: CompilerInt4 = kernel.instruction_metadata_by_id(
+                block_fact.first + instruction_index
+            )
+            if metadata.first == PARSED_INSTRUCTION_KIND_CALL:
+                if call_operands_may_use_caller_registers(kernel, metadata.second):
+                    positions.add(block_base[block_id] + instruction_index)
+            instruction_index += 1
+        block_id += 1
+    return positions
+
+
+def _returned_value_ids(kernel) -> set[int]:
+    """Values a ``ret`` terminator returns."""
+
+    returned: set[int] = set()
+    block_id = 0
+    while block_id < len(kernel.block_names):
+        header: CompilerInt4 = kernel.terminator_header(block_id)
+        if header.first == PARSED_INSTRUCTION_KIND_RET:
+            try:
+                returned.add(kernel.terminator_use_id(block_id, 0))
+            except IndexError:
+                pass
+        block_id += 1
+    return returned
+
+
+def _needs_callee_saved(
+    start: int,
+    end: int,
+    call_positions: list[int],
+    simple_calls: set[int] | None,
+) -> bool:
+    """Whether an interval must take x19-x28.
+
+    A call inside the interval clobbers x0-x17 while the value is live. A
+    value whose last use is an operand of a simple call (see
+    ``call_operands_may_use_caller_registers``) is read by that call's
+    argument setup and is dead afterwards, so it may stay in x0-x8.
+    """
+
+    if simple_calls is None or end not in simple_calls:
+        return _interval_touches_call(start, end, call_positions)
+    if end <= start:
+        return False
+    return _interval_touches_call(start, end - 1, call_positions)
 
 
 def _extend_aarch64_madd_operand_liveness(
@@ -1273,7 +1377,11 @@ def _linear_scan_assign_pools(
 
         register_index = -1
         fixed = fixed_registers.get(value_id, -1)
-        if fixed == 0 and not needs_callee_saved:
+        x0_taken = False
+        for active_item in active:
+            if active_item[2] == 0:
+                x0_taken = True
+        if fixed == 0 and not needs_callee_saved and not x0_taken:
             register_index = 0
         elif fixed > 0 and not needs_callee_saved and fixed in free_caller:
             free_caller.remove(fixed)
@@ -1536,6 +1644,7 @@ def _append_argument_intervals(
     reload_offsets: set[int],
     intervals: list[tuple[int, int, int, bool]],
     fixed_registers: dict[int, int],
+    simple_calls: set[int] | None = None,
 ) -> None:
     """Add register-passed scalar arguments as candidates.
 
@@ -1581,7 +1690,7 @@ def _append_argument_intervals(
             continue
         if _interval_touches_call(0, last_use, hard_barriers):
             continue
-        crosses_call = _interval_touches_call(0, last_use, call_barriers)
+        crosses_call = _needs_callee_saved(0, last_use, call_barriers, simple_calls)
         if not crosses_call:
             fixed_registers[value_id] = int(regs[0][1:])
         intervals.append((-1, last_use, value_id, crosses_call))
@@ -1597,6 +1706,7 @@ def _append_phi_intervals(
     call_barriers: list[int],
     reload_offsets: set[int],
     intervals: list[tuple[int, int, int, bool]],
+    simple_calls: set[int] | None = None,
 ) -> None:
     """Add a block's scalar phi results as candidates.
 
@@ -1664,7 +1774,7 @@ def _append_phi_intervals(
                 start,
                 last_use,
                 value_id,
-                _interval_touches_call(base, last_use, call_barriers),
+                _needs_callee_saved(base, last_use, call_barriers, simple_calls),
             )
         )
 
@@ -2015,6 +2125,12 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
     global_barriers: list[int] = []
     block_safe: list[bool] = []
     function_intervals: list[tuple[int, int, int]] = []
+    simple_calls: set[int] | None = None
+    x0_hints: list[int] = []
+    cast_pairs: list[tuple[int, int]] = []
+    returned_values: set[int] = set()
+    if callee_saved:
+        returned_values = _returned_value_ids(kernel)
     if function_level:
         (
             block_base,
@@ -2030,6 +2146,7 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
             if forwarding_positions:
                 call_barriers = [position for position in call_barriers
                                  if position not in forwarding_positions]
+            simple_calls = _simple_call_positions(kernel, block_base)
         # A fused multiply reads its inputs at the consumer, not at the mul.
         # The per-block overrides below cover instruction results; arguments
         # and phis take their intervals straight from these last uses.
@@ -2079,6 +2196,7 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
                 call_barriers,
                 reload_offsets,
                 pool_intervals,
+                simple_calls,
             )
 
         call_positions: list[int] = []
@@ -2282,16 +2400,14 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
                 if _interval_touches_call(barrier_start, last_use, hard_barriers):
                     position += 1
                     continue
-                pool_intervals.append(
-                    (
-                        live_start,
-                        last_use,
-                        dest_id,
-                        _interval_touches_call(
-                            barrier_start, last_use, call_barriers
-                        ),
-                    )
+                needs = _needs_callee_saved(
+                    barrier_start, last_use, call_barriers, simple_calls
                 )
+                pool_intervals.append((live_start, last_use, dest_id, needs))
+                if not needs and (is_call_result or dest_id in returned_values):
+                    # A call result arrives in x0 and a returned value
+                    # leaves in it: holding them there removes the copy.
+                    x0_hints.append(dest_id)
                 if kind_id == PARSED_INSTRUCTION_KIND_CAST:
                     cast_record: CompilerInt4 = kernel.instruction_record(
                         metadata.second
@@ -2300,6 +2416,12 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
                         kernel, cast_record
                     ):
                         alias_pairs.append((dest_id, cast_record.third))
+                    elif cast_record.third >= 0:
+                        # Other casts read their operand before writing the
+                        # result, so a source that dies here may share the
+                        # register (sext, zext, trunc); the merge checks the
+                        # intervals are disjoint.
+                        cast_pairs.append((dest_id, cast_record.third))
                 elif kind_id == PARSED_INSTRUCTION_KIND_GEP:
                     zero_base: CompilerInt2 = zero_byte_gep_base(kernel, metadata.second)
                     if zero_base.first >= 0 and zero_base.second >= 0:
@@ -2328,12 +2450,17 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
         _append_argument_intervals(
             func, kernel, phi_input_ids, global_last_use, hard_barriers,
             call_barriers, reload_offsets, pool_intervals, fixed_registers,
+            simple_calls,
         )
+        for hinted in x0_hints:
+            if hinted not in fixed_registers:
+                fixed_registers[hinted] = 0
         # All reload membership consumers are finished before alias grouping.
         reload_offsets.clear()
-        phi_pairs = _phi_coalescing_pairs(kernel)
+        coalesce_pairs = _phi_coalescing_pairs(kernel)
+        coalesce_pairs.extend(cast_pairs)
         group_intervals, group_members = _merge_alias_groups(
-            pool_intervals, alias_pairs, phi_pairs
+            pool_intervals, alias_pairs, coalesce_pairs
         )
         # A group that must survive a call keeps x19-x28 for all members.
         fixed_roots: dict[int, int] = {}

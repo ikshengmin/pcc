@@ -8766,7 +8766,8 @@ no:
     yes, no = lines.index("L_main_yes:"), lines.index("L_main_no:")
     assert compare + 4 < yes < no
     assert store.replace("sturb w11", "ldurb w9") in lines[yes:no]
-    assert "  and w1, w9, #1" in lines[yes:no]
+    # The returned zext is computed straight into w0 (returned values hold x0).
+    assert "  and w0, w9, #1" in lines[yes:no]
     assert "  movz w0, #0" in lines[no:]
 
     # A genuinely direct test of the CSET register still gets b.ge,

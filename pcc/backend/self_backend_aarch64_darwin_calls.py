@@ -2057,6 +2057,83 @@ def _store_indexed_scalar_result(
     return [emitted_memory_instruction_line(op, reg, "x29", -offset)]
 
 
+_PARALLEL_MOVE_PARK = 16
+
+
+def emit_scalar_register_arguments(
+    func: ParsedFunction,
+    kernel: IndexedFunctionKernel,
+    entries: list[tuple[int, str, int, int]],
+    module_symbols: PreparedModuleSymbols,
+) -> list[str]:
+    """Write scalar register arguments ``(register, value, type, value id)``.
+
+    An operand of a call that ``call_operands_may_use_caller_registers``
+    admits may itself sit in x0-x8, so the copies form a parallel move:
+    first every copy from an allocated register, each written only once no
+    other pending copy still reads its destination, a cycle parked in x16;
+    then every operand loaded from a slot or a constant, which reads no
+    argument register. Other calls keep their operands in x19-x28 or slots,
+    where this order changes nothing.
+    """
+
+    lines: list[str] = []
+    moves: list[list[int]] = []
+    loads: list[tuple[int, str, int, int]] = []
+    for entry in entries:
+        register_index, value, type_id, value_id = entry
+        source = -1
+        if value_id >= 0 and func.indexed_slot_projection:
+            kind = kernel.type_kind_id(type_id)
+            if (kind == TYPE_KIND_INT or kind == TYPE_KIND_PTR) and kernel.alloca_offset(value_id) < 0:
+                allocated = kernel.value_register(value_id)
+                if allocated is not None:
+                    source = allocated
+        if source >= 0:
+            moves.append([register_index, source, type_id])
+        else:
+            loads.append(entry)
+    while moves:
+        ready = -1
+        index = 0
+        while ready < 0 and index < len(moves):
+            destination = moves[index][0]
+            blocked = False
+            other = 0
+            while not blocked and other < len(moves):
+                if other != index and moves[other][1] == destination:
+                    blocked = True
+                other += 1
+            if not blocked:
+                ready = index
+            index += 1
+        if ready < 0:
+            victim = moves[0]
+            lines.append(emitted_move_register_line(
+                "x" + str(_PARALLEL_MOVE_PARK), "x" + str(victim[1]),
+            ))
+            victim[1] = _PARALLEL_MOVE_PARK
+            continue
+        move = moves.pop(ready)
+        destination_register = reg_name_indexed(kernel, move[2], move[0])
+        source_register = reg_name_indexed(kernel, move[2], move[1])
+        if destination_register != source_register:
+            lines.append(emitted_move_register_line(destination_register, source_register))
+    for register_index, value, type_id, value_id in loads:
+        lines.extend(
+            materialize_scalar_value_indexed(
+                func,
+                kernel,
+                value,
+                type_id,
+                register_index,
+                module_symbols,
+                value_id=value_id,
+            )
+        )
+    return lines
+
+
 def emit_call_instruction_indexed(
     func: ParsedFunction,
     kernel: IndexedFunctionKernel,
@@ -2105,6 +2182,7 @@ def emit_call_instruction_indexed(
     indirect_stack_ptr_entries: list[tuple[int, int]] = []
     pending_indirect_stack_literals: list[tuple[int, int]] = []
     pending_indirect_reg_literals: list[tuple[int, str]] = []
+    scalar_register_args: list[tuple[int, str, int, int]] = []
     lines: list[str] = []
     stack_offset = 0
     gpr_index = 0
@@ -2217,18 +2295,15 @@ def emit_call_instruction_indexed(
                 )
             )
         else:
-            lines.extend(
-                materialize_scalar_value_indexed(
-                    func,
-                    kernel,
-                    value,
-                    arg_type_id,
-                    first_register_index,
-                    module_symbols,
-                    value_id=raw.second,
-                )
+            # Written below as one parallel move, after every other operand.
+            scalar_register_args.append(
+                (first_register_index, value, arg_type_id, raw.second)
             )
         arg_index += 1
+    scalar_lines = emit_scalar_register_arguments(
+        func, kernel, scalar_register_args, module_symbols,
+    )
+    lines.extend(scalar_lines)
 
     while arg_index < arg_count:
         raw: CompilerInt4 = kernel.call_arg(header.fourth + arg_index)
