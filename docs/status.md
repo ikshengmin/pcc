@@ -1426,16 +1426,41 @@ in the relevant section or issue and removes the entry.
    1.05, all set releases and moves no count changes. Runtime diagnostic
    binary SHA4e2d2bde745c729bac18f0fad19148ec4433452b47bce11f1cca176ad324c111.
    Source instrumentation restored, no diagnostic timing or code published.
-   Next actual runtime unit: preserve diagnostic/provenance mode in
-   `py_gen_frame_set/move` (and only proven inline frame), avoid known
-   calls on NULL/tagged and on admitted immortal values with the same
-   `pcc_gc_known_ref_checks` gate; -1 or enabled sends original path.
-   Move's same-value branch releases the same pointer as old by proof,
-   so only drop old's one surplus owner, with null/tagged skip. Keep
-   publish-before-terminal-release, callback, weakref/resurrection and
-   cross-carrier frame semantics. First measure null/tagged and admitted
-   immortal costs with real handler/primitive controls, then 5 native
-   alternating A/B and exact counts/output, no throughput extrapolation.
+   Inline frame known-RC candidate (Codex, Linux, clean baseline
+   ab8696fc5). Measured actual self-compiled native indirect-call
+   primitive, same binary trivial callable control, 10M iterations and
+   five control/candidate/control batches per category. Quiet medians of
+   net retain NULL/tagged/immortal 0.68/1.26/2.56ns and release
+   NULL/tagged/immortal 2.57/2.92/2.49ns. Exact above w1 counts weight these
+   to 0.487us/request over callable noop; entire arm's two calls and loop
+   give a deliberately loose 1.272us/request upper envelope (2.64% of
+   48.185us baseline). Candidate's guard is actually inlined at all three
+   frame sites, avoids NULL/tagged/admitted immortal known calls, keeps
+   original checks for -1 or enabled and publication before terminal
+   release; same-value move drops exactly one old owner. 21 focused
+   tests passed including audit-mode direct C owner/alias/move/take,
+   known object lifetime, 4-carrier list/dict races and append/shared
+   containers, generator finalization and virtual-thread park/resume
+   exceptions. Actual native cross-carrier lock program also passed.
+   Both binaries passed exact gateway response checks with provenance=3
+   and known checks=1 on w1 and w4. Uninstrumented source-matched static
+   ELF SHA6204ced20453c2755163051afa7ebdf164798e9d6d26e762621da4cec8ce7aa3
+   and candidate SHA f314ddbc7b00c35fd3d8f2e4675422e2d5f116486ca5539a1b1166f5461065af.
+   5 alternating pairs plus identical baseline control, C100 x300
+   rounds, all exact response payloads passed and allocation counts
+   exact w1, +/-3 scheduling-only w4. w1 21,248->20,203 QPS (-4.91%,
+   1/5; control -4.61%), CPU 48.185->50.730us (control 50.742);
+   RSS identical median20,791,296B. w4 43,260->41,548 QPS (-3.96%,
+   3/5; control -2.66%), CPU86.682->90.154us (control89.525),
+   RSS25,370,624->25,464,832B. Equivalent control drift, no validated
+   gain; not merged, no candidate source/diagnostic code published.
+   NEXT: choose a larger structural lifecycle unit, starting with actual
+   native handler allocation/free type/tag and size attribution (38.45
+   allocations/request previously) or repeated frame ownership traffic
+   eliminated by a sound move/lifetime proof, not another per-call guard.
+   Measure count and single-operation cost before modifying callbacks,
+   lock ordering or lifetime protocol; keep native A/B and race/audit
+   gates. Don't repeat this guard candidate without new evidence.
    Exact proven retain candidate (Codex, Linux): symmetrical early return
    in `_gc_retain` for the same SSA proof used by `_gc_release`,
    preserving exact identity and ptr type, with unknown same-spelling
@@ -2334,7 +2359,6 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - J2s typed CFG pass redundant span/candidate scanning on actual Stage1 compiler modules (typed_cfg/pass_context only, disjoint from AArch64 selection/regalloc and runtime GC): Codex, Linux, 2026-11-26T17:04Z, area backend-stage1
-   - Inline generator frame known-RC no-op guards and actual native A/B: Codex, Linux, 2026-11-26T17:02Z, area runtime-gc
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
