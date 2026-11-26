@@ -113,7 +113,8 @@ def exchange(value: i64) -> i64:
     compile_python(str(source), str(output), emit_llvm_only=True, python_library=True,
                    backend="self", target_triple=target)
     text = output.read_text()
-    assert "@pointer_cell = thread_local global ptr null" in text
+    storage = "thread_local(initialexec)" if target == "x86_64-unknown-linux-gnu" else "thread_local"
+    assert "@pointer_cell = " + storage + " global ptr null" in text
     assert emit_owned_object(text, target)
     if target == TARGETS[0]:
         assembly = emit_aarch64_darwin_asm(text, optimize=True)

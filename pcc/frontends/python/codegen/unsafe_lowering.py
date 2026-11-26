@@ -1002,14 +1002,14 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 1)
             name = self._unsafe_symbol_literal_arg(expr.args[0])
             gv = self._define_global(name, _CSTR, ir.Constant(_CSTR, None))
-            gv.storage_class = "thread_local"
+            gv.storage_class = self._unsafe_tls_storage_class()
             return True
         if intrinsic == "define_thread_local_i32":
             self._unsafe_expect_arity(intrinsic, expr, 2)
             name = self._unsafe_symbol_literal_arg(expr.args[0])
             value = self._unsafe_const_i64_arg(expr.args[1])
             gv = self._define_global(name, _I32, ir.Constant(_I32, value))
-            gv.storage_class = "thread_local"
+            gv.storage_class = self._unsafe_tls_storage_class()
             return True
         if intrinsic == "define_global_ptr_to_global":
             self._unsafe_expect_arity(intrinsic, expr, 2)
@@ -1339,6 +1339,17 @@ class UnsafeIntrinsicMixin:
                 )
             return old
         raise NotImplementedError(f"pcc.unsafe.{intrinsic} is not lowered yet")
+
+    def _unsafe_tls_storage_class(self) -> str:
+        # The owned freestanding x86-64 Linux runtime uses initial-exec TLS
+        # (GOTTPOFF / static TLS block), including externally visible own
+        # globals. Make that ABI explicit in reference IR rather than letting
+        # a default PIC target introduce a dynamic __tls_get_addr dependency.
+        if (getattr(self, "_freestanding_module", False)
+                and self._target_sys_platform_text() == "linux"
+                and self._target_machine_text() == "x86_64"):
+            return "thread_local(initialexec)"
+        return "thread_local"
 
     def _target_sys_platform_text(self) -> str:
         triple = getattr(self, "_target_triple", "") or ""
@@ -2285,7 +2296,7 @@ class UnsafeIntrinsicMixin:
             self._unsafe_expect_arity(intrinsic, expr, 1)
             symbol = self._unsafe_symbol_literal_arg(expr.args[0])
             gv = self._declare_external_global(symbol, _I8)
-            if gv.storage_class == "thread_local":
+            if gv.storage_class in ("thread_local", "thread_local(initialexec)"):
                 # A TLS address is a value in the calling thread, not a
                 # process-global constant to rematerialize at every use.
                 address_fn = self.module.globals.get("llvm.threadlocal.address.p0")

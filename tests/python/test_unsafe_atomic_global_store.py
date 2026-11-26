@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from pcc.frontends.python import pipeline
+from pcc.frontends.python.pipeline_targets import host_target_triple
 
 
 def _compile_object(tmp_path: Path, emitter: str) -> Path:
@@ -112,8 +113,10 @@ def test_thread_local_global_intrinsics_emit_tls_and_isolate_threads(
         python_library=True,
     )
     ir_text = llvm_ir.read_text(encoding="utf-8")
-    assert 'thread_local global i32 7' in ir_text
-    assert 'thread_local global ptr null' in ir_text
+    target = host_target_triple()
+    storage = "thread_local(initialexec)" if target == "x86_64-unknown-linux-gnu" else "thread_local"
+    assert storage + ' global i32 7' in ir_text
+    assert storage + ' global ptr null' in ir_text
 
     build = subprocess.run(
         ["clang", "-c", str(llvm_ir), "-o", str(obj)],
