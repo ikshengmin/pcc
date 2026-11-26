@@ -31,6 +31,8 @@ _OFF = ("0", "false", "no", "off", "disable", "disabled")
 _UNKEYED_PREFIXES = (
     "PCC_WORKER_", "PCC_BOOTSTRAP_", "PCC_STAGE1_CHECKPOINT_",
     "PCC_SELF_BACKEND_OBJECT_CACHE", "PCC_PY_FRONTEND_IR_CACHE",
+    # scripts/pcc_perf.py's sampler and measurement home.
+    "PCC_COMPILE_PROFILE_", "PCC_PERF_HOME",
 )
 _UNKEYED = frozenset((
     "PCC_PY_FRONTEND_JOBS", "PCC_SELF_BACKEND_JOBS", "PCC_MACHO_LINK_JOBS",

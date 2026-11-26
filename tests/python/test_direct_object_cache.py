@@ -30,9 +30,11 @@ def test_settings_that_steer_only_scheduling_stay_out_of_the_key(monkeypatch):
     monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", "6")
     monkeypatch.setenv("PCC_WORKER_RESOURCE_TOKEN", "attempt")
     monkeypatch.setenv("PCC_SELF_CALLEE_SAVED_REGISTERS", "0")
+    monkeypatch.setenv("PCC_COMPILE_PROFILE_DIR", "/samples")
     rows = direct_object_cache._keyed_settings()
     assert "PCC_SELF_CALLEE_SAVED_REGISTERS=0" in rows
-    assert not any(row.startswith(("PCC_PY_FRONTEND_JOBS=", "PCC_WORKER_")) for row in rows)
+    assert not any(row.startswith(("PCC_PY_FRONTEND_JOBS=", "PCC_WORKER_", "PCC_COMPILE_PROFILE_"))
+                   for row in rows)
 
 
 def test_store_and_read_round_trip(tmp_path):
