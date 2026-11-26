@@ -615,9 +615,9 @@ def _capture_direct_instruction(
     if owner is None:
         records.append4(word, family, fixup, symbol)
         return
-    record_length = len(records)
-    header_length = len(owner.headers)
-    token_length = len(owner.tokens)
+    record_length = records._length
+    header_length = owner.headers._length
+    token_length = owner.tokens._length
     if record_length != header_length:
         raise EncodeError("direct instruction provenance is out of sequence")
     try:

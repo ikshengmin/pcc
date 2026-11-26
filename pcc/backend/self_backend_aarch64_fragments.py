@@ -122,15 +122,15 @@ class AArch64EmissionFragments:
     def _append_record(self, fragment: CompilerInt2, record: CompilerInt4) -> None:
         self._require_open()
         self.spans.length(fragment)
-        old_records = len(self.records)
+        old_records = self.records._length
         record_id = old_records // 4
         added_header = False
         semantics = self.semantics
         if semantics is not None:
-            if len(semantics.headers) == old_records:
+            if semantics.headers._length == old_records:
                 semantics.append_unproven()
                 added_header = True
-            elif len(semantics.headers) != old_records + 4:
+            elif semantics.headers._length != old_records + 4:
                 raise EncodeError("AArch64 provenance record IDs do not match encoded records")
         try:
             self.records.append4(record.first, record.second, record.third, record.fourth)

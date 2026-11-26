@@ -107,6 +107,8 @@ class CompilerIntArena:
         self._capacity = capacity
 
     def __len__(self) -> int:
+        # Hot backend readers read _length directly: on CPython len() runs
+        # this method as a Python frame, about 15% of a codegen worker.
         return self._length
 
     @property
@@ -1049,7 +1051,7 @@ class CompilerRecordSpanArena:
         self._require_open()
         if span.second != self.generation:
             raise RuntimeError("compiler record span handle is stale")
-        if span.first < 0 or span.first >= len(self.spans) // 2:
+        if span.first < 0 or span.first >= self.spans._length // 2:
             raise IndexError("compiler record span handle is out of range")
         return self.spans.get2_unchecked(span.first)
 
@@ -1069,11 +1071,11 @@ class CompilerRecordSpanArena:
             raise ValueError("compiler record id must be nonnegative")
         if root.second >= 0x7FFFFFFF:
             raise OverflowError("compiler record span exceeds its length limit")
-        leaf = len(self.nodes) // 3
+        leaf = self.nodes._length // 3
         self.nodes.append3(-1, record_id, 1)
         next_root = leaf
         if root.first >= 0:
-            next_root = len(self.nodes) // 3
+            next_root = self.nodes._length // 3
             # Concat traversal reads only child IDs. Length belongs to the
             # mutable span header; do not retain duplicate count objects.
             self.nodes.append3(root.first, leaf, 0)
@@ -1088,7 +1090,7 @@ class CompilerRecordSpanArena:
             raise OverflowError("compiler record span exceeds its length limit")
         next_root = right.first
         if left.first >= 0:
-            next_root = len(self.nodes) // 3
+            next_root = self.nodes._length // 3
             self.nodes.append3(left.first, right.first, 0)
         self.spans.set2_unchecked(
             destination.first * 2, next_root, left.second + right.second,
@@ -1103,7 +1105,7 @@ class CompilerRecordSpanArena:
             return
         if root.second > 0x7FFFFFFF - count:
             raise OverflowError("compiler record span exceeds its length limit")
-        start = len(self.runs)
+        start = self.runs._length
         self.runs.extend_from(ids, 0, count)
         self._publish_run(span, root, start, count, -3 if checked else -2)
 
@@ -1116,7 +1118,7 @@ class CompilerRecordSpanArena:
             return
         if root.second > 0x7FFFFFFF - count:
             raise OverflowError("compiler record span exceeds its length limit")
-        start = len(self.runs)
+        start = self.runs._length
         self.runs.extend_list(records)
         self._publish_run(span, root, start, count, -2)
 
@@ -1126,11 +1128,11 @@ class CompilerRecordSpanArena:
         try:
             if self.runs.min_from(start, count) < 0:
                 raise ValueError("compiler record id must be nonnegative")
-            run = len(self.nodes) // 3
+            run = self.nodes._length // 3
             self.nodes.append3(kind, start, count)
             next_root = run
             if root.first >= 0:
-                next_root = len(self.nodes) // 3
+                next_root = self.nodes._length // 3
                 self.nodes.append3(root.first, run, 0)
         except Exception:
             self.runs.truncate(start)
@@ -1141,7 +1143,7 @@ class CompilerRecordSpanArena:
         """Whether the span is exactly one checked run (a snapshot shares it)."""
 
         root: CompilerInt2 = self._root(span)
-        if root.first < 0 or root.first >= len(self.nodes) // 3:
+        if root.first < 0 or root.first >= self.nodes._length // 3:
             return False
         node: CompilerInt3 = self.nodes.get3_unchecked(root.first)
         return node.first == -3 and node.third == root.second
@@ -1155,11 +1157,11 @@ class CompilerRecordSpanArena:
         pending = CompilerIntArena()
         try:
             pending.append(root.first)
-            while len(pending) > 0:
-                index = len(pending) - 1
+            while pending._length > 0:
+                index = pending._length - 1
                 node_id = pending.get_unchecked(index)
                 pending.truncate(index)
-                if node_id < 0 or node_id >= len(self.nodes) // 3:
+                if node_id < 0 or node_id >= self.nodes._length // 3:
                     raise RuntimeError("compiler record span node is out of range")
                 node: CompilerInt3 = self.nodes.get3_unchecked(node_id)
                 if node.first == -1:
@@ -1167,7 +1169,7 @@ class CompilerRecordSpanArena:
                         raise RuntimeError("compiler record span leaf is invalid")
                     out.append(node.second)
                 elif node.first == -2 or node.first == -3:
-                    if node.second < 0 or node.third < 1 or node.second + node.third > len(self.runs):
+                    if node.second < 0 or node.third < 1 or node.second + node.third > self.runs._length:
                         raise RuntimeError("compiler record span run is invalid")
                     out.extend_from(self.runs, node.second, node.third)
                 else:
@@ -1189,10 +1191,10 @@ class CompilerRecordSpanArena:
 
     def next_record(self, cursor: CompilerIntArena) -> int:
         self._require_open()
-        if len(cursor) < 1 or cursor.get_unchecked(0) != self.generation:
+        if cursor._length < 1 or cursor.get_unchecked(0) != self.generation:
             raise RuntimeError("compiler record span cursor is stale")
-        while len(cursor) > 1:
-            index = len(cursor) - 1
+        while cursor._length > 1:
+            index = cursor._length - 1
             node_id = cursor.get_unchecked(index)
             if node_id < 0:
                 # A run in progress: (end, -(position + 1)) above the generation.
@@ -1200,7 +1202,7 @@ class CompilerRecordSpanArena:
                 if index < 2:
                     raise RuntimeError("compiler record span cursor is invalid")
                 end = cursor.get_unchecked(index - 1)
-                if position >= end or end > len(self.runs):
+                if position >= end or end > self.runs._length:
                     raise RuntimeError("compiler record span run is invalid")
                 if position + 1 < end:
                     cursor.set_unchecked(index, -(position + 2))
@@ -1208,7 +1210,7 @@ class CompilerRecordSpanArena:
                     cursor.truncate(index - 1)
                 return self.runs.get_unchecked(position)
             cursor.truncate(index)
-            if node_id >= len(self.nodes) // 3:
+            if node_id >= self.nodes._length // 3:
                 raise RuntimeError("compiler record span node is out of range")
             node: CompilerInt3 = self.nodes.get3_unchecked(node_id)
             if node.first == -1:
@@ -1216,7 +1218,7 @@ class CompilerRecordSpanArena:
                     raise RuntimeError("compiler record span leaf is invalid")
                 return node.second
             if node.first == -2 or node.first == -3:
-                if node.second < 0 or node.third < 1 or node.second + node.third > len(self.runs):
+                if node.second < 0 or node.third < 1 or node.second + node.third > self.runs._length:
                     raise RuntimeError("compiler record span run is invalid")
                 if node.third > 1:
                     cursor.append2(node.second + node.third, -(node.second + 2))

@@ -27,7 +27,7 @@ class TypedPassContext:
         self.replacements = fragments.new_fragment()
 
     def record(self, record_id):
-        if record_id < 0 or record_id >= len(self.fragments.records) // 4:
+        if record_id < 0 or record_id >= self.fragments.records._length // 4:
             raise EncodeError("AArch64 typed pass record ID is invalid")
         record = self.fragments.records.get4_unchecked(record_id)
         if not self.verify_each:
@@ -124,7 +124,7 @@ class TypedPassContext:
             self.fragments.copy_record_ids(span, ids)
             records = []
             index = 0
-            while index < len(ids):
+            while index < ids._length:
                 record_id = ids.get_unchecked(index)
                 self.record(record_id)
                 records.append(record_id)

@@ -78,7 +78,7 @@ def _scalar_window_is_complete(
     if record_id < 0:
         return False
     base = record_id * stride + window_offset
-    return base >= 0 and base + 3 < len(arena)
+    return base >= 0 and base + 3 < arena._length
 
 
 TYPE_KIND_VOID = 0

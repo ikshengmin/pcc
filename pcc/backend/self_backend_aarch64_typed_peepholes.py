@@ -146,7 +146,7 @@ class _Pass:
         self.ids.close()
 
     def rid(self, index):
-        return self.ids.get_unchecked(index) if 0 <= index < len(self.ids) else -1
+        return self.ids.get_unchecked(index) if 0 <= index < self.ids._length else -1
 
     def code(self, rid):
         return self.fragments.records.get4_unchecked(rid)
@@ -676,9 +676,9 @@ def fold_sign_extending_load(fragments, semantics, span):
     try:
         changed = False
         index = 0
-        while index < len(p.ids):
+        while index < p.ids._length:
             a = p.rid(index)
-            b = p.rid(index + 1) if index + 1 < len(p.ids) else -1
+            b = p.rid(index + 1) if index + 1 < p.ids._length else -1
             replacement = -2
             # Words first: only an LDR/LDUR W (unsigned or unscaled offset)
             # followed by SXTW (SBFM X, #0, #31) can match, so the validated
@@ -935,7 +935,7 @@ def _run_owned_stack(fragments, semantics, span, mode, transfer: _SpanOwnerTrans
             view = (record_snapshot, list(semantics.headers._values), list(semantics.tokens._values))
             index = 0
             changed = False
-            while index < len(p.ids):
+            while index < p.ids._length:
                 a = p.rid(index)
                 decision = decide(view, mode, a, p.rid(index + 1), p.rid(index + 2), compact_records)
                 if decision[0] != 0:
@@ -1032,7 +1032,7 @@ def _run_owned_cset(fragments, semantics, span):
         view = (list(fragments.records._values), list(semantics.headers._values), list(semantics.tokens._values))
         index = 0
         changed = False
-        while index < len(p.ids):
+        while index < p.ids._length:
             a = p.rid(index)
             b = p.rid(index + 1)
             decision = decide(view, a, b, p.rid(index + 2), p.rid(index + 3))
@@ -1066,7 +1066,7 @@ def _run_owned_arith(fragments, semantics, span):
         view = (list(fragments.records._values), list(semantics.headers._values), list(semantics.tokens._values))
         index = 0
         changed = False
-        while index < len(p.ids):
+        while index < p.ids._length:
             a = p.rid(index)
             b = p.rid(index + 1)
             decision = decide(view, a, b)
@@ -1097,7 +1097,7 @@ def _run_owned_zero_compare(fragments, semantics, span):
         view = (list(fragments.records._values), list(semantics.headers._values), list(semantics.tokens._values))
         index = 0
         changed = False
-        while index < len(p.ids):
+        while index < p.ids._length:
             a = p.rid(index)
             decision = decide(view, a, p.rid(index + 1))
             if decision[0] >= 0 and p.dead(index + 2, decision[1]):
@@ -1128,7 +1128,7 @@ def _run_owned_zero_branch(fragments, semantics, span):
         view = (list(fragments.records._values), list(semantics.headers._values), list(semantics.tokens._values))
         index = 0
         changed = False
-        while index < len(p.ids):
+        while index < p.ids._length:
             a = p.rid(index)
             decision = decide(view, a, p.rid(index + 1))
             if decision[0] >= 0:

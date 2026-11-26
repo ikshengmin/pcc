@@ -371,7 +371,7 @@ class AArch64InstructionSemantics:
         self.complete_symbols: int = 0
 
     def token_count(self) -> int:
-        return len(self.tokens) // 4
+        return self.tokens._length // 4
 
     def append_token(self, kind: int, first: int, second: int = 0, third: int = 0) -> None:
         if self.closed:
@@ -397,9 +397,9 @@ class AArch64InstructionSemantics:
     def require_header(self, record_id: int) -> CompilerInt4:
         if self.closed:
             raise RuntimeError("AArch64 instruction semantics are closed")
-        if len(self.headers) % 4 or len(self.tokens) % 4:
+        if self.headers._length % 4 or self.tokens._length % 4:
             raise EncodeError("AArch64 semantic arenas are truncated")
-        if record_id < 0 or record_id >= len(self.headers) // 4:
+        if record_id < 0 or record_id >= self.headers._length // 4:
             raise EncodeError("AArch64 instruction provenance is missing")
         header: CompilerInt4 = self.headers.get4_unchecked(record_id)
         if header.first <= 0 or header.first >= len(OPCODE_NAMES) or header.second != FORM_CANONICAL:
@@ -584,9 +584,9 @@ def append_semantic_instruction(
     """
     fragments._require_open()
     fragments.spans.length(destination)
-    old_records = len(fragments.records)
-    old_headers = len(semantics.headers)
-    old_tokens = len(semantics.tokens)
+    old_records = fragments.records._length
+    old_headers = semantics.headers._length
+    old_tokens = semantics.tokens._length
     if old_records % 4 or old_headers != old_records:
         raise EncodeError("AArch64 provenance record IDs do not match encoded records")
     if encoded.first < 0 or encoded.first > 0xFFFFFFFF or encoded.second not in (1, 2, 3, 4):
