@@ -802,18 +802,16 @@ class CallObjectLoweringMixin:
             )
             self._slot_call_check_status(copied, "operand copy", span)
             return
-        helper = "pcc_gc_root_copy_borrowed_lease" if borrowed else "pcc_gc_root_copy_lease"
-        token = self.builder.call(
-            self.runtime[helper], [self._as_gc_ptr(destination), self._as_gc_ptr(source)],
-            name=self._fresh("call.slot.copy.lease"),
-        )
-        self._slot_call_check_status(token, "operand copy", span)
         # The binder needs an independently owned authoritative slot, not a
-        # raw address between operand evaluations. Retire the transfer lease
-        # now; the binder will acquire its own counted address lease.
-        # One collector: an address lease is token 0 and its release answers 0.
-        released = ir.Constant(_I64, 0)
-        self._slot_call_check_status(released, "operand lease release", span)
+        # raw address between operand evaluations. The one collector's copy
+        # returns a status only: no address lease is taken, so none is
+        # released (item 2 (d) 4c).
+        helper = "pcc_gc_root_copy_borrowed" if borrowed else "pcc_gc_root_copy"
+        status = self.builder.call(
+            self.runtime[helper], [self._as_gc_ptr(destination), self._as_gc_ptr(source)],
+            name=self._fresh("call.slot.copy"),
+        )
+        self._slot_call_check_status(status, "operand copy", span)
 
     def _slot_call_name_source(self, expr):
         """Return an existing native object slot, never a newly rooted load."""
