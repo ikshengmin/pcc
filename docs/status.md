@@ -2214,6 +2214,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
+   - Linux actual reference-count entry categories (tagged/null/immortal/terminal, diagnostic only): Codex, Linux, 2026-11-26T16:37Z, area runtime-gc
    - J2 delegated park handoff proof and shared frame-save design (generator_lowering, disjoint from call-dispatch, runtime and Stage2 preload): Codex, Linux, 2026-11-26T16:00Z, area frontend-python
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
