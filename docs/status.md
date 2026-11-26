@@ -5463,8 +5463,44 @@ in the relevant section or issue and removes the entry.
    blanket Stage2 claim. CI raw free-function validation takes next
    heavy slot; source-only prep until release.
 
+   Separate preloaded rebound owner experiment also DENIED, no
+   production. Actual structural compact bodies all156 decoded and
+   retained before ordered509 scans, no explicit GC/lifetime-shortening,
+   exact same source-matched scanner bodies and fixture path, no
+   candidate source changes. Exclusive five triples all15 results
+   exact: inner4.291265->.688666s (-83.952%,5/5,control+.075%);
+   process CPU7.040099->3.454030s (-50.938%,5/5,control+.539%);
+   wall7.089797->3.503689s (-50.581%,5/5,control+.953%).
+   RSS median39,084->38,964KiB (-120KiB/-.307%,control+16KiB),
+   but only1/5 paired wins: raw A/B/C KiB
+   39204/39372/39100,37104/38936/38380,39084/38964/39144,
+   38780/38940/39156,39108/39132/37088.
+   Paired B−C +272,+556,-180,-216,+2044KiB; normalized
+   +.696%,+1.449%,-.460%,-.552%,+5.511%, median+.696%.
+   Max unchanged A↔C absolute drift2020KiB; largest normalized
+   adverse2044 exceeds by24KiB, candidate max39372 vs base39204.
+   Separate read-only smaps3 triples, full /proc/pid/smaps samples
+   every20ms during child; group attribution at max sampled total
+   (not exact wait4 HWM or same formal run), program map +4KiB
+   control0, anon/heap +308KiB control+304KiB, stack0 median;
+   raw sampled A/B/C totals38612/39040/38912,
+   39000/38920/38976,38300/37280/38648KiB.
+   No matched explanation for adverse formal pair; retain failed
+   streaming gate above, reject multi-type candidate even with
+   strong CPU. Formal receipt SHA256
+   a319926dfaf60df24a93c2e3735b5d6d5b9e689fb740ed760208d54a23b057fe;
+   mapping receipt SHA256
+   2fbb68eb036eb876c40980729c630e206914cebc225a6ad44977f506933936ef.
+   Next narrow exact Name-only leaf fast path:29,302 exact Names,
+   1,084,174 absent probes (37.7% of total), one exact predicate,
+   no persistent state, subclasses/custom fallback and target-store
+   special logic unchanged. Test-first, exact actual old output,
+   current native strict context, preloaded primary and streaming
+   secondary source-matched controls; no stable RSS adverse accepted.
+   CI raw context has next heavy slot, source-only preparation.
+
    Claims:
-   - Stage2 rebound AST preloaded lifetime experiment: Codex, Linux, 2026-11-26T22:36Z, area selfhost
+   - Stage2 rebound AST exact Name leaf: Codex, Linux, 2026-11-26T22:51Z, area selfhost
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
