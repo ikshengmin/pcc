@@ -160,13 +160,15 @@ completed failure (31 red, 18 green, 3 canceled, 2 skipped). Its successor
 [run 45844665220](https://github.com/ikshengmin/pcc/actions/runs/45844665220),
 head `b346a48a`, produced Linux x64, ARM64 and Windows Stage1; all three
 Stage2 owners completed failure (1800s timeout), Mac still active. Latest
-maintenance fixes and performance units through `73fd3fe0` are not covered
-by that run. This non-skip status commit triggers a new exact-source
-validation of the integrated fixes; existing useful runs are not canceled
-(the workflow queue retains pending runs). Include the worker-prior and
-platform input repairs, native vthread alias fix, owned assert support,
-GC cache optimization, stack-map validation and Stage2 export v2. Do not
-claim any hosted lane green merely from focused tests. The latest completed
+maintenance fixes and performance units through `73fd3fe0` were queued in
+[run 45856871699](https://github.com/ikshengmin/pcc/actions/runs/45856871699),
+head `6cbafc4a`, pending behind the prior useful run. Since that exact
+checkpoint, substantial Stage2 lazy summary (`9f101283`) and sparse
+class preload (`7d172a8a`), shared generator save (`7e3d8d1e`), and C++
+stdlib surface (`e3b0440f`) have landed with focused evidence. This
+non-skip receipt queues the new integrated source alongside the older
+comparison (maintainer allows accumulating CI; no current useful run
+canceled). Do not claim any hosted lane green from focused tests. The latest completed
 [checkpoint comparison](investigations/checkpoint-validation-45427972345.md)
 keeps that baseline: candidate `7ec14d388` has exact test regressions
 [#19](https://github.com/ikshengmin/pcc/issues/19) and
@@ -1405,6 +1407,26 @@ in the relevant section or issue and removes the entry.
        calls, and the diagnostics-log call `py_obj_getattr` makes while the
        log is off; about 1.2 us of json's 6.8 (self-time guess). Parts in
        `py_list.py` wait for the (d) 4b claim.
+   Exact proven retain candidate (Codex, Linux): symmetrical early return
+   in `_gc_retain` for the same SSA proof used by `_gc_release`,
+   preserving exact identity and ptr type, with unknown same-spelling
+   value still going to ordinary/known retain. 16 focused identity and
+   None-result publication tests pass. Broader 75 green/23 red included
+   22 retired-collector runtime models (unchanged runtime code) and one
+   host CPython 3.13 truth-of-NotImplemented mismatch with PCC's target
+   Python 3.15; no full gate claim.
+   Actual diagnostic native handler 5 paired w1 counts equal in every
+   one of 29 categories (known retain96.6, release174.20125, checked
+   inc118.2525, dec230.75 both arms), w4 scheduling-only variation.
+   Exact-proof elision removes zero per-request calls in this workload;
+   not merged, no timing claim. Important source audit: known RC calls
+   are predominantly direct runtime `py_gen_frame_get/move/set`, plus
+   known root stores; only a few direct frontend `_gc_retain` sites.
+   Next attribute the actual known no-op counts by these generator
+   frame paths and root move/restore, then remove redundant copy/retain
+   or release for proven empty frame cells without crossing a park owner
+   or losing callback/weakref/GC semantics. Do not keep screening tiny
+   compiler literal proof without measuring actual source origin.
    Actual RC category attribution (Codex, Linux x86_64, same native handler
    source e5a2ca85 plus facade fix `1820d5fd`, gateway b1490486):
    diagnostic-only 29 atomic entry/branch counters in py_obj, C20
@@ -2283,7 +2305,6 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
-   - Exact emitter-proven non-counting retain elision (ownership_lowering, actual RC probe first): Codex, Linux, 2026-11-26T16:46Z, area runtime-codegen
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
