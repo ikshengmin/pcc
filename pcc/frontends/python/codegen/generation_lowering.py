@@ -1085,10 +1085,6 @@ class GenerationLoweringMixin:
         _frontend_phase_timing(self, phase_timing, "block_bodies", phase_started)
 
         phase_started = time.monotonic() if phase_timing else 0.0
-        if not self._freestanding_module:
-            _codegen_log(self, debug_codegen, "class module init begin")
-            self.class_lowering.emit_module_init()
-            _codegen_log(self, debug_codegen, "class module init end")
         # Multi-file compile mode: non-entry modules emit a
         # ``_pcc_py_module_top_<mod>()`` initialiser instead of the
         # program entry ``@main``. The entry module's @main is

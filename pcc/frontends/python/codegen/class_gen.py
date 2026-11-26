@@ -2072,8 +2072,9 @@ class ClassLowering:
 
     The parent codegen creates one :class:`ClassLowering` per module
     (shared across the two compile passes), then calls
-    :meth:`declare_class`, :meth:`emit_methods`, and finally
-    :meth:`emit_module_init` in sequence.
+    :meth:`declare_class` and :meth:`emit_methods`; each ``class``
+    statement creates its class where it executes
+    (:meth:`emit_class_statement_init`).
     """
 
     def __init__(self, parent: L1CodeGen):
@@ -4984,21 +4985,15 @@ class ClassLowering:
             # Those spellings carry special stackmap call classification.
             return False
         name = "__pcc_class_init_body_" + suffix + "_" + str(ordinal)
-        helper = parent.module.globals.get(name)
+        if parent.module.globals.get(name) is not None:
+            # Its class statement emits the body once; the module has no
+            # second class initializer that could reuse it.
+            raise L1CodegenError("duplicate class-init outline declaration: " + name)
         fnty = ir.FunctionType(_I32, [], var_arg=False)
-        if helper is None:
-            helper = ir.Function(parent.module, fnty, name=name)
-            helper.linkage = "internal"
-            helper.attributes.add("noinline")
-            self._emit_class_init_outline_body(cd, info, helper)
-        elif (
-            not isinstance(helper, ir.Function)
-            or helper.module is not parent.module
-            or str(helper.function_type) != str(fnty)
-            or helper.linkage != "internal" or "noinline" not in helper.attributes._attrs
-            or not helper.blocks
-        ):
-            raise L1CodegenError("incompatible class-init outline declaration: " + name)
+        helper = ir.Function(parent.module, fnty, name=name)
+        helper.linkage = "internal"
+        helper.attributes.add("noinline")
+        self._emit_class_init_outline_body(cd, info, helper)
         if target is None:
             target = parent._ensure_fn_err_exit()
         status = parent.builder.call(helper, [], name=self._fresh("class.init.status"))
@@ -5270,69 +5265,6 @@ class ClassLowering:
             parent._codegen_current_expr_kind = saved_trace_expr_kind
 
 
-    def emit_module_init(self) -> None:
-        """Emit the one-shot ``_pcc_py_module_init`` function that
-        populates every class global.
-
-        No generated entrypoint calls it: each ``class`` statement creates
-        its class where it executes (``emit_class_statement_init``). It is
-        not registered as a global ctor either: in multi-module executables
-        ctor order is linker-defined, so a child class module could run
-        before its base-class module and feed NULL bases into
-        ``py_class_new`` / ``c3_linearize``.
-        """
-        if not self.classes:
-            return  # nothing to do
-
-        module = self.parent.module
-        mod_name = self.parent.module.name or "mod"
-        sanitised_mod = module_symbol_suffix(mod_name)
-        fn_name = f"_pcc_py_module_init_{sanitised_mod}"
-        existing = module.globals.get(fn_name)
-        if isinstance(existing, ir.Function):
-            # Already emitted — leave it.
-            return
-        fnty = ir.FunctionType(_VOID, [], var_arg=False)
-        init_fn = ir.Function(module, fnty, name=fn_name)
-        init_fn.linkage = "external"
-
-        # Save parent state so we can re-use its builder abstraction.
-        saved_builder = self.parent.builder
-        saved_fn = self.parent.current_function
-        saved_entry_block = getattr(self.parent, "_current_entry_block", None)
-        entry = init_fn.append_basic_block(name="entry")
-        self.parent.builder = ir.IRBuilder(entry)
-        self.parent.current_function = init_fn
-        self.parent._current_entry_block = entry
-
-        try:
-            # Emit per-class init in declaration order.
-            for cd in self._iter_class_defs():
-                if cd.name in getattr(
-                    self.parent,
-                    "_hoisted_class_capture_params",
-                    {},
-                ):
-                    continue
-                info = self.classes[cd.name]
-                if not self._maybe_emit_class_init_outline(cd, info):
-                    self._emit_class_init(cd, info)
-
-            self.parent.builder.ret_void()
-            # Nothing calls this function at run time (see the docstring). It
-            # runs the class bodies outside the module's executing scope,
-            # where an imported module without a native provider is a
-            # CPython binding, so strict compilation stubs it as it does a
-            # deferred function.
-            self.parent._strict_stub_user_function_with_cpy_fallback(
-                init_fn,
-                FuncDef(span=None, name=fn_name, args=(), return_ty=None, body=()),
-            )
-        finally:
-            self.parent.builder = saved_builder
-            self.parent.current_function = saved_fn
-            self.parent._current_entry_block = saved_entry_block
-
     def emit_class_statement_init(self, cd: ClassDef) -> None:
         info = self.classes.get(cd.name)
         if info is None:
@@ -5448,13 +5380,6 @@ class ClassLowering:
             return
         if info.class_cell_var is not None:
             builder.store(current, info.class_cell_var)
-
-    def _iter_class_defs(self):
-        """Return every top-level ``ClassDef`` in the module body."""
-        out = []
-        for stmt in self._class_defs:
-            out.append(stmt)
-        return out
 
     def _emit_metaclass_conflict_typeerror(self, cd: ClassDef) -> None:
         msg_ptr = self.parent._pooled_cstr_ptr("metaclass conflict", ".exc.msg")

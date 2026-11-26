@@ -431,7 +431,6 @@ _CLASS_LOWERING_HOST_METHODS = (
     "emit_isinstance",
     "emit_local_class_statement_init",
     "emit_methods",
-    "emit_module_init",
     "emit_self_attr_load",
     "emit_self_attr_store",
     "emit_super_lookup",

@@ -508,7 +508,7 @@ def test_imported_dataclass_defaults_reach_owned_objects(tmp_path):
     assert '@user_defaults_provider_make(' not in caller
     assert '@user_defaults_provider_Shared___init__(' not in caller
     assert 'name.dynamic.__pcc_dataclass_factory_default' not in caller
-    for name in ('_pcc_py_module_init_defaults_provider', '_pcc_py_module_top_defaults_provider'):
+    for name in ('_pcc_py_module_top_defaults_provider',):
         body = re.search(r'define[^\n]*@' + name + r'\([^\n]*\) \{(.*?)\n\}', text, re.S).group(1)
         assert len(re.findall(r'call [^\n]*@user_defaults_provider_make\(', body)) == 2
         assert '@user_defaults_provider_make_factory(' not in body

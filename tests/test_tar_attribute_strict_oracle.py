@@ -799,9 +799,9 @@ def _check_real_three_argument_method_bindings_use_both_signature_representation
     section = output.read_text()
     verify_ir_text(section)
     assert 'strict.nolib.stub' not in section and not re.search(r'\b(?:call|invoke)\b[^\n]*@"?py_cpy_', section)
-    # A single entry module has the same class-body lowering in its public
-    # module-init function; closure dependencies call it module-top instead.
-    initializer = '_pcc_py_module_init_' + oracle._UNSAFE.replace('.', '_')
+    # A single entry module lowers its class body in main, where the class
+    # statement runs; closure dependencies run it in module-top instead.
+    initializer = 'main'
     body = oracle._definition(section, initializer).group('body')
     assert bool(re.search(r'@"?\.pcc\.static\.agg\.func\.sig\.\d+"? = internal constant \[23 x ptr\]', section)) == static
     flow = oracle._Flow(body)

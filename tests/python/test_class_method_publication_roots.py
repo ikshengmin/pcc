@@ -149,7 +149,7 @@ class Meta(type):
 class Box(metaclass=Meta):
 ''' + decorator + '    def first(' + parameters + '):\n        return value\n    second = first\n'
     text = emit(source)
-    for symbol in ('main', '_pcc_py_module_init_method_roots'):
+    for symbol in ('main',):
         body = re.search(r'^define [^\n]*@' + re.escape(symbol) + r'\([^\n]*\).*?^}', text, re.M | re.S)
         assert body is not None, symbol
         calls = re.findall(r'\bcall\b[^\n]*@user_method_roots_factory\(', body[0])

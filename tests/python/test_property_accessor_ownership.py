@@ -51,9 +51,9 @@ def _property_bodies(text):
     bodies = re.findall(r"^define [^\n]*\{\n.*?^}", text, re.M | re.S)
     selected = [body for body in bodies if re.search(r"\bcall [^\n]*@py_property_new\(", body)]
     headers = [body.splitlines()[0] for body in selected]
-    assert len(headers) == 2, headers
-    assert any("@_pcc_py_module_init_property_owner(" in line for line in headers), headers
-    assert any("@main(" in line for line in headers), headers
+    # The class statement builds its properties in main, where it runs.
+    assert len(headers) == 1, headers
+    assert "@main(" in headers[0], headers
     return selected
 
 

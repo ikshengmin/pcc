@@ -208,7 +208,7 @@ def _reachable_integer_returns(body, entry):
 
 @pytest.mark.parametrize("library", [True, False], ids=["module-top", "program-main"])
 @pytest.mark.parametrize("extra_pass", [None, "inline", "inline-defined"], ids=["default-owned", "inline", "inline-defined"])
-def test_one_construction_body_and_two_calls_survive_owned_passes(library, extra_pass):
+def test_one_construction_body_and_one_call_survive_owned_passes(library, extra_pass):
     _, _, _, text = _emit(library=library)
     helpers = _helpers(text)
     assert len(helpers) == 2
@@ -221,13 +221,14 @@ def test_one_construction_body_and_two_calls_survive_owned_passes(library, extra
     for checked in (text, optimized):
         bodies = _bodies(checked)
         wrapper = TOP if library else "main"
-        assert re.search(r"\bvoid @" + INIT + r"\(\)", bodies[INIT].splitlines()[0])
+        # Each class statement constructs its class where it executes; no
+        # second, never-called module initializer repeats the definitions.
+        assert INIT not in bodies
         if library:
             assert re.search(r"\bvoid @" + TOP + r"\(\)", bodies[TOP].splitlines()[0])
         else:
             assert re.search(r"\bi32 @main\(i32 [^,]+, ptr [^)]+\)", bodies["main"].splitlines()[0])
-        assert _outline_calls(bodies[INIT]) == _outline_calls(bodies[wrapper])
-        assert len(_outline_calls(bodies[INIT])) == 2
+        assert len(_outline_calls(bodies[wrapper])) == 2
         for name, helper in _helpers(checked).items():
             header = helper.splitlines()[0]
             assert re.search(r"\binternal i32 @" + re.escape(name) + r"\(\)", header)
@@ -235,41 +236,29 @@ def test_one_construction_body_and_two_calls_survive_owned_passes(library, extra
             assert _calls(helper).count("py_class_new") == 1
             assert re.search(r"\bret i32 1\b", helper)
             assert re.search(r"\bret i32 0\b", helper)
-            assert sum(_calls(body).count(name) for body in bodies.values()) == 2
-            _assert_status_boundary(bodies[INIT], name)
+            assert sum(_calls(body).count(name) for body in bodies.values()) == 1
             _assert_status_boundary(bodies[wrapper], name)
 
 
-@pytest.mark.parametrize("other_attribute", [None, "alwaysinline"], ids=["empty", "other-only"])
-def test_reused_helper_without_noinline_is_rejected(monkeypatch, other_attribute):
+def test_existing_outline_helper_name_is_rejected(monkeypatch):
+    # One class statement emits its construction body once. A function that
+    # already carries the helper's name is a collision, never a reuse.
     original = ClassLowering._maybe_emit_class_init_outline
-    changed = []
+    declared = []
 
-    def reject_reuse(self, cd, info):
+    def predeclare(self, cd, info):
         parent = self.parent
-        if parent.current_function.name == TOP:
-            helpers = [value for name, value in parent.module.globals.items() if name.startswith(PREFIX)]
-            assert len(helpers) == 1
-            helper = helpers[0]
-            assert isinstance(helper, ir.Function)
-            assert helper.module is parent.module
-            assert str(helper.function_type) == str(ir.FunctionType(ir.IntType(32), [], var_arg=False))
-            assert helper.linkage == "internal" and helper.blocks
-            assert "noinline" in helper.attributes._attrs
-            # Use the actual owned attributes object, not an iterable stand-in.
-            # Empty and unrelated nonempty attributes must both fail closed.
-            helper.attributes = ir.FunctionAttributes()
-            if other_attribute is not None:
-                helper.attributes.add(other_attribute)
-            assert helper.attributes._attrs == ([] if other_attribute is None else [other_attribute])
-            changed.append(helper.name)
+        name = PREFIX + MODULE + "_0"
+        if parent.current_function.name == TOP and name not in parent.module.globals:
+            ir.Function(parent.module, ir.FunctionType(ir.IntType(32), []), name=name)
+            declared.append(name)
         return original(self, cd, info)
 
-    monkeypatch.setattr(ClassLowering, "_maybe_emit_class_init_outline", reject_reuse)
+    monkeypatch.setattr(ClassLowering, "_maybe_emit_class_init_outline", predeclare)
     with pytest.raises(L1CodegenError) as raised:
         _emit("class Admitted:\n    value = ('closed',)\n")
-    assert len(changed) == 1
-    assert str(raised.value) == "incompatible class-init outline declaration: " + changed[0]
+    assert declared == [PREFIX + MODULE + "_0"]
+    assert str(raised.value) == "duplicate class-init outline declaration: " + declared[0]
 
 
 def test_single_thread_runtime_request_fails_explicitly(monkeypatch):
@@ -306,13 +295,15 @@ def test_inline_oracle_preserves_constructors_and_root_operations(monkeypatch):
         assert "py_recursion_enter" not in calls
         assert "py_recursion_leave" not in calls
         assert "py_func_new_signature_slots" in calls or "py_func_new_static_def" in calls
-    # The class-only oracle contains no interleaved module function binding.
-    oracle = Counter(name for name in _calls(_bodies(inline)[INIT]) if name in selected)
-    assert constructors == oracle
+    # Both module bodies bind the interleaved module function; only the
+    # inline one also constructs the classes.
+    inline_top = Counter(name for name in _calls(_bodies(inline)[TOP]) if name in selected)
+    outlined_top = Counter(name for name in _calls(_bodies(outlined)[TOP]) if name in selected)
+    assert constructors == inline_top - outlined_top
     assert Counter(_calls(outlined))["py_recursion_enter"] == Counter(_calls(inline))["py_recursion_enter"]
     assert Counter(_calls(outlined))["py_recursion_leave"] == Counter(_calls(inline))["py_recursion_leave"]
-    for name in (INIT, TOP):
-        assert "py_class_new" not in _calls(_bodies(outlined)[name])
+    assert INIT not in _bodies(outlined) and INIT not in _bodies(inline)
+    assert "py_class_new" not in _calls(_bodies(outlined)[TOP])
     for helper in _helpers(outlined).values():
         assert re.search(r"store ptr [^\n]*, ptr @\.class\.outline_probe\.(First|Second)\b", helper)
 
@@ -338,7 +329,7 @@ def test_imports_assignments_and_function_bindings_keep_source_order(monkeypatch
     assert Counter(_outline_calls(top)) == Counter((first, second))
     _assert_definition_order_cfg(top, first, second)
     assert ".pcc.module.init.outline_probe" in top
-    assert ".pcc.module.init.outline_probe" not in _bodies(text)[INIT]
+    assert INIT not in _bodies(text)
 
 
 def test_inferred_argument_types_do_not_reject_unannotated_methods():
@@ -491,8 +482,7 @@ def test_actual_helper_error_epilogue_returns_status_for_all_error_sources(monke
     assert re.search(r"\bret i32 1\b", helper)
     assert _reachable_integer_returns(helper, error_entry) == {"0"}
     assert re.search(r"\b(?:br label|label) %" + re.escape(error_entry) + r"\b", helper)
-    for wrapper in (INIT, TOP):
-        _assert_status_boundary(_bodies(text)[wrapper], name)
+    _assert_status_boundary(_bodies(text)[TOP], name)
     # These are injected code-generation branches, not native runtime faults.
     if kind == "native-exception":
         assert "py_raise" in _calls(helper)

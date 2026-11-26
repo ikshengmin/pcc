@@ -484,7 +484,7 @@ def test_factories_compile_as_callable_signature_defaults(tmp_path, monkeypatch,
     source.write_text(program)
     compile_python(str(source), str(output), emit_llvm_only=True, backend="self", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
     text = output.read_text()
-    initializer = _body(text, "_pcc_py_module_init_" + name)
+    initializer = _body(text, "main")
     assert "func.sig.factory" in initializer
     assert "field.list" not in initializer
     if name == "factory_custom":
@@ -699,9 +699,10 @@ def test_factory_identity_capture_follows_field_definition_order(tmp_path, monke
     source.write_text(program)
     compile_python(str(source), str(output), emit_llvm_only=True, backend="self", ir_scaffold_mode="on", target_triple=_OBJECT_TARGET)
     text = output.read_text()
-    initializer = _body(text, "_pcc_py_module_init_factory_order")
+    initializer = _body(text, "main")
+    # main runs the class body (mark 1-3), then the default of ordinary (4).
     calls = list(re.finditer(r"call ptr[^\n]*@user_factory_order_mark\(", initializer))
-    assert len(calls) == 3
+    assert len(calls) == 4
     constants = dict(re.findall(r"^  (%[^ =]+) = inttoptr i64 (-?\d+) to ptr$", initializer, re.M))
     values = []
     for call in calls:
@@ -709,7 +710,7 @@ def test_factory_identity_capture_follows_field_definition_order(tmp_path, monke
         operand = re.search(r"@user_factory_order_mark\(ptr (%[^) ,]+)\)", line)
         assert operand is not None, line
         values.append(int(constants[operand[1]]) >> 1)
-    assert values == [1, 2, 3]
+    assert values == [1, 2, 3, 4]
     assert "class.factory.capture" in initializer
     assert "strict.nolib.stub" not in _body(text, "user_factory_order_main")
     assert emit_owned_object(text, _OBJECT_TARGET)[:4] == b"\xcf\xfa\xed\xfe"

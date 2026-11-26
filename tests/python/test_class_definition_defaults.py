@@ -331,7 +331,7 @@ def test_class_defaults_ir_captures_factories_only_in_definition_order(tmp_path,
     compile_python(str(source), str(output), emit_llvm_only=True,
                    backend="self", ir_scaffold_mode="on")
     text = output.read_text()
-    initializer = _body(text, "_pcc_py_module_init_class_defaults")
+    initializer = _body(text, "main")
     probe = _body(text, "user_class_defaults_probe")
     factory_calls = list(re.finditer(r"call ptr[^\n]*@user_class_defaults_mark\(", initializer))
     assert len(factory_calls) == 3
@@ -385,7 +385,7 @@ def test_prepared_namespace_reuses_method_signatures(tmp_path, monkeypatch):
     compile_python(str(source), str(output), emit_llvm_only=True,
                    backend="self", ir_scaffold_mode="on")
     text = output.read_text()
-    for symbol in ("main", "_pcc_py_module_init_prepared_defaults"):
+    for symbol in ("main",):
         body = _body(text, symbol)
         assert len(re.findall(r"call ptr[^\n]*@user_prepared_defaults_factory\(", body)) == 1
         # Each namespace method is constructed once through the rooted callable
@@ -511,7 +511,7 @@ def test_inherited_signature_null_guard_retires_nested_roots(tmp_path, monkeypat
                    backend="self", ir_scaffold_mode="on",
                    target_triple="x86_64-unknown-linux-gnu")
     ir_text = output.read_text()
-    initializer = _body(ir_text, "_pcc_py_module_init_inherited_signatures")
+    initializer = _body(ir_text, "main")
     # Each inherited default is copied from the base declaration into a rooted
     # slot. That copy's error edge must retire both inherited-metadata roots,
     # declaration (entered last) first, before the signature unwind. A
