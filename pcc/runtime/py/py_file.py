@@ -269,11 +269,8 @@ _FILE_COOKIE_OFFSET_MASK = 72057594037927935
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
-pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
-pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
-pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+pcc_gc_root_copy_borrowed = extern("pcc_gc_root_copy_borrowed", (c_ptr, c_ptr), c_int64)
 pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
-pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
 py_text_codec_id = extern("py_text_codec_id", (c_ptr,), c_int64)
 py_text_error_id = extern("py_text_error_id", (c_ptr,), c_int64)
@@ -294,25 +291,14 @@ def _file_error(kind: int, message) -> int:
     return -1
 
 
-def _file_drop(slots, tokens, index: int) -> None:
-    slot = ptr_add(slots, index * _FILE_BYTES)
-    token: int = load_i64(tokens, index * _FILE_BYTES)
-    if token >= 0:
-        if pcc_gc_foreign_lease_release(slot, token) < 0:
-            pcc_platform_abort()
-            return
-    store_i64(tokens, index * _FILE_BYTES, -1)
-    pcc_gc_store_root(slot, null())
+def _file_drop(slots, index: int) -> None:
+    pcc_gc_store_root(ptr_add(slots, index * _FILE_BYTES), null())
 
 
-def _file_adopt(slots, tokens, index: int) -> int:
+def _file_adopt(slots, index: int) -> int:
     slot = ptr_add(slots, index * _FILE_BYTES)
     if ptr_is_null(load_ptr(slot, 0)):
         return _file_error(19, cstr("file operation could not allocate a result"))
-    token: int = pcc_gc_foreign_lease_acquire(slot)
-    store_i64(tokens, index * _FILE_BYTES, token)
-    if token < 0:
-        return _file_error(19, cstr("file operation could not lease an owner"))
     return 0
 
 
@@ -401,20 +387,13 @@ def _file_native_mode(mode, output) -> None:
 
 def _file_raise_errno(code: int, filename_slot) -> int:
     slots = stack_alloc(_FILE_COUNT * _FILE_BYTES)
-    tokens = stack_alloc(_FILE_COUNT * _FILE_BYTES)
     memset(slots, 0, _FILE_COUNT * _FILE_BYTES)
-    index: int = 0
-    while index < _FILE_COUNT:
-        store_i64(tokens, index * _FILE_BYTES, -1)
-        index = index + 1
     pcc_gc_frame_enter(global_addr("pcc_file_owned_map"), slots)
     if not ptr_is_null(filename_slot):
         # Copy from the caller's authoritative input slot before allocating.
         # This owner preserves the exact str/bytes filename through cleanup.
-        token: int = pcc_gc_root_copy_borrowed_lease(
-            ptr_add(slots, _FILE_ERRNO_FILENAME * _FILE_BYTES), filename_slot)
-        store_i64(tokens, _FILE_ERRNO_FILENAME * _FILE_BYTES, token)
-        if token < 0:
+        if pcc_gc_root_copy_borrowed(
+                ptr_add(slots, _FILE_ERRNO_FILENAME * _FILE_BYTES), filename_slot) < 0:
             _file_error(19, cstr("file error could not retain its filename"))
     message = stack_alloc(256)
     pcc_errno_message_into(code, message, 256)
@@ -424,13 +403,13 @@ def _file_raise_errno(code: int, filename_slot) -> int:
     if not py_err_occurred():
         kind: int = pcc_errno_exception_kind(code)
         store_ptr(slots, _FILE_ERRNO_EXCEPTION * _FILE_BYTES, py_exc_new(kind, message))
-    if not py_err_occurred() and _file_adopt(slots, tokens, _FILE_ERRNO_EXCEPTION) == 0:
+    if not py_err_occurred() and _file_adopt(slots, _FILE_ERRNO_EXCEPTION) == 0:
         store_ptr(slots, _FILE_ERRNO_NUMBER * _FILE_BYTES, py_int_from_i64(code))
-        if _file_adopt(slots, tokens, _FILE_ERRNO_NUMBER) == 0:
+        if _file_adopt(slots, _FILE_ERRNO_NUMBER) == 0:
             store_ptr(slots, _FILE_ERRNO_MESSAGE * _FILE_BYTES, py_str_new(message, count))
-            if _file_adopt(slots, tokens, _FILE_ERRNO_MESSAGE) == 0:
+            if _file_adopt(slots, _FILE_ERRNO_MESSAGE) == 0:
                 store_ptr(slots, _FILE_ERRNO_ARGS * _FILE_BYTES, py_tuple_new(2))
-                _file_adopt(slots, tokens, _FILE_ERRNO_ARGS)
+                _file_adopt(slots, _FILE_ERRNO_ARGS)
         if not py_err_occurred():
             exception = load_ptr(slots, _FILE_ERRNO_EXCEPTION * _FILE_BYTES)
             number = load_ptr(slots, _FILE_ERRNO_NUMBER * _FILE_BYTES)
@@ -450,9 +429,9 @@ def _file_raise_errno(code: int, filename_slot) -> int:
                 py_incref(exception)
                 py_raise_owned(exception)
     py_tls_exc_swap_slot(ptr_add(slots, _FILE_ERROR * _FILE_BYTES))
-    index = _FILE_ERRNO_FILENAME
+    index: int = _FILE_ERRNO_FILENAME
     while index >= _FILE_ERRNO_EXCEPTION:
-        _file_drop(slots, tokens, index)
+        _file_drop(slots, index)
         index = index - 1
     py_clear_exception()
     py_tls_exc_swap_slot(ptr_add(slots, _FILE_ERROR * _FILE_BYTES))
@@ -496,14 +475,14 @@ def _file_fspath_type_error(value, result) -> int:
     return _file_error(3, message)
 
 
-def _file_fspath_body(slots, tokens) -> int:
+def _file_fspath_body(slots) -> int:
     value = load_ptr(slots, _FILE_FIRST * _FILE_BYTES)
     if not ptr_is_null(value) and not is_tagged_int(value):
         tag: int = _type_of(value)
         if tag == PY_TYPE_STR or tag == PY_TYPE_BYTES:
             py_incref(value)
             store_ptr(slots, _FILE_RESULT * _FILE_BYTES, value)
-            return _file_adopt(slots, tokens, _FILE_RESULT)
+            return _file_adopt(slots, _FILE_RESULT)
     # os.fspath performs special-method lookup on the type, bypassing an
     # instance's __getattribute__/__getattr__ and same-named instance field.
     handled = stack_alloc(_FILE_BYTES)
@@ -514,7 +493,7 @@ def _file_fspath_body(slots, tokens) -> int:
         return -1
     if load_i64(handled, 0) == 0:
         return _file_fspath_type_error(load_ptr(slots, _FILE_FIRST * _FILE_BYTES), null())
-    if _file_adopt(slots, tokens, _FILE_RESULT) != 0:
+    if _file_adopt(slots, _FILE_RESULT) != 0:
         return -1
     result = load_ptr(slots, _FILE_RESULT * _FILE_BYTES)
     if is_tagged_int(result) or (_type_of(result) != PY_TYPE_STR and _type_of(result) != PY_TYPE_BYTES):
@@ -522,17 +501,17 @@ def _file_fspath_body(slots, tokens) -> int:
     return 0
 
 
-def _file_open_body(slots, tokens, descriptor_mode: int = 0, buffering: int = -1) -> int:
+def _file_open_body(slots, descriptor_mode: int = 0, buffering: int = -1) -> int:
     path = load_ptr(slots, _FILE_FIRST * _FILE_BYTES)
     # io.open resolves any other path object through os.fspath and reports
-    # the converted str/bytes as OSError.filename; RESULT keeps it leased
-    # until the native open has used its bytes.
+    # the converted str/bytes as OSError.filename; RESULT owns it until the
+    # native open has used its bytes.
     path_slot: int = _FILE_FIRST
     if descriptor_mode == 0 and not is_tagged_int(path):
         path_tag: int = -1 if ptr_is_null(path) else _type_of(path)
         if (path_tag != PY_TYPE_STR and path_tag != PY_TYPE_BYTES
                 and path_tag != PY_TYPE_INT and path_tag != PY_TYPE_BOOL):
-            if _file_fspath_body(slots, tokens) != 0:
+            if _file_fspath_body(slots) != 0:
                 return -1
             path_slot = _FILE_RESULT
             path = load_ptr(slots, _FILE_RESULT * _FILE_BYTES)
@@ -567,7 +546,7 @@ def _file_open_body(slots, tokens, descriptor_mode: int = 0, buffering: int = -1
         path_data = py_str_utf8(path)
     if ptr_is_null(mode):
         store_ptr(slots, _FILE_TEMP * _FILE_BYTES, py_str_new(cstr("r"), 1))
-        if _file_adopt(slots, tokens, _FILE_TEMP) != 0:
+        if _file_adopt(slots, _FILE_TEMP) != 0:
             return -1
         mode = load_ptr(slots, _FILE_TEMP * _FILE_BYTES)
     if _file_validate_cstr(mode, cstr("open mode must be str")) != 0:
@@ -618,7 +597,7 @@ def _file_open_body(slots, tokens, descriptor_mode: int = 0, buffering: int = -1
             return _file_error(19, cstr("cannot allocate file object"))
         memset(ptr_add(out, 16), 0, _FILE_SIZE - 16)
         store_ptr(slots, _FILE_RESULT * _FILE_BYTES, out)
-        if _file_adopt(slots, tokens, _FILE_RESULT) != 0:
+        if _file_adopt(slots, _FILE_RESULT) != 0:
             return -1
         fp = pcc_stdio_fdopen(descriptor, mode_data,
                              1 if descriptor_mode == _FILE_FDOPEN_OWNED else 0, buffering)
@@ -630,7 +609,7 @@ def _file_open_body(slots, tokens, descriptor_mode: int = 0, buffering: int = -1
         return _file_raise_errno(code, ptr_add(slots, path_slot * _FILE_BYTES))
     if descriptor_mode == 0:
         if path_slot == _FILE_RESULT:
-            _file_drop(slots, tokens, _FILE_RESULT)
+            _file_drop(slots, _FILE_RESULT)
         out = pcc_gc_alloc(_FILE_SIZE, PY_TYPE_FILE, 0)
         if ptr_is_null(out):
             fclose(fp)
@@ -647,7 +626,7 @@ def _file_open_body(slots, tokens, descriptor_mode: int = 0, buffering: int = -1
     store_ptr(slots, _FILE_RESULT * _FILE_BYTES, out)
     if descriptor_mode != 0:
         return 0
-    return _file_adopt(slots, tokens, _FILE_RESULT)
+    return _file_adopt(slots, _FILE_RESULT)
 
 
 def _file_clear_decoder(file) -> None:
@@ -940,7 +919,7 @@ def _file_read_body(file, limit: int, line: int):
     return output
 
 
-def _file_write_body(slots, tokens) -> int:
+def _file_write_body(slots) -> int:
     file = load_ptr(slots, _FILE_FIRST * _FILE_BYTES)
     text = load_ptr(slots, _FILE_SECOND * _FILE_BYTES)
     if ptr_is_null(_checked_open_file(file)):
@@ -957,7 +936,7 @@ def _file_write_body(slots, tokens) -> int:
         if ptr_is_null(_file_bytes_like_base(text)):
             return _file_error(3, cstr("a bytes-like object is required for binary write"))
         store_ptr(slots, _FILE_TEMP * _FILE_BYTES, py_bytes_from_obj(text))
-    if _file_adopt(slots, tokens, _FILE_TEMP) != 0:
+    if _file_adopt(slots, _FILE_TEMP) != 0:
         return -1
     encoded = load_ptr(slots, _FILE_TEMP * _FILE_BYTES)
     count: int = load_i64(encoded, PYBYTESOBJECT_BYTE_LEN_OFFSET)
@@ -971,16 +950,16 @@ def _file_write_body(slots, tokens) -> int:
     if _file_binary(file) != 0:
         characters = position
     store_ptr(slots, _FILE_RESULT * _FILE_BYTES, py_int_from_i64(characters))
-    return _file_adopt(slots, tokens, _FILE_RESULT)
+    return _file_adopt(slots, _FILE_RESULT)
 
 
-def _file_readlines_body(slots, tokens) -> int:
+def _file_readlines_body(slots) -> int:
     store_ptr(slots, _FILE_RESULT * _FILE_BYTES, py_list_new(0))
-    if _file_adopt(slots, tokens, _FILE_RESULT) != 0:
+    if _file_adopt(slots, _FILE_RESULT) != 0:
         return -1
     while True:
         store_ptr(slots, _FILE_TEMP * _FILE_BYTES, py_file_readline(load_ptr(slots, _FILE_FIRST * _FILE_BYTES), -1))
-        if _file_adopt(slots, tokens, _FILE_TEMP) != 0:
+        if _file_adopt(slots, _FILE_TEMP) != 0:
             return -1
         line = load_ptr(slots, _FILE_TEMP * _FILE_BYTES)
         length: int = py_str_byte_len(line) if _type_of(line) == PY_TYPE_STR else load_i64(line, PYBYTESOBJECT_BYTE_LEN_OFFSET)
@@ -989,61 +968,54 @@ def _file_readlines_body(slots, tokens) -> int:
         py_list_append(load_ptr(slots, _FILE_RESULT * _FILE_BYTES), line)
         if py_err_occurred() != 0:
             return -1
-        _file_drop(slots, tokens, _FILE_TEMP)
+        _file_drop(slots, _FILE_TEMP)
 
 
-def _file_restore_pending(slots, tokens, index: int) -> None:
-    slot = ptr_add(slots, index * _FILE_BYTES)
-    token: int = load_i64(tokens, index * _FILE_BYTES)
-    if token >= 0:
-        if pcc_gc_foreign_lease_release(slot, token) < 0:
-            pcc_platform_abort()
-            return
-    store_i64(tokens, index * _FILE_BYTES, -1)
-    py_tls_exc_swap_slot(slot)
+def _file_restore_pending(slots, index: int) -> None:
+    py_tls_exc_swap_slot(ptr_add(slots, index * _FILE_BYTES))
 
 
-def _file_writelines_body(slots, tokens) -> int:
+def _file_writelines_body(slots) -> int:
     store_ptr(slots, _FILE_TEMP * _FILE_BYTES, py_obj_iter(load_ptr(slots, _FILE_SECOND * _FILE_BYTES)))
-    if _file_adopt(slots, tokens, _FILE_TEMP) != 0:
+    if _file_adopt(slots, _FILE_TEMP) != 0:
         return -1
     # The iterator now owns everything it needs. Reuse the independently
     # owned input slot for each item, and the result slot for each write.
-    _file_drop(slots, tokens, _FILE_SECOND)
+    _file_drop(slots, _FILE_SECOND)
     while True:
         store_ptr(slots, _FILE_SECOND * _FILE_BYTES, py_obj_next(load_ptr(slots, _FILE_TEMP * _FILE_BYTES)))
         if ptr_is_null(load_ptr(slots, _FILE_SECOND * _FILE_BYTES)):
             if py_err_occurred() != 0:
-                # Publish and lease the pending exception before class-cache
-                # construction can allocate or move it.
+                # Publish the pending exception in an owning slot before
+                # class-cache construction can allocate.
                 error_slot = ptr_add(slots, _FILE_ERRORS * _FILE_BYTES)
                 py_tls_exc_swap_slot(error_slot)
-                if _file_adopt(slots, tokens, _FILE_ERRORS) != 0:
-                    _file_restore_pending(slots, tokens, _FILE_ERRORS)
+                if _file_adopt(slots, _FILE_ERRORS) != 0:
+                    _file_restore_pending(slots, _FILE_ERRORS)
                     return -1
                 cls = py_exc_builtin_class(8)
                 py_incref(cls)
                 store_ptr(slots, _FILE_ENCODING * _FILE_BYTES, cls)
-                if _file_adopt(slots, tokens, _FILE_ENCODING) != 0:
-                    _file_restore_pending(slots, tokens, _FILE_ERRORS)
+                if _file_adopt(slots, _FILE_ENCODING) != 0:
+                    _file_restore_pending(slots, _FILE_ERRORS)
                     return -1
                 exhausted: int = py_exc_matches(load_ptr(error_slot, 0), load_ptr(slots, _FILE_ENCODING * _FILE_BYTES))
                 if exhausted == 0:
-                    _file_restore_pending(slots, tokens, _FILE_ERRORS)
+                    _file_restore_pending(slots, _FILE_ERRORS)
                     return -1
-                _file_drop(slots, tokens, _FILE_ERRORS)
+                _file_drop(slots, _FILE_ERRORS)
                 py_clear_exception()
             none = global_load_ptr("py_None")
             py_incref(none)
             store_ptr(slots, _FILE_RESULT * _FILE_BYTES, none)
-            return _file_adopt(slots, tokens, _FILE_RESULT)
-        if _file_adopt(slots, tokens, _FILE_SECOND) != 0:
+            return _file_adopt(slots, _FILE_RESULT)
+        if _file_adopt(slots, _FILE_SECOND) != 0:
             return -1
         store_ptr(slots, _FILE_RESULT * _FILE_BYTES, py_file_write(load_ptr(slots, _FILE_FIRST * _FILE_BYTES), load_ptr(slots, _FILE_SECOND * _FILE_BYTES)))
-        if _file_adopt(slots, tokens, _FILE_RESULT) != 0:
+        if _file_adopt(slots, _FILE_RESULT) != 0:
             return -1
-        _file_drop(slots, tokens, _FILE_RESULT)
-        _file_drop(slots, tokens, _FILE_SECOND)
+        _file_drop(slots, _FILE_RESULT)
+        _file_drop(slots, _FILE_SECOND)
 
 
 def _file_guarded(first, second, encoding, errors, newline, operation: int, limit: int):
@@ -1055,58 +1027,46 @@ def _file_guarded(first, second, encoding, errors, newline, operation: int, limi
     store_ptr(borrowed, 32, newline)
     pcc_gc_frame_enter(global_addr("pcc_file_borrowed_map"), borrowed)
     slots = stack_alloc(_FILE_COUNT * _FILE_BYTES)
-    tokens = stack_alloc(_FILE_COUNT * _FILE_BYTES)
     memset(slots, 0, _FILE_COUNT * _FILE_BYTES)
-    index: int = 0
-    while index < _FILE_COUNT:
-        store_i64(tokens, index * _FILE_BYTES, -1)
-        index = index + 1
     pcc_gc_frame_enter(global_addr("pcc_file_owned_map"), slots)
-    index = 0
+    index: int = 0
     status: int = 0
     while index < 5 and status == 0:
-        token: int = pcc_gc_root_copy_borrowed_lease(ptr_add(slots, index * _FILE_BYTES), ptr_add(borrowed, index * _FILE_BYTES))
-        store_i64(tokens, index * _FILE_BYTES, token)
-        if token < 0:
+        if pcc_gc_root_copy_borrowed(ptr_add(slots, index * _FILE_BYTES), ptr_add(borrowed, index * _FILE_BYTES)) < 0:
             status = _file_error(19, cstr("file operation could not retain an input"))
         index = index + 1
     if status == 0:
         if operation == 0:
-            status = _file_open_body(slots, tokens)
+            status = _file_open_body(slots)
         elif operation == _FILE_FDOPEN_OWNED or operation == _FILE_FDOPEN_BORROWED:
-            status = _file_open_body(slots, tokens, operation, limit)
+            status = _file_open_body(slots, operation, limit)
         elif operation == _FILE_DYNAMIC_METHOD:
-            status = _file_method_body(slots, tokens)
+            status = _file_method_body(slots)
         elif operation == _FILE_BOUND_METHOD:
-            status = _file_bound_method_body(slots, tokens, limit)
+            status = _file_bound_method_body(slots, limit)
         elif operation == _FILE_FSPATH:
-            status = _file_fspath_body(slots, tokens)
+            status = _file_fspath_body(slots)
         elif operation == 3:
-            status = _file_write_body(slots, tokens)
+            status = _file_write_body(slots)
         elif operation == 4:
-            status = _file_readlines_body(slots, tokens)
+            status = _file_readlines_body(slots)
         elif operation == 5:
-            status = _file_writelines_body(slots, tokens)
+            status = _file_writelines_body(slots)
         else:
             store_ptr(slots, _FILE_RESULT * _FILE_BYTES, _file_read_body(load_ptr(slots, _FILE_FIRST * _FILE_BYTES), limit, 1 if operation == 2 else 0))
-            status = _file_adopt(slots, tokens, _FILE_RESULT)
+            status = _file_adopt(slots, _FILE_RESULT)
     result = ptr_add(slots, _FILE_RESULT * _FILE_BYTES)
     pending = ptr_add(slots, _FILE_ERROR * _FILE_BYTES)
     py_tls_exc_swap_slot(pending)
     memset(borrowed, 0, 5 * _FILE_BYTES)
     if status != 0:
-        _file_drop(slots, tokens, _FILE_RESULT)
+        _file_drop(slots, _FILE_RESULT)
     index = _FILE_TEMP
     while index >= 0:
-        _file_drop(slots, tokens, index)
+        _file_drop(slots, index)
         index = index - 1
     py_clear_exception()
     py_tls_exc_swap_slot(pending)
-    token = load_i64(tokens, _FILE_RESULT * _FILE_BYTES)
-    if token >= 0:
-        if pcc_gc_foreign_lease_release(result, token) < 0:
-            pcc_platform_abort()
-            return null()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
     return pcc_gc_take_slot(result)
@@ -1520,28 +1480,28 @@ def _file_method_code(name) -> int:
     return 0
 
 
-def _method_arg_i64(slots, tokens, index: int, default: int, allow_none: int) -> int:
+def _method_arg_i64(slots, index: int, default: int, allow_none: int) -> int:
     """Convert one rooted method operand without retaining a raw callback result."""
     args = load_ptr(slots, _FILE_METHOD_ARGS * _FILE_BYTES)
     if ptr_is_null(args) != 0 or index >= py_tuple_len(args):
         return default
-    _file_drop(slots, tokens, _FILE_METHOD_OPERAND)
+    _file_drop(slots, _FILE_METHOD_OPERAND)
     store_ptr(slots, _FILE_METHOD_OPERAND * _FILE_BYTES, py_tuple_get(args, index))
-    if _file_adopt(slots, tokens, _FILE_METHOD_OPERAND) != 0:
+    if _file_adopt(slots, _FILE_METHOD_OPERAND) != 0:
         return 0
     if allow_none != 0 and ptr_eq(load_ptr(slots, _FILE_METHOD_OPERAND * _FILE_BYTES), global_load_ptr("py_None")) != 0:
         return default
     return py_index_i64_checked_slots(ptr_add(slots, _FILE_METHOD_OPERAND * _FILE_BYTES))
 
 
-def _file_method_body(slots, tokens) -> int:
+def _file_method_body(slots) -> int:
     captures = load_ptr(slots, _FILE_METHOD_CAPTURES * _FILE_BYTES)
     args = load_ptr(slots, _FILE_METHOD_ARGS * _FILE_BYTES)
     store_ptr(slots, _FILE_METHOD_RECEIVER * _FILE_BYTES, py_tuple_get(captures, 0))
-    if _file_adopt(slots, tokens, _FILE_METHOD_RECEIVER) != 0:
+    if _file_adopt(slots, _FILE_METHOD_RECEIVER) != 0:
         return -1
     store_ptr(slots, _FILE_METHOD_CODE * _FILE_BYTES, py_tuple_get(captures, 1))
-    if _file_adopt(slots, tokens, _FILE_METHOD_CODE) != 0:
+    if _file_adopt(slots, _FILE_METHOD_CODE) != 0:
         return -1
     f = load_ptr(slots, _FILE_METHOD_RECEIVER * _FILE_BYTES)
     code: int = py_int_value_i64(load_ptr(slots, _FILE_METHOD_CODE * _FILE_BYTES))
@@ -1559,7 +1519,7 @@ def _file_method_body(slots, tokens) -> int:
             py_raise_owned(py_exc_new(3, cstr("expected exactly one argument")))
         else:
             store_ptr(slots, _FILE_METHOD_OPERAND * _FILE_BYTES, py_tuple_get(args, 0))
-            if _file_adopt(slots, tokens, _FILE_METHOD_OPERAND) != 0:
+            if _file_adopt(slots, _FILE_METHOD_OPERAND) != 0:
                 return -1
             arg = load_ptr(slots, _FILE_METHOD_OPERAND * _FILE_BYTES)
             if code == 1:
@@ -1567,11 +1527,11 @@ def _file_method_body(slots, tokens) -> int:
             else:
                 result = py_file_writelines(f, arg)
     elif code == 2:
-        limit: int = _method_arg_i64(slots, tokens, 0, -1, 1)
+        limit: int = _method_arg_i64(slots, 0, -1, 1)
         if not py_err_occurred():
             result = py_file_read(load_ptr(slots, _FILE_METHOD_RECEIVER * _FILE_BYTES), limit)
     elif code == 3:
-        limit: int = _method_arg_i64(slots, tokens, 0, -1, 1)
+        limit: int = _method_arg_i64(slots, 0, -1, 1)
         if not py_err_occurred():
             result = py_file_readline(load_ptr(slots, _FILE_METHOD_RECEIVER * _FILE_BYTES), limit)
     elif code == 4:
@@ -1586,10 +1546,10 @@ def _file_method_body(slots, tokens) -> int:
     elif code == 8:
         result = py_file_fileno(f)
     elif code == 9:
-        offset: int = _method_arg_i64(slots, tokens, 0, 0, 0)
+        offset: int = _method_arg_i64(slots, 0, 0, 0)
         whence: int = 0
         if not py_err_occurred():
-            whence = _method_arg_i64(slots, tokens, 1, 0, 0)
+            whence = _method_arg_i64(slots, 1, 0, 0)
         if not py_err_occurred() and (whence < -2147483648 or whence > 2147483647):
             return _file_error(15, cstr("Python int too large to convert to C int"))
         if not py_err_occurred():
@@ -1619,7 +1579,7 @@ def _file_method_body(slots, tokens) -> int:
     store_ptr(slots, _FILE_RESULT * _FILE_BYTES, result)
     if py_err_occurred():
         return -1
-    return _file_adopt(slots, tokens, _FILE_RESULT)
+    return _file_adopt(slots, _FILE_RESULT)
 
 
 def _file_method_entry(captures, args):
@@ -1658,12 +1618,12 @@ def _file_method_name(code: int):
     return cstr("writable")
 
 
-def _file_bound_method_body(slots, tokens, code: int) -> int:
+def _file_bound_method_body(slots, code: int) -> int:
     store_ptr(slots, _FILE_SECOND * _FILE_BYTES, py_tuple_new(2))
-    if _file_adopt(slots, tokens, _FILE_SECOND) != 0:
+    if _file_adopt(slots, _FILE_SECOND) != 0:
         return -1
     store_ptr(slots, _FILE_ENCODING * _FILE_BYTES, py_int_from_i64(code))
-    if _file_adopt(slots, tokens, _FILE_ENCODING) != 0:
+    if _file_adopt(slots, _FILE_ENCODING) != 0:
         return -1
     captures = load_ptr(slots, _FILE_SECOND * _FILE_BYTES)
     file = load_ptr(slots, _FILE_FIRST * _FILE_BYTES)
@@ -1671,7 +1631,7 @@ def _file_bound_method_body(slots, tokens, code: int) -> int:
     py_tuple_set_item(captures, 1, load_ptr(slots, _FILE_ENCODING * _FILE_BYTES))
     store_ptr(slots, _FILE_RESULT * _FILE_BYTES,
               py_func_new_bound(_file_method_entry, captures, _file_method_name(code), file))
-    return _file_adopt(slots, tokens, _FILE_RESULT)
+    return _file_adopt(slots, _FILE_RESULT)
 
 
 @c_abi_export("py_file_type_kind")

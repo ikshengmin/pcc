@@ -70,10 +70,7 @@ pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_gc_scheduler_root_register_handle = extern("pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr)
 pcc_gc_scheduler_root_unregister_handle = extern("pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void)
-pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
-pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
-pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
-pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+pcc_gc_root_copy = extern("pcc_gc_root_copy", (c_ptr, c_ptr), c_int64)
 py_obj_setattr = extern("py_obj_setattr", (c_ptr, c_ptr, c_ptr), c_int64)
 pcc_mutex_new = extern("pcc_mutex_new", (), c_ptr)
 pcc_mutex_free = extern("pcc_mutex_free", (c_ptr,), c_void)
@@ -121,59 +118,33 @@ _SM_COUNT = 6
 define_global_i32("pcc_sys_modules_frame_map", _SM_COUNT)
 
 
-@c_abi_export("py_sys_modules_owner_adopt")
-def _sys_modules_adopt(slots, tokens, index: int) -> None:
-    slot = ptr_add(slots, index * C_POINTER_SIZE)
-    if not ptr_is_null(load_ptr(slot, 0)):
-        token: int = pcc_gc_foreign_lease_acquire(slot)
-        store_i64(tokens, index * C_POINTER_SIZE, token)
-        if token < 0 and not py_err_occurred():
-            py_raise_owned(py_exc_new(19, cstr("sys.modules owner lease failed")))
-
-
-def _sys_modules_key(slots, tokens, module_name) -> None:
+def _sys_modules_key(slots, module_name) -> None:
     store_ptr(slots, _SM_KEY * C_POINTER_SIZE, _module_name_key(module_name))
-    _sys_modules_adopt(slots, tokens, _SM_KEY)
     if ptr_is_null(load_ptr(slots, _SM_KEY * C_POINTER_SIZE)) and not py_err_occurred():
         py_raise_owned(py_exc_new(19, cstr("sys.modules key allocation failed")))
 
 
 @c_abi_export("py_sys_modules_owner_drop")
-def _sys_modules_drop(slots, tokens, index: int) -> None:
-    slot = ptr_add(slots, index * C_POINTER_SIZE)
-    token: int = load_i64(tokens, index * C_POINTER_SIZE)
-    if token >= 0 and pcc_gc_foreign_lease_release(slot, token) < 0:
-        pcc_platform_abort()
-        return
-    store_i64(tokens, index * C_POINTER_SIZE, -1)
-    pcc_gc_store_root(slot, null())
+def _sys_modules_drop(slots, index: int) -> None:
+    pcc_gc_store_root(ptr_add(slots, index * C_POINTER_SIZE), null())
 
 
 @c_abi_export("py_sys_modules_owner_finish")
-def _sys_modules_finish(slots, tokens):
+def _sys_modules_finish(slots):
     saved = ptr_add(slots, _SM_ERROR * C_POINTER_SIZE)
     if ptr_is_null(load_ptr(saved, 0)):
         py_tls_exc_swap_slot(saved)
         store_ptr(slots, _SM_ERROR * C_POINTER_SIZE, load_ptr(saved, 0))
-        _sys_modules_adopt(slots, tokens, _SM_ERROR)
     if not ptr_is_null(load_ptr(saved, 0)):
-        _sys_modules_drop(slots, tokens, _SM_OUTPUT)
+        _sys_modules_drop(slots, _SM_OUTPUT)
     index: int = 0
     while index < _SM_COUNT:
         if index != _SM_ERROR and index != _SM_OUTPUT:
-            _sys_modules_drop(slots, tokens, index)
+            _sys_modules_drop(slots, index)
         index = index + 1
     py_clear_exception()
-    token: int = load_i64(tokens, _SM_ERROR * C_POINTER_SIZE)
-    if token >= 0 and pcc_gc_foreign_lease_release(saved, token) < 0:
-        pcc_platform_abort()
-        return null()
     py_tls_exc_swap_slot(saved)
     result = ptr_add(slots, _SM_OUTPUT * C_POINTER_SIZE)
-    token = load_i64(tokens, _SM_OUTPUT * C_POINTER_SIZE)
-    if token >= 0 and pcc_gc_foreign_lease_release(result, token) < 0:
-        pcc_platform_abort()
-        return null()
     pcc_gc_frame_leave(slots)
     return pcc_gc_take_slot(result)
 
@@ -217,33 +188,21 @@ def _sys_modules_cache_slot():
                 return null()
             global_store_ptr("pcc_sys_modules_root_handle", handle)
         global_store_ptr("pcc_sys_modules_cache", py_dict_new())
-        token: int = pcc_gc_foreign_lease_acquire(slot)
-        if token < 0:
-            pcc_gc_store_root(slot, null())
-            pcc_mutex_unlock(mutex)
-            py_raise_owned(py_exc_new(19, cstr("sys.modules dictionary allocation failed")))
-            return null()
         value = pcc_gc_load_ptr(null(), slot)
         if ptr_is_null(value):
-            pcc_gc_foreign_lease_release(slot, token)
             pcc_mutex_unlock(mutex)
             if not py_err_occurred():
                 py_raise_owned(py_exc_new(19, cstr("sys.modules dictionary allocation failed")))
-            return null()
-        if pcc_gc_foreign_lease_release(slot, token) < 0:
-            pcc_platform_abort()
             return null()
     pcc_mutex_unlock(mutex)
     return slot
 
 
-def _sys_modules_acquire_cache(slots, tokens) -> bool:
+def _sys_modules_acquire_cache(slots) -> bool:
     source = _sys_modules_cache_slot()
     if ptr_is_null(source):
         return False
-    token: int = pcc_gc_root_copy_lease(ptr_add(slots, _SM_CACHE * C_POINTER_SIZE), source)
-    store_i64(tokens, _SM_CACHE * C_POINTER_SIZE, token)
-    if token < 0:
+    if pcc_gc_root_copy(ptr_add(slots, _SM_CACHE * C_POINTER_SIZE), source) < 0:
         if not py_err_occurred():
             py_raise_owned(py_exc_new(19, cstr("sys.modules cache copy failed")))
         return False
@@ -253,32 +212,25 @@ def _sys_modules_acquire_cache(slots, tokens) -> bool:
 @c_abi_export("py_sys_modules")
 def py_sys_modules():
     slots = stack_alloc(_SM_COUNT * C_POINTER_SIZE)
-    tokens = stack_alloc(_SM_COUNT * C_POINTER_SIZE)
     memset(slots, 0, _SM_COUNT * C_POINTER_SIZE)
-    memset(tokens, 255, _SM_COUNT * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_sys_modules_frame_map"), slots)
     source = _sys_modules_cache_slot()
     if not ptr_is_null(source):
-        token: int = pcc_gc_root_copy_lease(ptr_add(slots, _SM_OUTPUT * C_POINTER_SIZE), source)
-        store_i64(tokens, _SM_OUTPUT * C_POINTER_SIZE, token)
-        if token < 0 and not py_err_occurred():
+        if pcc_gc_root_copy(ptr_add(slots, _SM_OUTPUT * C_POINTER_SIZE), source) < 0 and not py_err_occurred():
             py_raise_owned(py_exc_new(19, cstr("sys.modules cache copy failed")))
-    return _sys_modules_finish(slots, tokens)
+    return _sys_modules_finish(slots)
 
 
 @c_abi_export("py_sys_modules_find")
 def py_sys_modules_find(module_name):
     slots = stack_alloc(_SM_COUNT * C_POINTER_SIZE)
-    tokens = stack_alloc(_SM_COUNT * C_POINTER_SIZE)
     memset(slots, 0, _SM_COUNT * C_POINTER_SIZE)
-    memset(tokens, 255, _SM_COUNT * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_sys_modules_frame_map"), slots)
-    if _sys_modules_acquire_cache(slots, tokens):
-        _sys_modules_key(slots, tokens, module_name)
+    if _sys_modules_acquire_cache(slots):
+        _sys_modules_key(slots, module_name)
         if not ptr_is_null(load_ptr(slots, _SM_KEY * C_POINTER_SIZE)):
             store_ptr(slots, _SM_OUTPUT * C_POINTER_SIZE, py_dict_get(load_ptr(slots, _SM_CACHE * C_POINTER_SIZE), load_ptr(slots, _SM_KEY * C_POINTER_SIZE)))
-            _sys_modules_adopt(slots, tokens, _SM_OUTPUT)
-    return _sys_modules_finish(slots, tokens)
+    return _sys_modules_finish(slots)
 
 
 @c_abi_export("py_sys_modules_import_cached")
@@ -310,21 +262,18 @@ def _sys_modules_none_error(module_name) -> None:
 
 @c_abi_export("py_sys_modules_publish")
 def py_sys_modules_publish(module_name, value) -> int:
-    # Import callers keep an independent counted lease until this input is copied.
+    # Import callers keep their own owner until this input is copied.
     slots = stack_alloc(_SM_COUNT * C_POINTER_SIZE)
-    tokens = stack_alloc(_SM_COUNT * C_POINTER_SIZE)
     memset(slots, 0, _SM_COUNT * C_POINTER_SIZE)
-    memset(tokens, 255, _SM_COUNT * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_sys_modules_frame_map"), slots)
     py_incref(value)
     store_ptr(slots, _SM_VALUE * C_POINTER_SIZE, value)
-    _sys_modules_adopt(slots, tokens, _SM_VALUE)
-    if _sys_modules_acquire_cache(slots, tokens):
-        _sys_modules_key(slots, tokens, module_name)
+    if _sys_modules_acquire_cache(slots):
+        _sys_modules_key(slots, module_name)
         if not ptr_is_null(load_ptr(slots, _SM_KEY * C_POINTER_SIZE)):
             py_dict_set(load_ptr(slots, _SM_CACHE * C_POINTER_SIZE), load_ptr(slots, _SM_KEY * C_POINTER_SIZE),
                         load_ptr(slots, _SM_VALUE * C_POINTER_SIZE))
-    _sys_modules_finish(slots, tokens)
+    _sys_modules_finish(slots)
     if py_err_occurred():
         return -1
     return 0
@@ -336,46 +285,38 @@ def py_sys_modules_rollback(module_name) -> None:
     # cache value. Lookup/deletion errors and replacement finalizers must not
     # replace the initializer's original exception.
     slots = stack_alloc(_SM_COUNT * C_POINTER_SIZE)
-    tokens = stack_alloc(_SM_COUNT * C_POINTER_SIZE)
     memset(slots, 0, _SM_COUNT * C_POINTER_SIZE)
-    memset(tokens, 255, _SM_COUNT * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_sys_modules_frame_map"), slots)
     saved = ptr_add(slots, _SM_ERROR * C_POINTER_SIZE)
     py_tls_exc_swap_slot(saved)
     store_ptr(slots, _SM_ERROR * C_POINTER_SIZE, load_ptr(saved, 0))
-    _sys_modules_adopt(slots, tokens, _SM_ERROR)
-    if _sys_modules_acquire_cache(slots, tokens):
-        _sys_modules_key(slots, tokens, module_name)
+    if _sys_modules_acquire_cache(slots):
+        _sys_modules_key(slots, module_name)
         if not ptr_is_null(load_ptr(slots, _SM_KEY * C_POINTER_SIZE)):
             py_dict_del(load_ptr(slots, _SM_CACHE * C_POINTER_SIZE), load_ptr(slots, _SM_KEY * C_POINTER_SIZE))
-    _sys_modules_finish(slots, tokens)
+    _sys_modules_finish(slots)
 
 
 @c_abi_export("py_sys_modules_finish_import")
 def py_sys_modules_finish_import(module_name, original):
-    """Consume one creator reference and return the live entry; caller retains a lease."""
+    """Consume one creator reference and return the live entry; the caller keeps its owner."""
     slots = stack_alloc(_SM_COUNT * C_POINTER_SIZE)
-    tokens = stack_alloc(_SM_COUNT * C_POINTER_SIZE)
     memset(slots, 0, _SM_COUNT * C_POINTER_SIZE)
-    memset(tokens, 255, _SM_COUNT * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_sys_modules_frame_map"), slots)
     saved = ptr_add(slots, _SM_ERROR * C_POINTER_SIZE)
     py_tls_exc_swap_slot(saved)
     store_ptr(slots, _SM_ERROR * C_POINTER_SIZE, load_ptr(saved, 0))
-    _sys_modules_adopt(slots, tokens, _SM_ERROR)
     store_ptr(slots, _SM_VALUE * C_POINTER_SIZE, original)
-    _sys_modules_adopt(slots, tokens, _SM_VALUE)
     store_ptr(slots, _SM_OUTPUT * C_POINTER_SIZE, py_sys_modules_find(module_name))
-    _sys_modules_adopt(slots, tokens, _SM_OUTPUT)
     if ptr_is_null(load_ptr(slots, _SM_OUTPUT * C_POINTER_SIZE)) and not py_err_occurred():
         py_raise_owned(py_exc_new(4, module_name))
     if (not py_err_occurred() and ptr_is_null(load_ptr(saved, 0))
             and not ptr_is_null(load_ptr(slots, _SM_OUTPUT * C_POINTER_SIZE))):
-        _sys_modules_publish_parent(slots, tokens, module_name)
-    return _sys_modules_finish(slots, tokens)
+        _sys_modules_publish_parent(slots, module_name)
+    return _sys_modules_finish(slots)
 
 
-def _sys_modules_publish_parent(slots, tokens, name) -> None:
+def _sys_modules_publish_parent(slots, name) -> None:
     split: int = -1
     index: int = 0
     while load_i8(name, index) != 0:
@@ -391,7 +332,6 @@ def _sys_modules_publish_parent(slots, tokens, name) -> None:
     memcpy(parent, name, split)
     store_i8(parent, split, 0)
     store_ptr(slots, _SM_CURRENT * C_POINTER_SIZE, py_sys_modules_find(parent))
-    _sys_modules_adopt(slots, tokens, _SM_CURRENT)
     if ptr_is_null(load_ptr(slots, _SM_CURRENT * C_POINTER_SIZE)):
         # The compiled graph can register a dotted provider without a parent
         # initializer (for example an elided compile-time package). A cache
@@ -413,18 +353,14 @@ def _sys_modules_publish_parent(slots, tokens, name) -> None:
 def py_sys_modules_abort_import(module_name, original) -> None:
     """Rollback the failed name and retire its creator with the error preserved."""
     slots = stack_alloc(_SM_COUNT * C_POINTER_SIZE)
-    tokens = stack_alloc(_SM_COUNT * C_POINTER_SIZE)
     memset(slots, 0, _SM_COUNT * C_POINTER_SIZE)
-    memset(tokens, 255, _SM_COUNT * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_sys_modules_frame_map"), slots)
     saved = ptr_add(slots, _SM_ERROR * C_POINTER_SIZE)
     py_tls_exc_swap_slot(saved)
     store_ptr(slots, _SM_ERROR * C_POINTER_SIZE, load_ptr(saved, 0))
-    _sys_modules_adopt(slots, tokens, _SM_ERROR)
     store_ptr(slots, _SM_VALUE * C_POINTER_SIZE, original)
-    _sys_modules_adopt(slots, tokens, _SM_VALUE)
     py_sys_modules_rollback(module_name)
-    _sys_modules_finish(slots, tokens)
+    _sys_modules_finish(slots)
 
 
 def _module_name_key(module_name):

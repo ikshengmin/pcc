@@ -52,8 +52,7 @@ py_sys_modules_publish = extern("py_sys_modules_publish", (c_ptr, c_ptr), c_int6
 py_sys_modules_finish_import = extern("py_sys_modules_finish_import", (c_ptr, c_ptr), c_ptr)
 py_sys_modules_abort_import = extern("py_sys_modules_abort_import", (c_ptr, c_ptr), c_void)
 py_sys_modules_rollback = extern("py_sys_modules_rollback", (c_ptr,), c_void)
-py_sys_modules_owner_adopt = extern("py_sys_modules_owner_adopt", (c_ptr, c_ptr, c_int64), c_void)
-py_sys_modules_owner_finish = extern("py_sys_modules_owner_finish", (c_ptr, c_ptr), c_ptr)
+py_sys_modules_owner_finish = extern("py_sys_modules_owner_finish", (c_ptr,), c_ptr)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_capi_module_from_def = extern("pcc_capi_module_from_def", (c_ptr,), c_ptr)
 pcc_capi_module_run_exec_slots = extern(
@@ -272,7 +271,7 @@ def _runtime_error(prefix, detail):
     return null()
 
 
-def _native_extension_import_into(module_name, path, slots, tokens) -> None:
+def _native_extension_import_into(module_name, path, slots) -> None:
     if (
         ptr_is_null(module_name) != 0
         or ptr_is_null(path) != 0
@@ -286,7 +285,6 @@ def _native_extension_import_into(module_name, path, slots, tokens) -> None:
         return
 
     store_ptr(slots, _MI_OUTPUT * C_POINTER_SIZE, py_sys_modules_import_cached(module_name))
-    py_sys_modules_owner_adopt(slots, tokens, _MI_OUTPUT)
     if not ptr_is_null(load_ptr(slots, _MI_OUTPUT * C_POINTER_SIZE)) or py_err_occurred() != 0:
         return
     if not ptr_is_null(_find_code_owner(module_name)):
@@ -298,7 +296,6 @@ def _native_extension_import_into(module_name, path, slots, tokens) -> None:
     if py_compiled_module_ensure_parent_packages(module_name) != 0:
         return
     store_ptr(slots, _MI_OUTPUT * C_POINTER_SIZE, py_sys_modules_import_cached(module_name))
-    py_sys_modules_owner_adopt(slots, tokens, _MI_OUTPUT)
     if not ptr_is_null(load_ptr(slots, _MI_OUTPUT * C_POINTER_SIZE)) or py_err_occurred() != 0:
         return
     if not ptr_is_null(_find_code_owner(module_name)):
@@ -355,7 +352,6 @@ def _native_extension_import_into(module_name, path, slots, tokens) -> None:
         store_ptr(slots, _MI_CREATOR * C_POINTER_SIZE, pcc_capi_module_from_def(definition))
     else:
         store_ptr(slots, _MI_CREATOR * C_POINTER_SIZE, module)
-    py_sys_modules_owner_adopt(slots, tokens, _MI_CREATOR)
     if ptr_is_null(load_ptr(slots, _MI_CREATOR * C_POINTER_SIZE)) or py_err_occurred():
         if py_err_occurred() == 0:
             _runtime_error(cstr("native extension exec failed"), module_name)
@@ -376,22 +372,19 @@ def _native_extension_import_into(module_name, path, slots, tokens) -> None:
                 _runtime_error(cstr("native extension exec failed"), module_name)
                 return
             return
-    # Completion takes a separate reference; the active creator remains
-    # leased even when a callback deletes/replaces its public cache entry.
+    # Completion takes a separate reference; the active creator stays rooted
+    # even when a callback deletes/replaces its public cache entry.
     py_incref(load_ptr(slots, _MI_CREATOR * C_POINTER_SIZE))
     store_ptr(slots, _MI_OUTPUT * C_POINTER_SIZE, py_sys_modules_finish_import(module_name, load_ptr(slots, _MI_CREATOR * C_POINTER_SIZE)))
-    py_sys_modules_owner_adopt(slots, tokens, _MI_OUTPUT)
 
 
 @c_abi_export("py_native_extension_import")
 def py_native_extension_import(module_name, path):
     slots = stack_alloc(_MI_COUNT * C_POINTER_SIZE)
-    tokens = stack_alloc(_MI_COUNT * C_POINTER_SIZE)
     memset(slots, _MI_TEMP * C_POINTER_SIZE, 48)
-    memset(tokens, 255, _MI_COUNT * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_extension_module_frame_map"), slots)
-    _native_extension_import_into(module_name, path, slots, tokens)
-    return py_sys_modules_owner_finish(slots, tokens)
+    _native_extension_import_into(module_name, path, slots)
+    return py_sys_modules_owner_finish(slots)
 
 
 def _module_relpath(module_name):
@@ -442,21 +435,19 @@ def _candidate_path(site, site_len: int, relative, extension):
     return path
 
 
-def _try_candidate(module_name, site, site_len: int, relative, extension, slots, tokens) -> None:
+def _try_candidate(module_name, site, site_len: int, relative, extension, slots) -> None:
     path = _candidate_path(site, site_len, relative, extension)
     if ptr_is_null(path):
         return
     if access(path, 0) == 0:
         store_ptr(slots, _MI_OUTPUT * C_POINTER_SIZE, py_native_extension_import(module_name, path))
-        py_sys_modules_owner_adopt(slots, tokens, _MI_OUTPUT)
     free(path)
 
 
-def _native_extension_import_by_name_into(module_name, slots, tokens) -> None:
+def _native_extension_import_by_name_into(module_name, slots) -> None:
     if ptr_is_null(module_name) or load_i8(module_name, 0) == 0:
         return
     store_ptr(slots, _MI_OUTPUT * C_POINTER_SIZE, py_sys_modules_import_cached(module_name))
-    py_sys_modules_owner_adopt(slots, tokens, _MI_OUTPUT)
     if not ptr_is_null(load_ptr(slots, _MI_OUTPUT * C_POINTER_SIZE)) or py_err_occurred():
         return
     if not ptr_is_null(_find_code_owner(module_name)):
@@ -465,7 +456,6 @@ def _native_extension_import_by_name_into(module_name, slots, tokens) -> None:
     if py_compiled_module_ensure_parent_packages(module_name) != 0:
         return
     store_ptr(slots, _MI_OUTPUT * C_POINTER_SIZE, py_sys_modules_import_cached(module_name))
-    py_sys_modules_owner_adopt(slots, tokens, _MI_OUTPUT)
     if not ptr_is_null(load_ptr(slots, _MI_OUTPUT * C_POINTER_SIZE)) or py_err_occurred():
         return
     if not ptr_is_null(_find_code_owner(module_name)):
@@ -488,13 +478,13 @@ def _native_extension_import_by_name_into(module_name, slots, tokens) -> None:
             site_len = site_len + 1
             cursor = ptr_add(cursor, 1)
         if site_len > 0:
-            _try_candidate(module_name, start, site_len, relative, cstr(".so"), slots, tokens)
+            _try_candidate(module_name, start, site_len, relative, cstr(".so"), slots)
             if ptr_is_null(load_ptr(slots, _MI_OUTPUT * C_POINTER_SIZE)) and not py_err_occurred():
-                _try_candidate(module_name, start, site_len, relative, cstr(".dylib"), slots, tokens)
+                _try_candidate(module_name, start, site_len, relative, cstr(".dylib"), slots)
             if ptr_is_null(load_ptr(slots, _MI_OUTPUT * C_POINTER_SIZE)) and not py_err_occurred():
-                _try_candidate(module_name, start, site_len, relative, cstr(".pyd"), slots, tokens)
+                _try_candidate(module_name, start, site_len, relative, cstr(".pyd"), slots)
             if ptr_is_null(load_ptr(slots, _MI_OUTPUT * C_POINTER_SIZE)) and not py_err_occurred():
-                _try_candidate(module_name, start, site_len, relative, cstr(".dll"), slots, tokens)
+                _try_candidate(module_name, start, site_len, relative, cstr(".dll"), slots)
             if not ptr_is_null(load_ptr(slots, _MI_OUTPUT * C_POINTER_SIZE)) or py_err_occurred():
                 free(relative)
                 return
@@ -508,9 +498,7 @@ def _native_extension_import_by_name_into(module_name, slots, tokens) -> None:
 @c_abi_export("py_native_extension_import_by_name")
 def py_native_extension_import_by_name(module_name):
     slots = stack_alloc(_MI_COUNT * C_POINTER_SIZE)
-    tokens = stack_alloc(_MI_COUNT * C_POINTER_SIZE)
     memset(slots, _MI_TEMP * C_POINTER_SIZE, 48)
-    memset(tokens, 255, _MI_COUNT * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_extension_module_frame_map"), slots)
-    _native_extension_import_by_name_into(module_name, slots, tokens)
-    return py_sys_modules_owner_finish(slots, tokens)
+    _native_extension_import_by_name_into(module_name, slots)
+    return py_sys_modules_owner_finish(slots)

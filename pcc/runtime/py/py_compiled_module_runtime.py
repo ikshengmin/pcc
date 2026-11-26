@@ -49,9 +49,8 @@ py_sys_modules_import_cached = extern("py_sys_modules_import_cached", (c_ptr,), 
 py_sys_modules_publish = extern("py_sys_modules_publish", (c_ptr, c_ptr), c_int64)
 py_sys_modules_rollback = extern("py_sys_modules_rollback", (c_ptr,), c_void)
 py_sys_modules_finish_import = extern("py_sys_modules_finish_import", (c_ptr, c_ptr), c_ptr)
-py_sys_modules_owner_adopt = extern("py_sys_modules_owner_adopt", (c_ptr, c_ptr, c_int64), c_void)
-py_sys_modules_owner_drop = extern("py_sys_modules_owner_drop", (c_ptr, c_ptr, c_int64), c_void)
-py_sys_modules_owner_finish = extern("py_sys_modules_owner_finish", (c_ptr, c_ptr), c_ptr)
+py_sys_modules_owner_drop = extern("py_sys_modules_owner_drop", (c_ptr, c_int64), c_void)
+py_sys_modules_owner_finish = extern("py_sys_modules_owner_finish", (c_ptr,), c_ptr)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 py_instance_new = extern("py_instance_new", (c_ptr,), c_ptr)
 pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
@@ -213,7 +212,7 @@ def _compiled_module_has_init(name) -> bool:
     return not ptr_is_null(_lookup_init_node(name))
 
 
-def _compiled_module_ensure_parents_into(module_name, slots, tokens) -> None:
+def _compiled_module_ensure_parents_into(module_name, slots) -> None:
     if ptr_is_null(module_name):
         return
     index: int = 0
@@ -226,23 +225,20 @@ def _compiled_module_ensure_parents_into(module_name, slots, tokens) -> None:
             memcpy(parent, module_name, index)
             store_i8(parent, index, 0)
             store_ptr(slots, _MI_OUTPUT * C_POINTER_SIZE, py_compiled_module_import_by_name(parent))
-            py_sys_modules_owner_adopt(slots, tokens, _MI_OUTPUT)
             free(parent)
             if py_err_occurred():
                 return
-            py_sys_modules_owner_drop(slots, tokens, _MI_OUTPUT)
+            py_sys_modules_owner_drop(slots, _MI_OUTPUT)
         index = index + 1
 
 
 @c_abi_export("py_compiled_module_ensure_parent_packages")
 def py_compiled_module_ensure_parent_packages(module_name) -> int:
     slots = stack_alloc(_MI_COUNT * C_POINTER_SIZE)
-    tokens = stack_alloc(_MI_COUNT * C_POINTER_SIZE)
     memset(slots, _MI_TEMP * C_POINTER_SIZE, 48)
-    memset(tokens, 255, _MI_COUNT * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_compiled_module_frame_map"), slots)
-    _compiled_module_ensure_parents_into(module_name, slots, tokens)
-    py_sys_modules_owner_finish(slots, tokens)
+    _compiled_module_ensure_parents_into(module_name, slots)
+    py_sys_modules_owner_finish(slots)
     if py_err_occurred():
         return -1
     return 0
@@ -315,27 +311,23 @@ def _publish_compiled_module_parent(name, module) -> int:
     return 0
 
 
-def _create_compiled_module_node(name, slots, tokens):
-    # Publish each NEW result before the lease helper can park. Borrowed
+def _create_compiled_module_node(name, slots):
+    # Publish each NEW result before the next call can park. Borrowed
     # namespace/class values become explicit references in the same frame.
     store_ptr(slots, _MI_TEMP * C_POINTER_SIZE, py_module_attrs_dict(name, 1))
     py_incref(load_ptr(slots, _MI_TEMP * C_POINTER_SIZE))
-    py_sys_modules_owner_adopt(slots, tokens, _MI_TEMP)
     if ptr_is_null(load_ptr(slots, _MI_TEMP * C_POINTER_SIZE)) or py_err_occurred():
         return null()
     store_ptr(slots, _MI_AUX * C_POINTER_SIZE, pcc_runtime_module_class())
     py_incref(load_ptr(slots, _MI_AUX * C_POINTER_SIZE))
-    py_sys_modules_owner_adopt(slots, tokens, _MI_AUX)
     if ptr_is_null(load_ptr(slots, _MI_AUX * C_POINTER_SIZE)) or py_err_occurred():
         return null()
     store_ptr(slots, _MI_CREATOR * C_POINTER_SIZE, py_instance_new(load_ptr(slots, _MI_AUX * C_POINTER_SIZE)))
-    py_sys_modules_owner_adopt(slots, tokens, _MI_CREATOR)
     if ptr_is_null(load_ptr(slots, _MI_CREATOR * C_POINTER_SIZE)) or py_err_occurred():
         return null()
     pcc_gc_store_ptr(load_ptr(slots, _MI_CREATOR * C_POINTER_SIZE), ptr_add(load_ptr(slots, _MI_CREATOR * C_POINTER_SIZE), 24), load_ptr(slots, _MI_TEMP * C_POINTER_SIZE))
-    py_sys_modules_owner_drop(slots, tokens, _MI_AUX)
+    py_sys_modules_owner_drop(slots, _MI_AUX)
     store_ptr(slots, _MI_AUX * C_POINTER_SIZE, py_str_new(name, strlen(name)))
-    py_sys_modules_owner_adopt(slots, tokens, _MI_AUX)
     if ptr_is_null(load_ptr(slots, _MI_AUX * C_POINTER_SIZE)) or py_err_occurred():
         return null()
     if py_instance_setattr(load_ptr(slots, _MI_CREATOR * C_POINTER_SIZE), cstr("__name__"), load_ptr(slots, _MI_AUX * C_POINTER_SIZE)) != 0:
@@ -367,11 +359,10 @@ def _create_compiled_module_node(name, slots, tokens):
     return node
 
 
-def _compiled_module_import_into(name, slots, tokens) -> None:
+def _compiled_module_import_into(name, slots) -> None:
     if ptr_is_null(name) or load_i8(name, 0) == 0:
         return
     store_ptr(slots, _MI_OUTPUT * C_POINTER_SIZE, py_sys_modules_import_cached(name))
-    py_sys_modules_owner_adopt(slots, tokens, _MI_OUTPUT)
     if not ptr_is_null(load_ptr(slots, _MI_OUTPUT * C_POINTER_SIZE)) or py_err_occurred() != 0:
         return
 
@@ -392,7 +383,6 @@ def _compiled_module_import_into(name, slots, tokens) -> None:
     # object, including its completed publication, rather than initializing or
     # manufacturing another module when the outer import resumes.
     store_ptr(slots, _MI_OUTPUT * C_POINTER_SIZE, py_sys_modules_import_cached(name))
-    py_sys_modules_owner_adopt(slots, tokens, _MI_OUTPUT)
     if not ptr_is_null(load_ptr(slots, _MI_OUTPUT * C_POINTER_SIZE)) or py_err_occurred() != 0:
         return
     # Parent initialization can import and then delete this child. Recheck
@@ -403,25 +393,22 @@ def _compiled_module_import_into(name, slots, tokens) -> None:
             "compiled module reinitialization requires per-instance globals after sys.modules deletion"
         )))
         return
-    node = _create_compiled_module_node(name, slots, tokens)
+    node = _create_compiled_module_node(name, slots)
     if ptr_is_null(node):
         return
     if _run_compiled_module_init(name) != 0:
         _discard_module_node(name, node)
         return
-    # Completion consumes its own reference. This frame retains the creator
-    # lease until live-entry publication and every callback have completed.
+    # Completion consumes its own reference. This frame keeps the creator
+    # root until live-entry publication and every callback have completed.
     py_incref(load_ptr(slots, _MI_CREATOR * C_POINTER_SIZE))
     store_ptr(slots, _MI_OUTPUT * C_POINTER_SIZE, py_sys_modules_finish_import(name, load_ptr(slots, _MI_CREATOR * C_POINTER_SIZE)))
-    py_sys_modules_owner_adopt(slots, tokens, _MI_OUTPUT)
 
 
 @c_abi_export("py_compiled_module_import_by_name")
 def py_compiled_module_import_by_name(name):
     slots = stack_alloc(_MI_COUNT * C_POINTER_SIZE)
-    tokens = stack_alloc(_MI_COUNT * C_POINTER_SIZE)
     memset(slots, _MI_TEMP * C_POINTER_SIZE, 48)
-    memset(tokens, 255, _MI_COUNT * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_compiled_module_frame_map"), slots)
-    _compiled_module_import_into(name, slots, tokens)
-    return py_sys_modules_owner_finish(slots, tokens)
+    _compiled_module_import_into(name, slots)
+    return py_sys_modules_owner_finish(slots)

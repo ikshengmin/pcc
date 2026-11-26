@@ -932,15 +932,12 @@ define_global_i32("pcc_buffer_owned_map", 6)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
-pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
-pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_root_copy = extern("pcc_gc_root_copy", (c_ptr, c_ptr), c_int64)
+pcc_gc_root_copy_borrowed = extern("pcc_gc_root_copy_borrowed", (c_ptr, c_ptr), c_int64)
 pcc_gc_root_move = extern("pcc_gc_root_move", (c_ptr, c_ptr), c_int64)
-pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
-pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
-pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_memoryview_free_owned_buffer = extern(
     "pcc_memoryview_free_owned_buffer", (c_ptr,), c_void
 )
@@ -954,58 +951,46 @@ def _buffer_error(kind: int, message) -> int:
     return -1
 
 
-def _buffer_drop(slots, tokens, index: int) -> None:
-    slot = ptr_add(slots, index * _BUFFER_BYTES)
-    token: int = load_i64(tokens, index * _BUFFER_BYTES)
-    if token >= 0:
-        if pcc_gc_foreign_lease_release(slot, token) < 0:
-            pcc_platform_abort()
-            return
-    store_i64(tokens, index * _BUFFER_BYTES, -1)
-    pcc_gc_store_root(slot, null())
+def _buffer_drop(slots, index: int) -> None:
+    pcc_gc_store_root(ptr_add(slots, index * _BUFFER_BYTES), null())
 
 
-def _buffer_adopt(slots, tokens, index: int) -> int:
+def _buffer_adopt(slots, index: int) -> int:
     slot = ptr_add(slots, index * _BUFFER_BYTES)
     if ptr_is_null(load_ptr(slot, 0)) != 0:
         return _buffer_error(19, cstr("buffer conversion: out of memory"))
-    token: int = pcc_gc_foreign_lease_acquire(slot)
-    store_i64(tokens, index * _BUFFER_BYTES, token)
-    if token < 0:
-        return _buffer_error(19, cstr("buffer conversion: cannot lease owner"))
     if py_err_occurred() != 0:
         return -1
     return 0
 
 
-def _buffer_copy(slots, tokens, index: int, source, borrowed: int) -> int:
+def _buffer_copy(slots, index: int, source, borrowed: int) -> int:
     destination = ptr_add(slots, index * _BUFFER_BYTES)
-    token: int = -1
+    status: int = -1
     if borrowed != 0:
-        token = pcc_gc_root_copy_borrowed_lease(destination, source)
+        status = pcc_gc_root_copy_borrowed(destination, source)
     else:
-        token = pcc_gc_root_copy_lease(destination, source)
-    store_i64(tokens, index * _BUFFER_BYTES, token)
-    if token < 0:
+        status = pcc_gc_root_copy(destination, source)
+    if status < 0:
         return _buffer_error(19, cstr("buffer conversion: cannot retain owner"))
     return 0
 
 
-def _buffer_new_raw(slots, tokens, data, count: int, mutable: int) -> int:
+def _buffer_new_raw(slots, data, count: int, mutable: int) -> int:
     result = ptr_add(slots, _BUFFER_RESULT * _BUFFER_BYTES)
     if mutable != 0:
         store_ptr(result, 0, _bytearray_new_raw(data, count))
     else:
         store_ptr(result, 0, py_bytes_new(data, count))
-    return _buffer_adopt(slots, tokens, _BUFFER_RESULT)
+    return _buffer_adopt(slots, _BUFFER_RESULT)
 
 
-def _buffer_count_fill(slots, tokens, mutable: int) -> int:
+def _buffer_count_fill(slots, mutable: int) -> int:
     source = ptr_add(slots, _BUFFER_SOURCE * _BUFFER_BYTES)
     index = ptr_add(slots, _BUFFER_INDEX * _BUFFER_BYTES)
     if py_obj_index_slots(source, index) != 0:
         return -1
-    if _buffer_adopt(slots, tokens, _BUFFER_INDEX) != 0:
+    if _buffer_adopt(slots, _BUFFER_INDEX) != 0:
         return -1
     overflow = stack_alloc(4)
     store_i32(overflow, 0, 0)
@@ -1018,14 +1003,14 @@ def _buffer_count_fill(slots, tokens, mutable: int) -> int:
         return _buffer_error(2, cstr("negative count"))
     if mutable == 0 and count > 9223372036854775807 - (PYBYTESOBJECT_DATA_OFFSET + 1):
         return _buffer_error(15, cstr("byte count is too large"))
-    status: int = _buffer_new_raw(slots, tokens, null(), count, mutable)
+    status: int = _buffer_new_raw(slots, null(), count, mutable)
     if status == 0 and count > 0:
         result = load_ptr(slots, _BUFFER_RESULT * _BUFFER_BYTES)
         memset(_bytes_data(result), 0, count)
     return status
 
 
-def _buffer_sequence_fill(slots, tokens, mutable: int) -> int:
+def _buffer_sequence_fill(slots, mutable: int) -> int:
     source = ptr_add(slots, _BUFFER_SOURCE * _BUFFER_BYTES)
     item = ptr_add(slots, _BUFFER_ITEM * _BUFFER_BYTES)
     index = ptr_add(slots, _BUFFER_INDEX * _BUFFER_BYTES)
@@ -1038,7 +1023,7 @@ def _buffer_sequence_fill(slots, tokens, mutable: int) -> int:
     if py_err_occurred() != 0:
         return -1
     if count <= 0:
-        return _buffer_new_raw(slots, tokens, null(), 0, mutable)
+        return _buffer_new_raw(slots, null(), 0, mutable)
     data = py_mem_alloc(count)
     if ptr_is_null(data) != 0:
         return _buffer_error(19, cstr("byte sequence: out of memory"))
@@ -1050,11 +1035,11 @@ def _buffer_sequence_fill(slots, tokens, mutable: int) -> int:
             store_ptr(item, 0, py_list_get(load_ptr(source, 0), current))
         else:
             store_ptr(item, 0, py_tuple_get(load_ptr(source, 0), current))
-        status = _buffer_adopt(slots, tokens, _BUFFER_ITEM)
+        status = _buffer_adopt(slots, _BUFFER_ITEM)
         if status == 0:
             status = py_obj_index_slots(item, index)
         if status == 0:
-            status = _buffer_adopt(slots, tokens, _BUFFER_INDEX)
+            status = _buffer_adopt(slots, _BUFFER_INDEX)
         if status == 0:
             store_i32(overflow, 0, 0)
             byte: int = py_int_to_i64(load_ptr(index, 0), overflow)
@@ -1065,11 +1050,11 @@ def _buffer_sequence_fill(slots, tokens, mutable: int) -> int:
             else:
                 store_i8(data, current, byte)
         if status == 0:
-            _buffer_drop(slots, tokens, _BUFFER_INDEX)
-            _buffer_drop(slots, tokens, _BUFFER_ITEM)
+            _buffer_drop(slots, _BUFFER_INDEX)
+            _buffer_drop(slots, _BUFFER_ITEM)
         current = current + 1
     if status == 0:
-        status = _buffer_new_raw(slots, tokens, data, count, mutable)
+        status = _buffer_new_raw(slots, data, count, mutable)
     # Result/error remains in an owning root when freeing the unmanaged copy
     # buffer parks or runs diagnostics; a raw result never crosses this call.
     error = ptr_add(slots, _BUFFER_ERROR * _BUFFER_BYTES)
@@ -1080,40 +1065,37 @@ def _buffer_sequence_fill(slots, tokens, mutable: int) -> int:
     return status
 
 
-def _buffer_unwrap_leaf(slots, tokens) -> int:
+def _buffer_unwrap_leaf(slots) -> int:
     source = ptr_add(slots, _BUFFER_SOURCE * _BUFFER_BYTES)
     leaf = ptr_add(slots, _BUFFER_LEAF * _BUFFER_BYTES)
     item = ptr_add(slots, _BUFFER_ITEM * _BUFFER_BYTES)
-    if _buffer_copy(slots, tokens, _BUFFER_LEAF, source, 0) != 0:
+    if _buffer_copy(slots, _BUFFER_LEAF, source, 0) != 0:
         return -1
     while _type_of(load_ptr(leaf, 0)) == PY_TYPE_MEMORYVIEW:
-        # The current view's address is leased, so its actual managed base
+        # The current view is owned by its slot, so its actual managed base
         # field remains an authoritative source slot throughout the retain.
         base_slot = ptr_add(load_ptr(leaf, 0), PYMEMORYVIEWOBJECT_BASE_OFFSET)
-        if _buffer_copy(slots, tokens, _BUFFER_ITEM, base_slot, 1) != 0:
+        if _buffer_copy(slots, _BUFFER_ITEM, base_slot, 1) != 0:
             return -1
         if ptr_is_null(load_ptr(item, 0)) != 0:
             return 1  # View has no base; the caller supplies its operation-specific error.
-        _buffer_drop(slots, tokens, _BUFFER_LEAF)
+        _buffer_drop(slots, _BUFFER_LEAF)
         if pcc_gc_root_move(leaf, item) != 0:
             return _buffer_error(7, cstr("cannot transfer memoryview buffer owner"))
-        token: int = load_i64(tokens, _BUFFER_ITEM * _BUFFER_BYTES)
-        store_i64(tokens, _BUFFER_ITEM * _BUFFER_BYTES, -1)
-        store_i64(tokens, _BUFFER_LEAF * _BUFFER_BYTES, token)
     return 0
 
 
-def _buffer_payload_fill(slots, tokens, mutable: int) -> int:
-    unwrapped: int = _buffer_unwrap_leaf(slots, tokens)
+def _buffer_payload_fill(slots, mutable: int) -> int:
+    unwrapped: int = _buffer_unwrap_leaf(slots)
     if unwrapped < 0:
         return -1
     if unwrapped != 0:
         return _buffer_error(3, cstr("memoryview has no buffer owner"))
     leaf = ptr_add(slots, _BUFFER_LEAF * _BUFFER_BYTES)
-    # The actual leaf, not just an outer view, owns an address lease.
+    # The actual leaf, not just an outer view, has its own owning slot.
     current = load_ptr(leaf, 0)
     if _type_of(current) == PY_TYPE_BYTEARRAY:
-        # A lease on the leaf's address does not freeze its logical payload.
+        # Owning the leaf does not freeze its logical payload.
         # Size the private destination, then take the pointer and length
         # together *after* its allocation/adoption. No raw source pointer
         # crosses the allocation and only one payload copy is needed.
@@ -1121,7 +1103,7 @@ def _buffer_payload_fill(slots, tokens, mutable: int) -> int:
         reserved: int = load_i64(load_ptr(leaf, 0), 16)
         pcc_py_gc_minor_graph_unlock()
         while True:
-            if _buffer_new_raw(slots, tokens, null(), reserved, mutable) != 0:
+            if _buffer_new_raw(slots, null(), reserved, mutable) != 0:
                 return -1
             pcc_py_gc_minor_graph_lock()
             current = load_ptr(leaf, 0)
@@ -1135,7 +1117,7 @@ def _buffer_payload_fill(slots, tokens, mutable: int) -> int:
             pcc_py_gc_minor_graph_unlock()
             # Preserve exact destination size without publishing a partial
             # value. Releasing an owner may park; do it outside the lock.
-            _buffer_drop(slots, tokens, _BUFFER_RESULT)
+            _buffer_drop(slots, _BUFFER_RESULT)
             if py_err_occurred() != 0:
                 return -1
             reserved = live
@@ -1144,16 +1126,16 @@ def _buffer_payload_fill(slots, tokens, mutable: int) -> int:
     count: int = py_bytes_len(load_ptr(leaf, 0))
     if py_err_occurred() != 0:
         return -1
-    return _buffer_new_raw(slots, tokens, data, count, mutable)
+    return _buffer_new_raw(slots, data, count, mutable)
 
 
-def _buffer_fill(slots, tokens, mode: int) -> int:
+def _buffer_fill(slots, mode: int) -> int:
     source = ptr_add(slots, _BUFFER_SOURCE * _BUFFER_BYTES)
     result = ptr_add(slots, _BUFFER_RESULT * _BUFFER_BYTES)
     if mode == _BUFFER_EXPORTER_ATTRIBUTE_MODE:
         # .obj is the original exporter, not an intermediate view or a
         # payload copy. The existing owner walk retains from each traced slot.
-        unwrapped: int = _buffer_unwrap_leaf(slots, tokens)
+        unwrapped: int = _buffer_unwrap_leaf(slots)
         if unwrapped < 0:
             return -1
         if unwrapped != 0:
@@ -1162,18 +1144,18 @@ def _buffer_fill(slots, tokens, mode: int) -> int:
         leaf_tag: int = _type_of(load_ptr(leaf, 0))
         if leaf_tag != PY_TYPE_BYTES and leaf_tag != PY_TYPE_BYTEARRAY:
             return _buffer_error(3, cstr("memoryview base does not support buffer protocol"))
-        return _buffer_copy(slots, tokens, _BUFFER_RESULT, leaf, 0)
+        return _buffer_copy(slots, _BUFFER_RESULT, leaf, 0)
     if mode == 2:
         store_ptr(result, 0, pcc_gc_alloc(32, PY_TYPE_MEMORYVIEW, 0))
         if ptr_is_null(load_ptr(result, 0)) != 0:
             return _buffer_error(19, cstr("memoryview: out of memory"))
-        # Finish the traceable empty layout before acquiring a parking lease.
+        # Finish the traceable empty layout before the next parking call.
         view = load_ptr(result, 0)
         store_i64(view, 0, 1)
         store_i32(view, PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_TYPE_MEMORYVIEW)
         store_ptr(view, PYMEMORYVIEWOBJECT_BASE_OFFSET, null())
         store_ptr(view, 24, null())
-        if _buffer_adopt(slots, tokens, _BUFFER_RESULT) != 0:
+        if _buffer_adopt(slots, _BUFFER_RESULT) != 0:
             return -1
         view = load_ptr(result, 0)
         pcc_gc_store_ptr(view, ptr_add(view, PYMEMORYVIEWOBJECT_BASE_OFFSET), load_ptr(source, 0))
@@ -1181,45 +1163,36 @@ def _buffer_fill(slots, tokens, mode: int) -> int:
             return -1
         return 0
     if ptr_is_null(load_ptr(source, 0)) != 0:
-        return _buffer_new_raw(slots, tokens, null(), 0, mode)
+        return _buffer_new_raw(slots, null(), 0, mode)
     tag: int = _type_of(load_ptr(source, 0))
     if tag == PY_TYPE_BYTES and mode == 0:
         # Exact immutable bytes retain identity with a separate result owner.
-        return _buffer_copy(slots, tokens, _BUFFER_RESULT, source, 0)
+        return _buffer_copy(slots, _BUFFER_RESULT, source, 0)
     if tag == PY_TYPE_INT or tag == PY_TYPE_BOOL:
-        return _buffer_count_fill(slots, tokens, mode)
+        return _buffer_count_fill(slots, mode)
     if tag == PY_TYPE_LIST or tag == PY_TYPE_TUPLE:
-        return _buffer_sequence_fill(slots, tokens, mode)
-    return _buffer_payload_fill(slots, tokens, mode)
+        return _buffer_sequence_fill(slots, mode)
+    return _buffer_payload_fill(slots, mode)
 
 
-def _buffer_open_owned(slots, tokens) -> None:
+def _buffer_open_owned(slots) -> None:
     memset(slots, 0, _BUFFER_COUNT * _BUFFER_BYTES)
-    index: int = 0
-    while index < _BUFFER_COUNT:
-        store_i64(tokens, index * _BUFFER_BYTES, -1)
-        index = index + 1
     pcc_gc_frame_enter(global_addr("pcc_buffer_owned_map"), slots)
 
 
-def _buffer_finish_owned(borrowed, borrowed_count: int, slots, tokens, status: int):
+def _buffer_finish_owned(borrowed, borrowed_count: int, slots, status: int):
     result = ptr_add(slots, _BUFFER_RESULT * _BUFFER_BYTES)
     error = ptr_add(slots, _BUFFER_ERROR * _BUFFER_BYTES)
     py_tls_exc_swap_slot(error)
     memset(borrowed, 0, borrowed_count * _BUFFER_BYTES)
     if status != 0:
-        _buffer_drop(slots, tokens, _BUFFER_RESULT)
+        _buffer_drop(slots, _BUFFER_RESULT)
     index: int = _BUFFER_INDEX
     while index >= 0:
-        _buffer_drop(slots, tokens, index)
+        _buffer_drop(slots, index)
         index = index - 1
     py_clear_exception()
     py_tls_exc_swap_slot(error)
-    token = load_i64(tokens, _BUFFER_RESULT * _BUFFER_BYTES)
-    if token >= 0:
-        if pcc_gc_foreign_lease_release(result, token) < 0:
-            pcc_platform_abort()
-            return null()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
     return pcc_gc_take_slot(result)
@@ -1230,12 +1203,11 @@ def _buffer_convert_owned(obj, mode: int):
     store_ptr(borrowed, 0, obj)
     pcc_gc_frame_enter(global_addr("pcc_buffer_borrowed_map"), borrowed)
     slots = stack_alloc(_BUFFER_COUNT * _BUFFER_BYTES)
-    tokens = stack_alloc(_BUFFER_COUNT * _BUFFER_BYTES)
-    _buffer_open_owned(slots, tokens)
-    status: int = _buffer_copy(slots, tokens, _BUFFER_SOURCE, borrowed, 1)
+    _buffer_open_owned(slots)
+    status: int = _buffer_copy(slots, _BUFFER_SOURCE, borrowed, 1)
     if status == 0:
-        status = _buffer_fill(slots, tokens, mode)
-    return _buffer_finish_owned(borrowed, 1, slots, tokens, status)
+        status = _buffer_fill(slots, mode)
+    return _buffer_finish_owned(borrowed, 1, slots, status)
 
 
 @c_abi_export("py_bytes_new")
@@ -2502,18 +2474,17 @@ def py_bytearray_append(o, item):
     store_ptr(borrowed, _BUFFER_BYTES, item)
     pcc_gc_frame_enter(global_addr("pcc_bytearray_append_borrowed_map"), borrowed)
     slots = stack_alloc(_BUFFER_COUNT * _BUFFER_BYTES)
-    tokens = stack_alloc(_BUFFER_COUNT * _BUFFER_BYTES)
-    _buffer_open_owned(slots, tokens)
-    status: int = _buffer_copy(slots, tokens, _BUFFER_SOURCE, borrowed, 1)
+    _buffer_open_owned(slots)
+    status: int = _buffer_copy(slots, _BUFFER_SOURCE, borrowed, 1)
     if status == 0:
-        status = _buffer_copy(slots, tokens, _BUFFER_ITEM, ptr_add(borrowed, _BUFFER_BYTES), 1)
+        status = _buffer_copy(slots, _BUFFER_ITEM, ptr_add(borrowed, _BUFFER_BYTES), 1)
     if status == 0:
         status = py_obj_index_slots(
             ptr_add(slots, _BUFFER_ITEM * _BUFFER_BYTES),
             ptr_add(slots, _BUFFER_INDEX * _BUFFER_BYTES),
         )
     if status == 0:
-        status = _buffer_adopt(slots, tokens, _BUFFER_INDEX)
+        status = _buffer_adopt(slots, _BUFFER_INDEX)
     if status == 0:
         overflow = stack_alloc(4)
         store_i32(overflow, 0, 0)
@@ -2527,8 +2498,8 @@ def py_bytearray_append(o, item):
         else:
             store_ptr(slots, _BUFFER_RESULT * _BUFFER_BYTES,
                       _bytearray_append_byte(load_ptr(slots, _BUFFER_SOURCE * _BUFFER_BYTES), byte))
-            status = _buffer_adopt(slots, tokens, _BUFFER_RESULT)
-    return _buffer_finish_owned(borrowed, 2, slots, tokens, status)
+            status = _buffer_adopt(slots, _BUFFER_RESULT)
+    return _buffer_finish_owned(borrowed, 2, slots, status)
 
 
 def _bytearray_append_byte(o, byte: int):
@@ -3034,7 +3005,7 @@ def _decode_operand_type_error(value) -> int:
     return _buffer_error(3, message)
 
 
-def _bytes_decode_body(slots, tokens, codec: int, mode: int) -> int:
+def _bytes_decode_body(slots, codec: int, mode: int) -> int:
     source = ptr_add(slots, _BUFFER_SOURCE * _BUFFER_BYTES)
     value = load_ptr(source, 0)
     if ptr_is_null(value):
@@ -3056,13 +3027,13 @@ def _bytes_decode_body(slots, tokens, codec: int, mode: int) -> int:
     # Snapshot a mutable or indirect buffer using its established leaf-owner
     # protocol. A memoryview's outer lease alone cannot protect its base.
     store_ptr(slots, _BUFFER_INDEX * _BUFFER_BYTES, _buffer_convert_owned(load_ptr(source, 0), 0))
-    if _buffer_adopt(slots, tokens, _BUFFER_INDEX) != 0:
+    if _buffer_adopt(slots, _BUFFER_INDEX) != 0:
         return -1
     payload = load_ptr(slots, _BUFFER_INDEX * _BUFFER_BYTES)
     store_ptr(slots, _BUFFER_RESULT * _BUFFER_BYTES, py_text_decode(_bytes_data(payload), py_bytes_len(payload), codec, mode))
     if ptr_is_null(load_ptr(slots, _BUFFER_RESULT * _BUFFER_BYTES)):
         return -1
-    return _buffer_adopt(slots, tokens, _BUFFER_RESULT)
+    return _buffer_adopt(slots, _BUFFER_RESULT)
 
 
 def _bytes_decode_exact(value, encoding, errors, codec: int, mode: int):
@@ -3098,37 +3069,27 @@ def _bytes_decode_guarded(value, encoding, errors, codec: int, mode: int):
     store_ptr(borrowed, 16, errors)
     pcc_gc_frame_enter(global_addr("pcc_text_decode_borrowed_map"), borrowed)
     slots = stack_alloc(_BUFFER_COUNT * _BUFFER_BYTES)
-    tokens = stack_alloc(_BUFFER_COUNT * _BUFFER_BYTES)
     memset(slots, 0, _BUFFER_COUNT * _BUFFER_BYTES)
-    index: int = 0
-    while index < _BUFFER_COUNT:
-        store_i64(tokens, index * _BUFFER_BYTES, -1)
-        index = index + 1
     pcc_gc_frame_enter(global_addr("pcc_buffer_owned_map"), slots)
     status: int = 0
-    index = 0
+    index: int = 0
     while index < 3 and status == 0:
-        status = _buffer_copy(slots, tokens, index, ptr_add(borrowed, index * _BUFFER_BYTES), 1)
+        status = _buffer_copy(slots, index, ptr_add(borrowed, index * _BUFFER_BYTES), 1)
         index = index + 1
     if status == 0:
-        status = _bytes_decode_body(slots, tokens, codec, mode)
+        status = _bytes_decode_body(slots, codec, mode)
     result = ptr_add(slots, _BUFFER_RESULT * _BUFFER_BYTES)
     error = ptr_add(slots, _BUFFER_ERROR * _BUFFER_BYTES)
     py_tls_exc_swap_slot(error)
     memset(borrowed, 0, 3 * _BUFFER_BYTES)
     if status != 0:
-        _buffer_drop(slots, tokens, _BUFFER_RESULT)
+        _buffer_drop(slots, _BUFFER_RESULT)
     index = _BUFFER_INDEX
     while index >= 0:
-        _buffer_drop(slots, tokens, index)
+        _buffer_drop(slots, index)
         index = index - 1
     py_clear_exception()
     py_tls_exc_swap_slot(error)
-    token: int = load_i64(tokens, _BUFFER_RESULT * _BUFFER_BYTES)
-    if token >= 0:
-        if pcc_gc_foreign_lease_release(result, token) < 0:
-            pcc_platform_abort()
-            return null()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
     return pcc_gc_take_slot(result)
@@ -3772,7 +3733,7 @@ def py_bytearray_del_slice(o, lo, hi, step) -> int:
 def _bytearray_extended_commit(receiver, source, scratch, raw_lo: int, raw_hi: int,
                                step: int, reserved: int) -> int:
     # These are registered slots, not object or data addresses. The actual
-    # source leaf (or the independent converted bytes) and scratch have leases.
+    # source leaf (or the independent converted bytes) and scratch are owned.
     # A positive return requests capacity only: no bytes have been changed.
     pcc_py_gc_minor_graph_lock()
     target = pcc_gc_resolve_borrowed_root_slot_unlocked(receiver, 0)
@@ -3816,7 +3777,7 @@ def _bytearray_extended_commit(receiver, source, scratch, raw_lo: int, raw_hi: i
 
 
 def _bytearray_contiguous_commit(receiver, source, raw_lo: int, raw_hi: int) -> int:
-    # The RHS leaf is already leased or is the independent converted bytes.
+    # The RHS leaf is already owned or is the independent converted bytes.
     # Recompute bounds after conversion: __index__ may have changed the target.
     pcc_py_gc_minor_graph_lock()
     target = pcc_gc_resolve_borrowed_root_slot_unlocked(receiver, 0)
@@ -3865,9 +3826,8 @@ def _bytearray_set_slice_owned(o, lo, hi, step: int, replacement) -> int:
     store_ptr(borrowed, _BUFFER_BYTES, replacement)
     pcc_gc_frame_enter_local(global_addr("pcc_bytearray_slice_borrowed_map"), borrowed)
     slots = stack_alloc(_BUFFER_COUNT * _BUFFER_BYTES)
-    tokens = stack_alloc(_BUFFER_COUNT * _BUFFER_BYTES)
-    _buffer_open_owned(slots, tokens)
-    status: int = _buffer_copy(slots, tokens, _BUFFER_SOURCE, ptr_add(borrowed, _BUFFER_BYTES), 1)
+    _buffer_open_owned(slots)
+    status: int = _buffer_copy(slots, _BUFFER_SOURCE, ptr_add(borrowed, _BUFFER_BYTES), 1)
     source = ptr_add(slots, _BUFFER_LEAF * _BUFFER_BYTES)
     scratch = ptr_add(slots, _BUFFER_RESULT * _BUFFER_BYTES)
     if status == 0:
@@ -3875,10 +3835,10 @@ def _bytearray_set_slice_owned(o, lo, hi, step: int, replacement) -> int:
         if tag == PY_TYPE_LIST or tag == PY_TYPE_TUPLE:
             # __index__ can mutate the receiver. Convert once, outside the
             # writer transaction; the fresh immutable bytes cannot alias it.
-            status = _buffer_sequence_fill(slots, tokens, 0)
+            status = _buffer_sequence_fill(slots, 0)
             source = scratch
         elif tag == PY_TYPE_BYTES or tag == PY_TYPE_BYTEARRAY or tag == PY_TYPE_MEMORYVIEW:
-            status = _buffer_unwrap_leaf(slots, tokens)
+            status = _buffer_unwrap_leaf(slots)
             if status == 0:
                 leaf_tag: int = _type_of(load_ptr(source, 0))
                 if leaf_tag != PY_TYPE_BYTES and leaf_tag != PY_TYPE_BYTEARRAY:
@@ -3904,11 +3864,11 @@ def _bytearray_set_slice_owned(o, lo, hi, step: int, replacement) -> int:
             status = _buffer_error(19, cstr("bytearray slice snapshot too large"))
             break
         if reserved != 0:
-            _buffer_drop(slots, tokens, _BUFFER_RESULT)
+            _buffer_drop(slots, _BUFFER_RESULT)
             if py_err_occurred() != 0:
                 status = -1
                 break
-        status = _buffer_new_raw(slots, tokens, null(), need, 1)
+        status = _buffer_new_raw(slots, null(), need, 1)
         reserved = need
     # This operation returns a status, not an owned snapshot. Keep the
     # original exception across all releases, as in _buffer_finish_owned.
@@ -3917,7 +3877,7 @@ def _bytearray_set_slice_owned(o, lo, hi, step: int, replacement) -> int:
     memset(borrowed, 0, 2 * _BUFFER_BYTES)
     idx: int = _BUFFER_RESULT
     while idx >= 0:
-        _buffer_drop(slots, tokens, idx)
+        _buffer_drop(slots, idx)
         idx = idx - 1
     py_clear_exception()
     py_tls_exc_swap_slot(error)

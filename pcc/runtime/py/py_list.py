@@ -112,13 +112,10 @@ pcc_gc_try_store_ptr_take = extern("pcc_gc_try_store_ptr_take", (c_ptr, c_ptr, c
 pcc_gc_try_take_ptr = extern("pcc_gc_try_take_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_load_borrowed_ptr = extern("pcc_gc_load_borrowed_ptr", (c_ptr, c_ptr), c_ptr)
-pcc_gc_slot_lease_acquire = extern("pcc_gc_slot_lease_acquire", (c_ptr, c_int64), c_int64)
 pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 pcc_gc_resolve_root_slot_unlocked = extern(
     "pcc_gc_resolve_root_slot_unlocked", (c_ptr, c_int64), c_ptr
 )
-pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
-pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 py_runtime_error_if_unset = extern(
     "py_runtime_error_if_unset", (c_ptr, c_ptr), c_void
 )
@@ -475,40 +472,31 @@ def _normalize_index(i: int, length: int, clip: int) -> int:
 define_global_i32("pcc_list_factory_owned_map", 2)
 
 
-def _list_factory_finish(slots, token: int, success: int):
+def _list_factory_finish(slots, success: int):
     error = ptr_add(slots, 8)
     if success == 0:
         if py_err_occurred() == 0:
             py_raise_owned(py_exc_new(19, cstr("list: out of memory")))
         py_tls_exc_swap_slot(error)
-        if token >= 0:
-            if pcc_gc_foreign_lease_release(slots, token) < 0:
-                pcc_platform_abort()
-                return null()
         pcc_gc_store_root(slots, null())
         py_clear_exception()
         py_tls_exc_swap_slot(error)
         pcc_gc_native_frame_unbind_map(slots)
         return null()
-    # Successful construction still owns its address lease and this private
-    # root. The one collector never moves the value, so the root's owner is
-    # taken after the lease with no terminal pin (item 2 (d)). No shared list
-    # mutation or graph transaction is needed for this handoff.
-    if token >= 0:
-        if pcc_gc_foreign_lease_release(slots, token) < 0:
-            pcc_platform_abort()
-            return null()
+    # Successful construction owns this private root. The one collector
+    # never moves the value, so the root's owner is taken with no lease or
+    # terminal pin (item 2 (d)). No shared list mutation or graph
+    # transaction is needed for this handoff.
     pcc_gc_native_frame_unbind_map(slots)
     return pcc_gc_take_slot(slots)
 
 
-def _list_allocate_unpublished(output, requested: i64, lease_state) -> i64:
+def _list_allocate_unpublished(output, requested: i64) -> i64:
     """Allocate traceable storage in an existing root; defer public tracking.
 
-    lease_state records the token even on failure, so the caller can preserve
-    its exception while retiring the lease and partial owner.
+    On failure the caller preserves its exception while retiring the
+    partial owner.
     """
-    store_i64(lease_state, 0, -1)
     store_ptr(output, 0, pcc_gc_alloc(PYLISTOBJECT_SIZE, PY_TYPE_LIST, 0))
     if ptr_is_null(load_ptr(output, 0)) != 0:
         return -1
@@ -520,11 +508,6 @@ def _list_allocate_unpublished(output, requested: i64, lease_state) -> i64:
         cap = 4
     store_ptr(l, PYLISTOBJECT_ITEMS_OFFSET, null())
     store_i64(l, PYLISTOBJECT_CAPACITY_OFFSET, cap)
-    token: i64 = i64(pcc_gc_foreign_lease_acquire(output))
-    store_i64(lease_state, 0, token)
-    if token < 0:
-        return -1
-    l = load_ptr(output, 0)
     stride: i64 = i64(C_POINTER_SIZE)
     items = malloc(cap * stride)
     if ptr_is_null(items):
@@ -542,14 +525,12 @@ def _native_body_py_list_new(initial_capacity: int):
     slots = stack_alloc(16)
     memset(slots, 0, 16)
     pcc_gc_native_frame_bind_map(global_addr("pcc_list_factory_owned_map"), slots)
-    lease_state = stack_alloc(C_POINTER_SIZE)
-    status: i64 = _list_allocate_unpublished(slots, i64(initial_capacity), lease_state)
-    token: int = load_i64(lease_state, 0)
+    status: i64 = _list_allocate_unpublished(slots, i64(initial_capacity))
     if status != 0:
-        return _list_factory_finish(slots, token, 0)
+        return _list_factory_finish(slots, 0)
     l = load_ptr(slots, 0)
     py_gc_track(l)
-    return _list_factory_finish(slots, token, 1)
+    return _list_factory_finish(slots, 1)
 
 
 @c_abi_export("pcc_list_body_py_list_from_static_items")
@@ -578,17 +559,13 @@ def _native_body_py_list_from_static_items(items, count: int):
 define_global_i32("pcc_list_construction_error_map", 1)
 
 
-def _list_owned_construction_failed(output, token: i64) -> i64:
+def _list_owned_construction_failed(output) -> i64:
     error = stack_alloc(C_POINTER_SIZE)
     store_ptr(error, 0, null())
     pcc_gc_native_frame_bind_map(global_addr("pcc_list_construction_error_map"), error)
     if py_err_occurred() == 0:
         py_raise_owned(py_exc_new(19, cstr("list: out of memory")))
     py_tls_exc_swap_slot(error)
-    if token >= 0:
-        if pcc_gc_foreign_lease_release(output, token) < 0:
-            pcc_platform_abort()
-            return -1
     pcc_gc_store_root(output, null())
     py_clear_exception()
     py_tls_exc_swap_slot(error)
@@ -600,9 +577,9 @@ def _list_owned_construction_failed(output, token: i64) -> i64:
 def _native_body_py_list_from_owned_roots(sources, count: i64, output) -> i64:
     """Consume distinct owning operand roots into a newly allocated list.
 
-    Sources is a stable array of addresses of registered, unleased owning
-    roots. Output is a distinct, registered empty root. The compiler keeps
-    every root registered until this returns. Each consumed source becomes
+    Sources is a stable array of addresses of registered owning roots.
+    Output is a distinct, registered empty root. The compiler keeps every
+    root registered until this returns. Each consumed source becomes
     empty; on failure the caller still owns output and all remaining sources.
     No existing/shared list is admitted by this construction-only interface.
     """
@@ -612,11 +589,9 @@ def _native_body_py_list_from_owned_roots(sources, count: i64, output) -> i64:
     if ptr_is_null(load_ptr(output, 0)) == 0 or (count > 0 and ptr_is_null(sources) != 0):
         py_runtime_error_if_unset(cstr("py_list_from_owned_roots"), cstr("list construction requires empty output"))
         return -1
-    lease_state = stack_alloc(C_POINTER_SIZE)
-    status: i64 = _list_allocate_unpublished(output, count, lease_state)
-    token: i64 = i64(load_i64(lease_state, 0))
+    status: i64 = _list_allocate_unpublished(output, count)
     if status != 0:
-        return _list_owned_construction_failed(output, token)
+        return _list_owned_construction_failed(output)
     stride: i64 = i64(C_POINTER_SIZE)
     private_gc0: int = 0
     if load_i32(global_addr('pcc_gc_list_container_mode'), 0) != 0:
@@ -650,9 +625,6 @@ def _native_body_py_list_from_owned_roots(sources, count: i64, output) -> i64:
     # have moved. Collector-safe partial shape alone is not a privacy proof.
     owner = load_ptr(output, 0)
     py_gc_track(owner)
-    if pcc_gc_foreign_lease_release(output, token) < 0:
-        pcc_platform_abort()
-        return -1
     return 0
 
 
@@ -701,7 +673,7 @@ def _append_rooted_slots(
         locked = load_ptr(list_slot, 0)
         _list_lock(locked)
         if caller_item_root != 0:
-            # The caller's list lease survives growth. The item stays in its
+            # The caller's list root survives growth. The item stays in its
             # traced owner until this transaction retains it into the list;
             # no raw item address crosses unlock or a growth allocation.
             lst = load_ptr(list_slot, 0)
@@ -798,7 +770,7 @@ def _append_existing_capacity_gc0(list_slot, item_slot) -> int:
 def _append_grow_gc0(list_slot, item_slot, old_items, old_capacity: int) -> int:
     """Double a full GC0 list's owner array and take the append with it.
 
-    The general route was a lease and four more graph transactions. The new
+    The general route was four more graph transactions. The new
     array is allocated outside the lock; the commit rechecks that the list
     still owns the same array and capacity, copies the owners as raw words
     (as _grow_if_needed does on GC0), publishes the array and retains the
@@ -844,19 +816,15 @@ def _append_grow_gc0(list_slot, item_slot, old_items, old_capacity: int) -> int:
 
 @c_abi_export("pcc_list_body_py_list_append_from_slots")
 def _native_body_py_list_append_from_slots(list_slot, item_slot, borrowed_mask: int) -> None:
-    """Borrow stable source slots without adding another root or item lease.
+    """Borrow stable source slots without adding another root.
 
     Both source addresses stay valid for the call. They are traced owning or
     unchanged borrowed roots; a compiler-proven permanent item may use a plain
     stack slot. Bit 0/1 records a borrowed list/item, never an exact-type claim.
-    Only the list needs address protection across growth; the item is loaded
-    under the graph lock immediately before the existing retaining commit.
+    The item is loaded under the graph lock immediately before the existing
+    retaining commit; the one collector moves neither across growth.
     """
     if _append_existing_capacity_gc0(list_slot, item_slot) != 0:
-        return
-    token: int = pcc_gc_slot_lease_acquire(list_slot, borrowed_mask & 1)
-    if token < 0:
-        py_runtime_error_if_unset(cstr("py_list_append_from_slots"), cstr("list argument lease failed"))
         return
     item_kind: int = 1
     if (borrowed_mask & 2) != 0:
@@ -864,9 +832,6 @@ def _native_body_py_list_append_from_slots(list_slot, item_slot, borrowed_mask: 
     result: int = _append_rooted_slots(
         list_slot, item_slot, null(), null(), item_kind
     )
-    if pcc_gc_foreign_lease_release(list_slot, token) < 0:
-        pcc_platform_abort()
-        return
     if result == -1:
         py_raise_owned(py_exc_new(19, cstr("list append: out of memory")))
 
@@ -1812,34 +1777,14 @@ pcc_gc_native_frame_bind_map = extern("pcc_gc_native_frame_bind_map", (c_ptr, c_
 pcc_gc_native_frame_unbind_map = extern("pcc_gc_native_frame_unbind_map", (c_ptr,), c_void)
 pcc_gc_frame_roots_disabled_fast = extern("pcc_gc_frame_roots_disabled_fast", (), c_int64)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
-pcc_gc_root_copy_borrowed_lease = extern(
-    "pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64,
+pcc_gc_root_copy_borrowed = extern(
+    "pcc_gc_root_copy_borrowed", (c_ptr, c_ptr), c_int64,
 )
-pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
-pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
 
 
-def _list_extend_drop(slots, tokens, index: int) -> None:
-    slot = ptr_add(slots, index * _LIST_EXTEND_SLOT_BYTES)
-    token: int = load_i64(tokens, index * _LIST_EXTEND_SLOT_BYTES)
-    if token >= 0:
-        if pcc_gc_foreign_lease_release(slot, token) < 0:
-            pcc_platform_abort()
-            return
-    store_i64(tokens, index * _LIST_EXTEND_SLOT_BYTES, -1)
-    pcc_gc_store_root(slot, null())
-
-
-def _list_extend_acquire(slots, tokens, index: int) -> int:
-    slot = ptr_add(slots, index * _LIST_EXTEND_SLOT_BYTES)
-    token: int = pcc_gc_foreign_lease_acquire(slot)
-    store_i64(tokens, index * _LIST_EXTEND_SLOT_BYTES, token)
-    if token < 0:
-        if py_err_occurred() == 0:
-            py_raise_owned(py_exc_new(7, cstr("cannot lease list extension value")))
-        return 0
-    return 1
+def _list_extend_drop(slots, index: int) -> None:
+    pcc_gc_store_root(ptr_add(slots, index * _LIST_EXTEND_SLOT_BYTES), null())
 
 
 def _list_extend_bind_range(frame_map: c_ptr, slots: c_ptr) -> c_ptr:
@@ -1860,12 +1805,7 @@ def _list_extend_iterable(destination, source) -> None:
     store_ptr(borrowed, _LIST_EXTEND_SLOT_BYTES, source)
     borrowed_range = _list_extend_bind_range(global_addr("pcc_list_extend_borrowed_map"), borrowed)
     slots = stack_alloc(_LIST_EXTEND_SLOT_COUNT * _LIST_EXTEND_SLOT_BYTES)
-    tokens = stack_alloc(_LIST_EXTEND_SLOT_COUNT * _LIST_EXTEND_SLOT_BYTES)
     memset(slots, 0, _LIST_EXTEND_SLOT_COUNT * _LIST_EXTEND_SLOT_BYTES)
-    index: int = 0
-    while index < _LIST_EXTEND_SLOT_COUNT:
-        store_i64(tokens, index * _LIST_EXTEND_SLOT_BYTES, -1)
-        index = index + 1
     owned_range = _list_extend_bind_range(global_addr("pcc_list_extend_owned_map"), slots)
     destination_slot = ptr_add(slots, _LIST_EXTEND_DESTINATION * _LIST_EXTEND_SLOT_BYTES)
     source_slot = ptr_add(slots, _LIST_EXTEND_SOURCE * _LIST_EXTEND_SLOT_BYTES)
@@ -1873,14 +1813,12 @@ def _list_extend_iterable(destination, source) -> None:
     item_slot = ptr_add(slots, _LIST_EXTEND_ITEM * _LIST_EXTEND_SLOT_BYTES)
     error_slot = ptr_add(slots, _LIST_EXTEND_ERROR * _LIST_EXTEND_SLOT_BYTES)
     ok: int = 1
-    index = 0
+    index: int = 0
     while index < 2 and ok != 0:
-        token: int = pcc_gc_root_copy_borrowed_lease(
+        if pcc_gc_root_copy_borrowed(
             ptr_add(slots, index * _LIST_EXTEND_SLOT_BYTES),
             ptr_add(borrowed, index * _LIST_EXTEND_SLOT_BYTES),
-        )
-        store_i64(tokens, index * _LIST_EXTEND_SLOT_BYTES, token)
-        if token < 0:
+        ) < 0:
             if py_err_occurred() == 0:
                 py_raise_owned(py_exc_new(7, cstr("cannot retain list extension input")))
             ok = 0
@@ -1898,46 +1836,34 @@ def _list_extend_iterable(destination, source) -> None:
             if py_err_occurred() == 0:
                 py_raise_owned(py_exc_new(3, cstr("object is not iterable")))
             ok = 0
-        else:
-            ok = _list_extend_acquire(slots, tokens, _LIST_EXTEND_ITERATOR)
     while ok != 0:
         # Each actual NEW value reaches its pre-registered owner before any
-        # call, error inspection, lease release, or iterator disposal.
+        # call, error inspection, or iterator disposal.
         store_ptr(item_slot, 0, py_obj_next(load_ptr(iterator_slot, 0)))
         if ptr_is_null(load_ptr(item_slot, 0)) != 0:
             if py_err_occurred() != 0:
                 py_tls_exc_swap_slot(error_slot)
-                matched: int = 0
-                if _list_extend_acquire(slots, tokens, _LIST_EXTEND_ERROR) != 0:
-                    matched = py_exc_matches(load_ptr(error_slot, 0), stop_class)
-                if matched != 0:
-                    _list_extend_drop(slots, tokens, _LIST_EXTEND_ERROR)
+                if py_exc_matches(load_ptr(error_slot, 0), stop_class) != 0:
+                    _list_extend_drop(slots, _LIST_EXTEND_ERROR)
                 else:
                     ok = 0
             break
-        ok = _list_extend_acquire(slots, tokens, _LIST_EXTEND_ITEM)
+        py_list_append(load_ptr(destination_slot, 0), load_ptr(item_slot, 0))
+        if py_err_occurred() != 0:
+            ok = 0
         if ok != 0:
-            py_list_append(load_ptr(destination_slot, 0), load_ptr(item_slot, 0))
-            if py_err_occurred() != 0:
-                ok = 0
-        if ok != 0:
-            _list_extend_drop(slots, tokens, _LIST_EXTEND_ITEM)
+            _list_extend_drop(slots, _LIST_EXTEND_ITEM)
     if ptr_is_null(load_ptr(error_slot, 0)) != 0:
         py_tls_exc_swap_slot(error_slot)
     store_ptr(borrowed, 0, null())
     store_ptr(borrowed, _LIST_EXTEND_SLOT_BYTES, null())
     index = _LIST_EXTEND_ITEM
     while index >= 0:
-        _list_extend_drop(slots, tokens, index)
+        _list_extend_drop(slots, index)
         index = index - 1
     # Disposal errors cannot replace the iterator/append exception. Transfer
     # it back to TLS before leaving the now-empty owning and borrowed frames.
     py_clear_exception()
-    token = load_i64(tokens, _LIST_EXTEND_ERROR * _LIST_EXTEND_SLOT_BYTES)
-    if token >= 0:
-        if pcc_gc_foreign_lease_release(error_slot, token) < 0:
-            pcc_platform_abort()
-            return
     py_tls_exc_swap_slot(error_slot)
     pcc_gc_native_root_unbind(owned_range)
     pcc_gc_native_root_unbind(borrowed_range)

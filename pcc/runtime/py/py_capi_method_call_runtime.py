@@ -1,7 +1,8 @@
 """Slot-owned managed body for the existing C-extension method trampoline.
 
-Every immediate positional/keyword object exposed to C has an independent
-counted address lease. Raw native type tokens have a separate metadata lane.
+Every immediate positional/keyword object exposed to C has its own owning
+slot (the one collector takes no lease). Raw native type tokens have a
+separate metadata lane.
 This bounds borrowed argument/interior-pointer safety to this method call; it
 is not general foreign NEW/borrowed-reference lifetime or extension unloading.
 """
@@ -15,10 +16,8 @@ from pcc.unsafe import (
     stack_alloc, store_i32, store_i64, store_ptr,
 )
 
-pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
-pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
-pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
-pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+pcc_gc_root_copy = extern("pcc_gc_root_copy", (c_ptr, c_ptr), c_int64)
+pcc_gc_root_copy_borrowed = extern("pcc_gc_root_copy_borrowed", (c_ptr, c_ptr), c_int64)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
@@ -26,7 +25,6 @@ pcc_gc_note_frame_enter_checked = extern("pcc_gc_note_frame_enter_local_checked"
 pcc_gc_note_frame_leave = extern("pcc_gc_note_frame_leave_local", (c_ptr,), c_void)
 pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
 pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
-pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 py_runtime_error_if_unset = extern("py_runtime_error_if_unset", (c_ptr, c_ptr), c_ptr)
 py_err_occurred = extern("py_err_occurred", (), c_int64)
 py_clear_exception = extern("py_clear_exception", (), c_void)
@@ -69,68 +67,53 @@ _METHOD_SLOT_COUNT = 16
 # Raw call-view control layout. Never registered as a managed root array.
 _VIEW_VECTOR = 0
 _VIEW_OWNERS = 1
-_VIEW_TOKENS = 2
-_VIEW_COUNT = 3
-_VIEW_REGISTERED = 4
-_VIEW_SELF = 5
-_VIEW_ITEM = 6
-_VIEW_MAPS = 7
-_VIEW_WORDS = 8
+_VIEW_COUNT = 2
+_VIEW_REGISTERED = 3
+_VIEW_SELF = 4
+_VIEW_ITEM = 5
+_VIEW_MAPS = 6
+_VIEW_WORDS = 7
 _VIEW_CHUNK_SLOTS = 65536
 
 
-def _method_adopt(slots: c_ptr, tokens: c_ptr, index: int) -> int:
+def _method_adopt(slots: c_ptr, index: int) -> int:
     slot: c_ptr = ptr_add(slots, index * 8)
     if ptr_is_null(load_ptr(slot, 0)) != 0:
         py_runtime_error_if_unset(cstr("C method"), cstr("object allocation failed"))
         return 0
-    token: int = pcc_gc_foreign_lease_acquire(slot)
-    if token < 0:
-        py_runtime_error_if_unset(cstr("C method"), cstr("object address lease failed"))
-        return 0
-    store_i64(tokens, index * 8, token)
     return 1
 
 
-def _method_drop(slots: c_ptr, tokens: c_ptr, index: int) -> None:
-    slot: c_ptr = ptr_add(slots, index * 8)
-    if pcc_gc_foreign_lease_release(slot, load_i64(tokens, index * 8)) != 0:
-        pcc_platform_abort()
-        return
-    store_i64(tokens, index * 8, 0)
-    pcc_gc_store_root(slot, null())
+def _method_drop(slots: c_ptr, index: int) -> None:
+    pcc_gc_store_root(ptr_add(slots, index * 8), null())
 
 
-def _method_error(slots: c_ptr, tokens: c_ptr, message: c_ptr) -> None:
+def _method_error(slots: c_ptr, message: c_ptr) -> None:
     if py_err_occurred() != 0:
         return
     store_ptr(slots, _METHOD_RAISED * 8, py_exc_new(3, message))
-    if _method_adopt(slots, tokens, _METHOD_RAISED) != 0:
+    if _method_adopt(slots, _METHOD_RAISED) != 0:
         py_raise(load_ptr(slots, _METHOD_RAISED * 8))
 
 
-def _method_copy_input(slots: c_ptr, tokens: c_ptr, index: int, source: c_ptr) -> int:
-    token: int = pcc_gc_root_copy_borrowed_lease(ptr_add(slots, index * 8), source)
-    if token < 0:
+def _method_copy_input(slots: c_ptr, index: int, source: c_ptr) -> int:
+    if pcc_gc_root_copy_borrowed(ptr_add(slots, index * 8), source) < 0:
         py_runtime_error_if_unset(cstr("C method"), cstr("argument owner copy failed"))
         return 0
-    store_i64(tokens, index * 8, token)
     return 1
 
 
-def _method_copy_field(destination: c_ptr, tokens: c_ptr, index: int, source: c_ptr, raw: c_ptr) -> int:
-    # source is an actual owning field of a caller-leased tuple or private
+def _method_copy_field(destination: c_ptr, index: int, source: c_ptr, raw: c_ptr) -> int:
+    # source is an actual owning field of a caller-owned tuple or private
     # snapshot list. The compare-only classifier may poll; reload source, never
     # use its transient comparison operand as a managed object afterwards.
     store_ptr(raw, 0, null())
     if pcc_capi_is_type_object_value(load_ptr(source, 0)) != 0:
         store_ptr(raw, 0, load_ptr(source, 0))
         return 1
-    token: int = pcc_gc_root_copy_lease(ptr_add(destination, index * 8), source)
-    if token < 0:
+    if pcc_gc_root_copy(ptr_add(destination, index * 8), source) < 0:
         py_runtime_error_if_unset(cstr("C method"), cstr("object field owner copy failed"))
         return 0
-    store_i64(tokens, index * 8, token)
     return 1
 
 
@@ -140,32 +123,32 @@ def _method_is_tuple(value: c_ptr) -> int:
     return 1 if load_i32(value, 8) == PY_TYPE_TUPLE else 0
 
 
-def _method_prepare(slots: c_ptr, tokens: c_ptr, view: c_ptr) -> int:
+def _method_prepare(slots: c_ptr, view: c_ptr) -> int:
     args: c_ptr = load_ptr(slots, _METHOD_ARGS * 8)
     count: int = load_i64(args, 16)
     raw: c_ptr = ptr_add(view, _VIEW_ITEM * 8)
     changed: int = 0
     index: int = 0
     while index < count:
-        if _method_copy_field(slots, tokens, _METHOD_ITEM, ptr_add(args, 24 + index * 8), raw) == 0:
+        if _method_copy_field(slots, _METHOD_ITEM, ptr_add(args, 24 + index * 8), raw) == 0:
             return 0
         if ptr_is_null(load_ptr(raw, 0)) != 0:
             value: c_ptr = load_ptr(slots, _METHOD_ITEM * 8)
             if ptr_is_null(value) != 0:
-                _method_error(slots, tokens, cstr("NULL C method argument"))
+                _method_error(slots, cstr("NULL C method argument"))
                 return 0
             if pcc_capi_builtin_type_token(value) != value:
                 changed = 1
-        _method_drop(slots, tokens, _METHOD_ITEM)
+        _method_drop(slots, _METHOD_ITEM)
         index = index + 1
     source: c_ptr = ptr_add(slots, _METHOD_ARGS * 8)
     if changed != 0:
         store_ptr(slots, _METHOD_PREPARED * 8, py_tuple_new(count))
-        if _method_adopt(slots, tokens, _METHOD_PREPARED) == 0:
+        if _method_adopt(slots, _METHOD_PREPARED) == 0:
             return 0
         index = 0
         while index < count:
-            if _method_copy_field(slots, tokens, _METHOD_ITEM, ptr_add(args, 24 + index * 8), raw) == 0:
+            if _method_copy_field(slots, _METHOD_ITEM, ptr_add(args, 24 + index * 8), raw) == 0:
                 return 0
             translated: c_ptr = load_ptr(raw, 0)
             if ptr_is_null(translated) != 0:
@@ -173,14 +156,12 @@ def _method_prepare(slots: c_ptr, tokens: c_ptr, view: c_ptr) -> int:
             py_tuple_set_item(load_ptr(slots, _METHOD_PREPARED * 8), index, translated)
             if py_err_occurred() != 0:
                 return 0
-            _method_drop(slots, tokens, _METHOD_ITEM)
+            _method_drop(slots, _METHOD_ITEM)
             index = index + 1
         source = ptr_add(slots, _METHOD_PREPARED * 8)
-    token: int = pcc_gc_root_copy_lease(ptr_add(slots, _METHOD_CALLARGS * 8), source)
-    if token < 0:
+    if pcc_gc_root_copy(ptr_add(slots, _METHOD_CALLARGS * 8), source) < 0:
         py_runtime_error_if_unset(cstr("C method"), cstr("prepared argument owner copy failed"))
         return 0
-    store_i64(tokens, _METHOD_CALLARGS * 8, token)
     return 1
 
 
@@ -196,12 +177,10 @@ def _method_view_allocate(view: c_ptr, positional: int, keywords: int) -> int:
         return 1
     store_ptr(view, _VIEW_VECTOR * 8, calloc(positional + keywords, 8))
     store_ptr(view, _VIEW_OWNERS * 8, calloc(count, 8))
-    store_ptr(view, _VIEW_TOKENS * 8, calloc(count, 8))
     chunks: int = (count + _VIEW_CHUNK_SLOTS - 1) // _VIEW_CHUNK_SLOTS
     store_ptr(view, _VIEW_MAPS * 8, calloc(chunks, 4))
     if (ptr_is_null(load_ptr(view, _VIEW_VECTOR * 8)) != 0
             or ptr_is_null(load_ptr(view, _VIEW_OWNERS * 8)) != 0
-            or ptr_is_null(load_ptr(view, _VIEW_TOKENS * 8)) != 0
             or ptr_is_null(load_ptr(view, _VIEW_MAPS * 8)) != 0):
         PyErr_NoMemory()
         return 0
@@ -230,7 +209,7 @@ def _method_view_allocate(view: c_ptr, positional: int, keywords: int) -> int:
 def _method_view_item(view: c_ptr, index: int, source: c_ptr, vector_index: int) -> int:
     raw: c_ptr = ptr_add(view, _VIEW_ITEM * 8)
     owners: c_ptr = load_ptr(view, _VIEW_OWNERS * 8)
-    if _method_copy_field(owners, load_ptr(view, _VIEW_TOKENS * 8), index, source, raw) == 0:
+    if _method_copy_field(owners, index, source, raw) == 0:
         return 0
     value: c_ptr = load_ptr(raw, 0)
     if ptr_is_null(value) != 0:
@@ -243,7 +222,7 @@ def _method_view_item(view: c_ptr, index: int, source: c_ptr, vector_index: int)
     return 1
 
 
-def _method_view_fill(slots: c_ptr, tokens: c_ptr, view: c_ptr, positional: int, keywords: int, flags: int) -> int:
+def _method_view_fill(slots: c_ptr, view: c_ptr, positional: int, keywords: int, flags: int) -> int:
     args: c_ptr = load_ptr(slots, _METHOD_CALLARGS * 8)
     index: int = 0
     while index < positional:
@@ -253,33 +232,33 @@ def _method_view_fill(slots: c_ptr, tokens: c_ptr, view: c_ptr, positional: int,
     if keywords == 0:
         return 1
     store_ptr(slots, _METHOD_ITEMS * 8, py_dict_items(load_ptr(slots, _METHOD_KWARGS * 8)))
-    if _method_adopt(slots, tokens, _METHOD_ITEMS) == 0:
+    if _method_adopt(slots, _METHOD_ITEMS) == 0:
         return 0
     if py_list_len(load_ptr(slots, _METHOD_ITEMS * 8)) != keywords:
-        _method_error(slots, tokens, cstr("C method keyword mapping changed size"))
+        _method_error(slots, cstr("C method keyword mapping changed size"))
         return 0
     if flags == 130:
         store_ptr(slots, _METHOD_NAMES * 8, py_tuple_new(keywords))
-        if _method_adopt(slots, tokens, _METHOD_NAMES) == 0:
+        if _method_adopt(slots, _METHOD_NAMES) == 0:
             return 0
     raw: c_ptr = ptr_add(view, _VIEW_ITEM * 8)
     index = 0
     while index < keywords:
-        # The snapshot is private and never passed to the callback; its leased
+        # The snapshot is private and never passed to the callback; its owned
         # list and immutable tuple pairs retain stable payload-slot addresses.
         items: c_ptr = load_ptr(load_ptr(slots, _METHOD_ITEMS * 8), 32)
-        if _method_copy_field(slots, tokens, _METHOD_PAIR, ptr_add(items, index * 8), raw) == 0:
+        if _method_copy_field(slots, _METHOD_PAIR, ptr_add(items, index * 8), raw) == 0:
             return 0
         pair: c_ptr = load_ptr(slots, _METHOD_PAIR * 8)
         if _method_is_tuple(pair) == 0 or load_i64(pair, 16) != 2:
-            _method_error(slots, tokens, cstr("invalid C method keyword item"))
+            _method_error(slots, cstr("invalid C method keyword item"))
             return 0
         key_index: int = positional + keywords + index
         if _method_view_item(view, key_index, ptr_add(pair, 24), -1) == 0:
             return 0
         key: c_ptr = load_ptr(load_ptr(view, _VIEW_OWNERS * 8), key_index * 8)
         if ptr_is_null(key) != 0 or is_tagged_int(key) != 0 or load_i32(key, 8) != PY_TYPE_STR:
-            _method_error(slots, tokens, cstr("keyword names must be strings"))
+            _method_error(slots, cstr("keyword names must be strings"))
             return 0
         if _method_view_item(view, positional + index, ptr_add(pair, 32), positional + index) == 0:
             return 0
@@ -287,81 +266,81 @@ def _method_view_fill(slots: c_ptr, tokens: c_ptr, view: c_ptr, positional: int,
             py_tuple_set_item(load_ptr(slots, _METHOD_NAMES * 8), index, key)
             if py_err_occurred() != 0:
                 return 0
-        _method_drop(slots, tokens, _METHOD_PAIR)
+        _method_drop(slots, _METHOD_PAIR)
         index = index + 1
     return 1
 
 
-def _method_body(borrowed: c_ptr, slots: c_ptr, tokens: c_ptr, view: c_ptr, raw_result: c_ptr, invalid: int) -> None:
+def _method_body(borrowed: c_ptr, slots: c_ptr, view: c_ptr, raw_result: c_ptr, invalid: int) -> None:
     if invalid != 0:
-        _method_error(slots, tokens, cstr("invalid C method capture or args"))
+        _method_error(slots, cstr("invalid C method capture or args"))
         return
     if py_err_occurred() != 0:
         return
-    if _method_copy_input(slots, tokens, _METHOD_CAPTURES, borrowed) == 0:
+    if _method_copy_input(slots, _METHOD_CAPTURES, borrowed) == 0:
         return
-    if _method_copy_input(slots, tokens, _METHOD_ARGS, ptr_add(borrowed, 8)) == 0:
+    if _method_copy_input(slots, _METHOD_ARGS, ptr_add(borrowed, 8)) == 0:
         return
     captures: c_ptr = load_ptr(slots, _METHOD_CAPTURES * 8)
     if _method_is_tuple(captures) == 0 or load_i64(captures, 16) != 3:
-        _method_error(slots, tokens, cstr("invalid C method capture"))
+        _method_error(slots, cstr("invalid C method capture"))
         return
     if ptr_is_null(load_ptr(slots, _METHOD_ARGS * 8)) != 0:
         store_ptr(slots, _METHOD_ARGS * 8, py_tuple_new(0))
-        if _method_adopt(slots, tokens, _METHOD_ARGS) == 0:
+        if _method_adopt(slots, _METHOD_ARGS) == 0:
             return
     if _method_is_tuple(load_ptr(slots, _METHOD_ARGS * 8)) == 0:
-        _method_error(slots, tokens, cstr("C method args must be a tuple"))
+        _method_error(slots, cstr("C method args must be a tuple"))
         return
-    if _method_copy_field(slots, tokens, _METHOD_SELF, ptr_add(captures, 24), ptr_add(view, _VIEW_SELF * 8)) == 0:
+    if _method_copy_field(slots, _METHOD_SELF, ptr_add(captures, 24), ptr_add(view, _VIEW_SELF * 8)) == 0:
         return
     raw: c_ptr = ptr_add(view, _VIEW_ITEM * 8)
-    if _method_copy_field(slots, tokens, _METHOD_POINTER, ptr_add(captures, 32), raw) == 0:
+    if _method_copy_field(slots, _METHOD_POINTER, ptr_add(captures, 32), raw) == 0:
         return
-    if _method_copy_field(slots, tokens, _METHOD_FLAGS, ptr_add(captures, 40), raw) == 0:
+    if _method_copy_field(slots, _METHOD_FLAGS, ptr_add(captures, 40), raw) == 0:
         return
     if (ptr_is_null(load_ptr(slots, _METHOD_POINTER * 8)) != 0
             or ptr_is_null(load_ptr(slots, _METHOD_FLAGS * 8)) != 0
             or (ptr_is_null(load_ptr(slots, _METHOD_SELF * 8)) != 0 and ptr_is_null(load_ptr(view, _VIEW_SELF * 8)) != 0)):
-        _method_error(slots, tokens, cstr("invalid C method capture"))
+        _method_error(slots, cstr("invalid C method capture"))
         return
     method: c_ptr = int_to_ptr(py_int_value_i64(load_ptr(slots, _METHOD_POINTER * 8)))
     flags: int = py_int_value_i64(load_ptr(slots, _METHOD_FLAGS * 8))
     if py_err_occurred() != 0:
         return
     if ptr_is_null(method) != 0 or ptr_is_null(load_ptr(method, 8)) != 0:
-        _method_error(slots, tokens, cstr("invalid C method"))
+        _method_error(slots, cstr("invalid C method"))
         return
     if (flags & 48) != 0:
-        _method_error(slots, tokens, cstr("C method class/static binding is unsupported"))
+        _method_error(slots, cstr("C method class/static binding is unsupported"))
         return
     convention: int = flags & 143
     if (flags & ~255) != 0 or (convention != 1 and convention != 3 and convention != 4 and convention != 8 and convention != 128 and convention != 130):
-        _method_error(slots, tokens, cstr("unsupported C method flags"))
+        _method_error(slots, cstr("unsupported C method flags"))
         return
     args: c_ptr = load_ptr(slots, _METHOD_ARGS * 8)
     if (convention & 2) != 0:
         if load_i64(args, 16) != 2:
-            _method_error(slots, tokens, cstr("invalid C keyword method call"))
+            _method_error(slots, cstr("invalid C keyword method call"))
             return
-        if _method_copy_field(slots, tokens, _METHOD_CALLARGS, ptr_add(args, 24), raw) == 0:
+        if _method_copy_field(slots, _METHOD_CALLARGS, ptr_add(args, 24), raw) == 0:
             return
-        if _method_copy_field(slots, tokens, _METHOD_KWARGS, ptr_add(args, 32), raw) == 0:
+        if _method_copy_field(slots, _METHOD_KWARGS, ptr_add(args, 32), raw) == 0:
             return
         kwargs: c_ptr = load_ptr(slots, _METHOD_KWARGS * 8)
         if (_method_is_tuple(load_ptr(slots, _METHOD_CALLARGS * 8)) == 0
                 or ptr_is_null(kwargs) != 0
                 or (kwargs != global_load_ptr("py_None") and (is_tagged_int(kwargs) != 0 or load_i32(kwargs, 8) != PY_TYPE_DICT))):
-            _method_error(slots, tokens, cstr("invalid C keyword method call"))
+            _method_error(slots, cstr("invalid C keyword method call"))
             return
-    elif _method_prepare(slots, tokens, view) == 0:
+    elif _method_prepare(slots, view) == 0:
         return
     positional: int = load_i64(load_ptr(slots, _METHOD_CALLARGS * 8), 16)
     if convention == 4 and positional != 0:
-        _method_error(slots, tokens, cstr("method takes no arguments"))
+        _method_error(slots, cstr("method takes no arguments"))
         return
     if convention == 8 and positional != 1:
-        _method_error(slots, tokens, cstr("method takes exactly one argument"))
+        _method_error(slots, cstr("method takes exactly one argument"))
         return
     keywords: int = 0
     # Both operands are intrinsic raw loads: use explicit pointer identity,
@@ -370,7 +349,7 @@ def _method_body(borrowed: c_ptr, slots: c_ptr, tokens: c_ptr, view: c_ptr, raw_
         keywords = py_dict_len(load_ptr(slots, _METHOD_KWARGS * 8))
     if _method_view_allocate(view, positional, keywords) == 0:
         return
-    if _method_view_fill(slots, tokens, view, positional, keywords, convention) == 0:
+    if _method_view_fill(slots, view, positional, keywords, convention) == 0:
         return
     if py_err_occurred() != 0:
         return
@@ -384,23 +363,18 @@ def _method_body(borrowed: c_ptr, slots: c_ptr, tokens: c_ptr, view: c_ptr, raw_
         ptr_add(slots, _METHOD_RESULT * 8), raw_result,
     )
     if ptr_is_null(load_ptr(slots, _METHOD_RESULT * 8)) == 0:
-        _method_adopt(slots, tokens, _METHOD_RESULT)
+        _method_adopt(slots, _METHOD_RESULT)
     elif ptr_is_null(load_ptr(raw_result, 0)) != 0:
         py_runtime_error_if_unset(cstr("pcc_capi_method_call_entry"), cstr("C extension method returned NULL without setting an exception"))
 
 
-def _method_finish(slots: c_ptr, tokens: c_ptr, view: c_ptr, raw_result: c_ptr) -> int:
+def _method_finish(slots: c_ptr, view: c_ptr, raw_result: c_ptr) -> int:
     # Save the operation's exception before ANY decref/finalizer cleanup.
     error: c_ptr = ptr_add(slots, _METHOD_ERROR * 8)
     py_tls_exc_swap_slot(error)
     failed: int = 0
     if ptr_is_null(load_ptr(error, 0)) == 0:
         failed = 1
-        token: int = pcc_gc_foreign_lease_acquire(error)
-        if token < 0:
-            pcc_platform_abort()
-            return 0
-        store_i64(tokens, _METHOD_ERROR * 8, token)
     if load_i64(view, _VIEW_REGISTERED * 8) != 0:
         count: int = load_i64(view, _VIEW_COUNT * 8)
         registered_count: int = load_i64(view, _VIEW_REGISTERED * 8) * _VIEW_CHUNK_SLOTS
@@ -408,7 +382,7 @@ def _method_finish(slots: c_ptr, tokens: c_ptr, view: c_ptr, raw_result: c_ptr) 
             count = registered_count
         index: int = count - 1
         while index >= 0:
-            _method_drop(load_ptr(view, _VIEW_OWNERS * 8), load_ptr(view, _VIEW_TOKENS * 8), index)
+            _method_drop(load_ptr(view, _VIEW_OWNERS * 8), index)
             index = index - 1
         chunk: int = load_i64(view, _VIEW_REGISTERED * 8) - 1
         while chunk >= 0:
@@ -416,18 +390,18 @@ def _method_finish(slots: c_ptr, tokens: c_ptr, view: c_ptr, raw_result: c_ptr) 
             chunk = chunk - 1
     if ptr_is_null(load_ptr(view, _VIEW_MAPS * 8)) == 0:
         free(load_ptr(view, _VIEW_MAPS * 8))
-    index = _VIEW_TOKENS
+    index = _VIEW_OWNERS
     while index >= _VIEW_VECTOR:
         if ptr_is_null(load_ptr(view, index * 8)) == 0:
             free(load_ptr(view, index * 8))
         index = index - 1
     index = _METHOD_SLOT_COUNT - 1
     while index >= _METHOD_CAPTURES:
-        _method_drop(slots, tokens, index)
+        _method_drop(slots, index)
         index = index - 1
     if failed != 0:
         # A NEW alias still owns one reference, independently of every input.
-        _method_drop(slots, tokens, _METHOD_RESULT)
+        _method_drop(slots, _METHOD_RESULT)
         if ptr_is_null(load_ptr(raw_result, 0)) == 0:
             # Native types use raw storage, but a legitimate NEW type result
             # still owns a reference. Release it exactly once on failure.
@@ -435,16 +409,7 @@ def _method_finish(slots: c_ptr, tokens: c_ptr, view: c_ptr, raw_result: c_ptr) 
             py_decref(load_ptr(raw_result, 0))
             store_ptr(raw_result, 0, null())
     py_clear_exception()
-    if pcc_gc_foreign_lease_release(error, load_i64(tokens, _METHOD_ERROR * 8)) != 0:
-        pcc_platform_abort()
-        return 0
-    store_i64(tokens, _METHOD_ERROR * 8, 0)
     py_tls_exc_swap_slot(error)
-    result: c_ptr = ptr_add(slots, _METHOD_RESULT * 8)
-    if pcc_gc_foreign_lease_release(result, load_i64(tokens, _METHOD_RESULT * 8)) != 0:
-        pcc_platform_abort()
-        return 0
-    store_i64(tokens, _METHOD_RESULT * 8, 0)
     # The caller takes the result slot through pcc_gc_take_slot; the one
     # collector pins nothing, so there is no prior pin to return.
     return 0
@@ -452,9 +417,7 @@ def _method_finish(slots: c_ptr, tokens: c_ptr, view: c_ptr, raw_result: c_ptr) 
 
 @c_abi_export("pcc_capi_method_call_into")
 def pcc_capi_method_call_into(borrowed: c_ptr, slots: c_ptr, raw_result: c_ptr, invalid: int) -> int:
-    tokens: c_ptr = stack_alloc(_METHOD_SLOT_COUNT * 8)
-    memset(tokens, 0, _METHOD_SLOT_COUNT * 8)
     view: c_ptr = stack_alloc(_VIEW_WORDS * 8)
     memset(view, 0, _VIEW_WORDS * 8)
-    _method_body(borrowed, slots, tokens, view, raw_result, invalid)
-    return _method_finish(slots, tokens, view, raw_result)
+    _method_body(borrowed, slots, view, raw_result, invalid)
+    return _method_finish(slots, view, raw_result)

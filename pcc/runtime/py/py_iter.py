@@ -54,13 +54,10 @@ from pcc.unsafe import (
 py_tuple_iter_next = extern("py_tuple_iter_next", (c_ptr, c_int64), c_ptr)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
-pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
-pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
-pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
-pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_root_copy_borrowed = extern("pcc_gc_root_copy_borrowed", (c_ptr, c_ptr), c_int64)
+pcc_gc_root_copy = extern("pcc_gc_root_copy", (c_ptr, c_ptr), c_int64)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
-pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
 
 py_incref        = extern("py_incref",        (c_ptr,),                 c_void)
@@ -842,40 +839,21 @@ define_global_i32("pcc_tuple_iter_borrowed_map", -1)
 define_global_i32("pcc_tuple_iter_owned_map", 5)
 
 
-def _tuple_iter_adopt(slots, tokens, index: int) -> int:
-    slot = ptr_add(slots, index * C_POINTER_SIZE)
-    token: int = pcc_gc_foreign_lease_acquire(slot)
-    if token < 0:
-        py_runtime_error_if_unset(cstr("tuple iterator"), cstr("result owner lease failed"))
-        return -1
-    store_i64(tokens, index * C_POINTER_SIZE, token)
-    return 0
+def _tuple_iter_drop(slots, index: int) -> None:
+    pcc_gc_store_root(ptr_add(slots, index * C_POINTER_SIZE), null())
 
 
-def _tuple_iter_drop(slots, tokens, index: int) -> None:
-    slot = ptr_add(slots, index * C_POINTER_SIZE)
-    if pcc_gc_foreign_lease_release(slot, load_i64(tokens, index * C_POINTER_SIZE)) != 0:
-        pcc_platform_abort()
-        return
-    store_i64(tokens, index * C_POINTER_SIZE, 0)
-    pcc_gc_store_root(slot, null())
-
-
-def _tuple_iter_body(slots, tokens, borrowed, create: int) -> int:
+def _tuple_iter_body(slots, borrowed, create: int) -> int:
     input_slot = ptr_add(slots, _TUPLE_ITER_INPUT * C_POINTER_SIZE)
-    token: int = pcc_gc_root_copy_borrowed_lease(input_slot, borrowed)
-    if token < 0:
+    if pcc_gc_root_copy_borrowed(input_slot, borrowed) < 0:
         py_runtime_error_if_unset(cstr("tuple iterator"), cstr("input owner copy failed"))
         return -1
-    store_i64(tokens, _TUPLE_ITER_INPUT * C_POINTER_SIZE, token)
     result_slot = ptr_add(slots, _TUPLE_ITER_RESULT * C_POINTER_SIZE)
     if create != 0:
         store_ptr(result_slot, 0, pcc_gc_alloc(32, PY_TYPE_ITER, 0))
         if ptr_is_null(load_ptr(result_slot, 0)) == 0:
             store_ptr(load_ptr(result_slot, 0), 16, null())
             store_i64(load_ptr(result_slot, 0), 24, _TUPLE_ITER_START)
-        if _tuple_iter_adopt(slots, tokens, _TUPLE_ITER_RESULT) != 0:
-            return -1
         if ptr_is_null(load_ptr(result_slot, 0)) != 0:
             py_runtime_error_if_unset(cstr("tuple iterator"), cstr("iterator allocation failed"))
             return -1
@@ -887,18 +865,14 @@ def _tuple_iter_body(slots, tokens, borrowed, create: int) -> int:
         return 0
     iterator = load_ptr(input_slot, 0)
     wrapper_slot = ptr_add(slots, _TUPLE_ITER_WRAPPER * C_POINTER_SIZE)
-    token = pcc_gc_root_copy_lease(wrapper_slot, ptr_add(iterator, 16))
-    if token < 0:
+    if pcc_gc_root_copy(wrapper_slot, ptr_add(iterator, 16)) < 0:
         py_runtime_error_if_unset(cstr("tuple iterator"), cstr("wrapper owner copy failed"))
         return -1
-    store_i64(tokens, _TUPLE_ITER_WRAPPER * C_POINTER_SIZE, token)
     if ptr_is_null(load_ptr(wrapper_slot, 0)) != 0:
         py_raise_owned(py_exc_new(8, null()))
         return -1
     index: int = _TUPLE_ITER_START - load_i64(load_ptr(input_slot, 0), 24)
     store_ptr(result_slot, 0, py_tuple_iter_next(load_ptr(wrapper_slot, 0), index))
-    if _tuple_iter_adopt(slots, tokens, _TUPLE_ITER_RESULT) != 0:
-        return -1
     if ptr_is_null(load_ptr(result_slot, 0)) != 0:
         py_runtime_error_if_unset(cstr("tuple iterator"), cstr("tuple next returned NULL without an exception"))
         return -1
@@ -909,48 +883,39 @@ def _tuple_iter_body(slots, tokens, borrowed, create: int) -> int:
 
 
 def _tuple_iter_transaction(value, create: int):
-    # Raw entry requires a caller-owned address lease, as for the protocol
-    # adapter. Every NEW item is published before any lease or cleanup call.
+    # Raw entry requires a caller-owned root, as for the protocol adapter.
+    # Every NEW item is published before any cleanup call.
     borrowed = stack_alloc(C_POINTER_SIZE)
     store_ptr(borrowed, 0, value)
     pcc_gc_frame_enter(global_addr("pcc_tuple_iter_borrowed_map"), borrowed)
     slots = stack_alloc(_TUPLE_ITER_COUNT * C_POINTER_SIZE)
-    tokens = stack_alloc(_TUPLE_ITER_COUNT * C_POINTER_SIZE)
     memset(slots, 0, _TUPLE_ITER_COUNT * C_POINTER_SIZE)
-    memset(tokens, 0, _TUPLE_ITER_COUNT * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tuple_iter_owned_map"), slots)
     py_tls_exc_swap_slot(ptr_add(slots, _TUPLE_ITER_OLD_ERROR * C_POINTER_SIZE))
-    status: int = _tuple_iter_body(slots, tokens, borrowed, create)
+    status: int = _tuple_iter_body(slots, borrowed, create)
     error_slot = ptr_add(slots, _TUPLE_ITER_ERROR * C_POINTER_SIZE)
     py_tls_exc_swap_slot(error_slot)
     store_ptr(borrowed, 0, null())
     if status != 0 and create == 0 and ptr_is_null(load_ptr(error_slot, 0)) == 0:
-        if _tuple_iter_adopt(slots, tokens, _TUPLE_ITER_ERROR) == 0:
-            stop_class = py_exc_builtin_class(8)
-            stopped: int = py_exc_matches(load_ptr(error_slot, 0), stop_class)
-            if stopped != 0:
-                # The wrapper scratch owner keeps finalizers outside the heap
-                # store. Repeated next sees NULL and raises StopIteration.
-                iterator = load_ptr(slots, _TUPLE_ITER_INPUT * C_POINTER_SIZE)
-                pcc_gc_store_ptr(iterator, ptr_add(iterator, 16), null())
-    _tuple_iter_drop(slots, tokens, _TUPLE_ITER_WRAPPER)
-    _tuple_iter_drop(slots, tokens, _TUPLE_ITER_INPUT)
+        stop_class = py_exc_builtin_class(8)
+        stopped: int = py_exc_matches(load_ptr(error_slot, 0), stop_class)
+        if stopped != 0:
+            # The wrapper scratch owner keeps finalizers outside the heap
+            # store. Repeated next sees NULL and raises StopIteration.
+            iterator = load_ptr(slots, _TUPLE_ITER_INPUT * C_POINTER_SIZE)
+            pcc_gc_store_ptr(iterator, ptr_add(iterator, 16), null())
+    _tuple_iter_drop(slots, _TUPLE_ITER_WRAPPER)
+    _tuple_iter_drop(slots, _TUPLE_ITER_INPUT)
     if status != 0:
-        _tuple_iter_drop(slots, tokens, _TUPLE_ITER_RESULT)
+        _tuple_iter_drop(slots, _TUPLE_ITER_RESULT)
     py_clear_exception()
     if ptr_is_null(load_ptr(error_slot, 0)) == 0:
         pcc_gc_store_root(ptr_add(slots, _TUPLE_ITER_OLD_ERROR * C_POINTER_SIZE), null())
         py_clear_exception()
-        if pcc_gc_foreign_lease_release(error_slot, load_i64(tokens, _TUPLE_ITER_ERROR * C_POINTER_SIZE)) != 0:
-            pcc_platform_abort()
-            return null()
         py_tls_exc_swap_slot(error_slot)
     else:
         py_tls_exc_swap_slot(ptr_add(slots, _TUPLE_ITER_OLD_ERROR * C_POINTER_SIZE))
     result_slot = ptr_add(slots, _TUPLE_ITER_RESULT * C_POINTER_SIZE)
-    if pcc_gc_foreign_lease_release(result_slot, load_i64(tokens, _TUPLE_ITER_RESULT * C_POINTER_SIZE)) != 0:
-        pcc_platform_abort()
-        return null()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
     return pcc_gc_take_slot(result_slot)
