@@ -5234,8 +5234,53 @@ in the relevant section or issue and removes the entry.
    dynamic type assumptions; preserve text/duck/custom/mutable fallback,
    source-matched native CPU/RSS and exact contextual/actual output gates.
 
+   Direct signature candidate DENIED (RSS gate), no production delta.
+   Actual old-source nested method diagnostic COMPLETE65.391s/
+   838,983,680B, exact original57,304,557-byte assembly SHA256
+   7165f5ed623388294453b9a74154db3e9562185daf3d9f446b03c35811777e16.
+   All155,077 calls exact owned Function/FunctionType/tuple/IRBuilder,
+   no-text, fixed/actual args245,700, nonvararg, void106,117. Potential
+   310,154 redundant lists and245,700 copied type entries. Ordered
+   projection479 exact distinct callee signatures,156 methods,
+   canonical void/ptr/i1/i32/i64; projection SHA256
+   1609952c877d66b6b703807fd950934f5373d520dd0c0f8d6760203b20bbdf29.
+   Test-first exact preimage3 red/6 pass; candidate42 pass/1 unrelated
+   whole-stage context deselected. Exact625-module contextual ir.py
+   candidate capture966 functions/129,453 inst,zero fallback/no
+   libpython edges, COMPLETE50.138s/391,811,072B. Same actual old
+   source candidate singleton COMPLETE64.363s/850,341,888B (concurrent
+   diagnostic only), byte-identical assembly and all155,077 expected
+   signature collections list->tuple, all fixed/actual args unchanged.
+   Real native independently source-matched static baseline/candidate
+   production IRBuilder/publish_call fixture, same source/path, exact
+   observed ordered signatures and method boundaries; representative
+   SSA operands only, not original complete SSA graph. Actual packed
+   publication columns, metadata, uses, names/types/value IDs all
+   byte-identical4,031,822B SHA256
+   da215ed741397aba77ef12b7671ec8569959196e93e1f221a6184afa714cf017.
+   Exclusive five alternating paired/control triples, pinned CPU,
+   15/15 exact outputs, inner6.088106->5.720917s (-6.031%,5/5,
+   control-2.728%); full CPU10.236052->9.854029s (-3.732%,5/5,
+   control-1.457%); wall10.351100->9.970194s (-3.680%,5/5,
+   control-1.248%); RSS103,236->104,140KiB (+904KiB/+0.876%,
+   0/5 wins, control-4.630%). Reject despite CPU, memory gate
+   noninferiority not proven. Harness COMPLETE154.345s, raw receipt
+   SHA256 93ab1eb4f43fc5d91246029ceeeb782d64f7e02ad5d3f12b613925cda2bdf681.
+   No new persistent class field/cache; suspected GC pacing or widened
+   union/local root lowering, not measured attribution. Do not retry
+   unchanged; any narrower alternative needs new actual memory proof.
+   Next measured nested owner _name_is_stored_in:124,783 recursive
+   calls/509 outer all prepare_rebound_object_parameters, host profile
+   cum1.938s,2,875,180 getattr and3,039,137 len calls across37 audited
+   field names. First measure actual node kinds/field hits/fallback
+   on same authentic old route; exact owned frozen AST leaf/type
+   dispatch may remove absent dynamic field probes without any cache
+   or retained AST. Preserve original field order, subclasses/custom
+   and malformed fallback, exact output/native CPU/RSS; no change
+   before actual counts, no unqualified full Stage2 claim.
+
    Claims:
-   - Stage2 direct IR call signature materialization: Codex, Linux, 2026-11-26T21:15Z, area selfhost
+   - Stage2 rebound-name AST scan attribution: Codex, Linux, 2026-11-26T22:05Z, area selfhost
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
