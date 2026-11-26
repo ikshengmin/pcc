@@ -1166,7 +1166,7 @@ in the relevant section or issue and removes the entry.
    Current same-run Mac source execution remains UNRUN; no CI green.
 
    Claims:
-   - none
+   - Freestanding errno target-honest raw call closure and TLS oracle: Codex, Linux, 2026-11-26T20:21Z, area freestanding-errno-target-call
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
