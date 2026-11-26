@@ -6041,19 +6041,26 @@ def preload_root_delta(external_exports, root_module, global_by_key):
     for module_name, module_exports in external_exports.items():
         if module_name != root_module:
             external_for_root[module_name] = module_exports
-    preload = build_unique_external_class_preload(external_for_root)
-    root_by_key = {}
-    for key, local_type_id in preload["keys"]:
-        root_by_key[key] = preload["types"][local_type_id]
+    # This root needs only its sparse difference, not another dense type-ID
+    # table or dependency inventory. Reconstruct in a fresh context in the
+    # same order: recursive placeholder and bare-name resolution remain
+    # root-local and unchanged.
+    ctx = _InferCtx(Module(name="", body=()), external_exports=external_for_root)
+    _preload_unique_external_classes(ctx)
     drop_keys = []
     for key in global_by_key:
-        if key not in root_by_key:
+        if key not in ctx.class_types:
             drop_keys.append(key)
     set_rows = []
-    for key, local_type_id in preload["keys"]:
-        descriptor = preload["types"][local_type_id]
+    encode_memo = {}
+    changed_descriptors = {}
+    for key, ty in ctx.class_types.items():
+        descriptor = encode_type_memo(ty, encode_memo)
         if global_by_key.get(key) == descriptor:
             continue
+        # Retain structural descriptor sharing among emitted rows, but avoid
+        # interning every unchanged descriptor just to discard its dense ID.
+        descriptor = changed_descriptors.setdefault(descriptor, descriptor)
         set_rows.append((key, descriptor))
     return tuple(drop_keys), tuple(set_rows)
 

@@ -2750,8 +2750,42 @@ in the relevant section or issue and removes the entry.
    not in integrated CI checkpoint 6cbafc4a. Stage2 <= Stage1 remains unmet.
    Next: investigate repeated unique-class preload reconstruction.
 
+   Stage2 sparse class preload root delta: actual frozen 668-module
+   compiler graph /4,658 exported class rows /379 sensitive roots;
+   global 825 descriptors/1,453 keys. Eight-root profile 11,366 recursive
+   class lookups (22,732 discarded module/owner list membership checks),
+   6,565 dense descriptor IDs encoded. Each root previously built the
+   complete dense index and dependency inventory, then discarded both
+   except sparse changes. Fresh root-local context and exact resolution
+   order are unchanged; collect drop keys from class_types, compare
+   encode_type_memo descriptors directly against global_by_key, intern
+   only emitted changed rows. Global sensitivity/dependency contract
+   unchanged, no cross-root mutable/placeholder sharing.
+   Ten alternating quiet paired wins on actual eight-root owner:
+   initial five median CPU .169800 ->.127944s (-24.65%); independent
+   five 4x repeated real shards .840936 ->.635463s (-24.43%,5/5).
+   Unchanged global preload control (8 runs) .166326s, peak106,804KiB;
+   measured process peak106,808 ->106,796KiB, initial graph HWM masks
+   owner-only RSS (neutral, no memory improvement claim). All 22,274B
+   compact delta payloads byte-identical SHA256
+   9654b6ef37aa6b2a5c1330155db9c1c11b05e0465491077ece834aa1cf78aca7.
+   77 focused host tests pass, including dense oracle for aliases,
+   recursive fields, duplicated bare names and bases with exact order.
+   Actual full worker host old/new output byte-identical. Source-matched
+   owned Linux runtime built100.10s/400,736,256B; 192 members and current
+   codegen provenance valid. Actual pcc0+self+owned linker static ELF
+   fixture compiled68 modules/226,670,898B IR in188.92s, peak1,635,930,112B.
+   Full 22MB class graph and eight actual roots execute the production
+   preload_delta_worker.run in17.81s, sampled449,363,968B, prints
+   PRELOAD_DELTA_WORKER_OK. Native and both host worker outputs exact
+   SHA256 1a984f6a4e875793febbe097c32528708930c1a5c8f30bd4fa1270d34fb5111c.
+   No native A/B or whole-stage parity claim; integrated CI checkpoint
+   6cbafc4a does not include this production change.
+   Next: measure remaining repeated class reconstruction with exact
+   dependency/order semantics, and verify hosted Stage2 owner receipts.
+
    Claims:
-   - Stage2 sparse root delta without discarded dense preload: Codex, Linux, 2026-11-26T16:35Z, area selfhost
+   - none
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its

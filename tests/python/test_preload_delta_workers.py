@@ -452,3 +452,54 @@ def test_budgeted_preload_failure_cleans_reports_and_state(monkeypatch, tmp_path
         )
     assert list(tmp_path.iterdir()) == []
     assert pool._HOST_WORKERS == {}
+
+
+def test_sparse_root_delta_matches_dense_oracle_without_discarded_index(monkeypatch):
+    exports = _exports(4)
+    # Aliases, recursive qualified fields and a duplicated bare class change
+    # the order in which the root-local resolver publishes its schemas.
+    exports["m00"]["C0"]["field_types"] = (
+        ("v", ("class", "C1", "m01", (), ())),
+    )
+    exports["m01"]["C1"]["field_types"] = (
+        ("v", ("class", "C0", "m00", (), ())),
+    )
+    exports["m02"]["C2"]["base_names"] = ("m00.C0",)
+    exports["alias"] = {"Alias": exports["m02"]["C2"]}
+    global_by_key = type_infer.preload_global_by_key(
+        type_infer.build_unique_external_class_preload(exports)
+    )
+    expected = {}
+    for root in exports:
+        dense = type_infer.build_unique_external_class_preload(
+            {name: table for name, table in exports.items() if name != root}
+        )
+        root_by_key = {
+            key: dense["types"][type_id] for key, type_id in dense["keys"]
+        }
+        expected[root] = (
+            tuple(key for key in global_by_key if key not in root_by_key),
+            tuple(
+                (key, dense["types"][type_id])
+                for key, type_id in dense["keys"]
+                if global_by_key.get(key) != dense["types"][type_id]
+            ),
+        )
+
+    def reject_dense(*args, **kwargs):
+        raise AssertionError("root delta must not build a discarded dense index")
+
+    original = type_infer._class_type_from_export
+    observed = []
+
+    def observe(ctx, *args, **kwargs):
+        observed.append(ctx._record_preload_dependencies)
+        return original(ctx, *args, **kwargs)
+
+    monkeypatch.setattr(type_infer, "build_unique_external_class_preload", reject_dense)
+    monkeypatch.setattr(type_infer, "_class_type_from_export", observe)
+    for root in exports:
+        result = type_infer.preload_root_delta(exports, root, global_by_key)
+        assert result == expected[root]
+        assert json.dumps(result) == json.dumps(expected[root])
+    assert observed and not any(observed)
