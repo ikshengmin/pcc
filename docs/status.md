@@ -3514,7 +3514,7 @@ in the relevant section or issue and removes the entry.
    full bootstrap or relaxed guard, then choose measured owner fix.
 
    Claims:
-   - none
+   - Stage2 authentic hosted singleton class_gen owner replay: Codex, Linux, 2026-11-26T18:18Z, area selfhost
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
