@@ -4056,12 +4056,48 @@ in the relevant section or issue and removes the entry.
    within controls. No reproducible RSS/p99/STW regression beyond
    controls. Admit measured small-list native owner and modest w1
    CPU/RSS reduction, throughput directional only, w4 neutral.
-   No whole Stage1/Stage2 or hosted CI pass claim. Next attribute
-   remaining list growth, dict raw storage and continuation node
-   ownership cost before selecting the next structural reduction.
+   No whole Stage1/Stage2 or hosted CI pass claim.
+
+   2026-11-26 exact dictionary raw storage attribution: Linux C20 five
+   existing 10/50-round pairs (source 23892fb0, same actual handler) each
+   attribute 4 _alloc_tables raw calls, 384 requested B per request.
+   Capacities are 4 and 8 (presized dynamic and static-pair constructor);
+   48/144 B are averages, not a six-slot table. A small-table coallocation
+   would preserve requested bytes and remove 96 user-usable B plus two
+   48 B raw allocation headers per request; the measured raw pair cost
+   implies only about 0.14 us/request (`~0.25%` CPU ceiling). No
+   throughput candidate or RSS prediction admitted. In Stage2 run
+   45862787448 the coordinator at manifests-ready had 459,764,192 usable
+   and 825,470,976 mapped B but no live dict ownership attribution.
+   Add cold diagnostic only: `PCC_PROFILE_COORDINATOR_MEMORY=1` at
+   manifests-ready prints a separate exact tracked live dictionary storage
+   histogram, capacity:dicts:raw_blocks:requested:usable bytes. Same STW
+   over disjoint allocator slab and outside-pointer-index walks, 2 KiB
+   pointer batch and 32 B cursor, no object-list materialization, root
+   retention or heap allocation during the walk. Exclude incomplete and
+   terminal owners; reject inconsistent/interior raw base before header
+   access. Reports unavailable rather than partial results, resumes only
+   a stop it acquired. Flag-off native execution remains silent.
+   Exact source baseline 5f49dbca: test-first absent ABI/caller each
+   failed; 42 focused six-worker host tests pass (2.03s), isolated
+   runtime IR guard 0.779s / 49,299,456 B; emitted snapshot has no
+   GC-frame/root/heap calls. Fresh owned runtime archive
+   fa4ef0581e8c77a9f7d29550f4484c0e07bc15b9f06e48c1c1ce10524413ed85,
+   native build 159.857s / 404,561,920 B within 1 GiB tree cap and
+   2 GiB reserve. Exact native C ELF 90d19acf2d10991c652decf8e94356e4a713d3c9af68b5429918a4dd89440c27
+   default and provenance 2 pass capacity 4/8/1024, actual raw allocator
+   byte deltas, terminal/cycle release and four concurrent native workers
+   constructing/growing/clearing/retiring across 20 snapshots. Exact
+   application caller ELF ae06b159d027c7b3809b9c5572f867e5f23ec2166c3a1d54593688670c13846a
+   flag-off empty stderr, flag-on actual cap4 count 1->2 and cap8
+   317->318 with exact raw blocks/requested/usable bytes. This is a
+   diagnostic at the coordinator phase, not whole-stage peak or RSS and
+   not performance evidence. No coallocation change. Next read the
+   naturally cumulative hosted Stage2 histogram to quantify actual
+   live small-table footprint before any candidate; continue analyzing
+   list growth and continuation node ownership.
 
    Claims:
-   - Generic dictionary raw table coallocation: Codex, Linux, 2026-11-26T22:10Z, area runtime-gc-dict-storage
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets

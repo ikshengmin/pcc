@@ -15,7 +15,8 @@ def test_disabled_does_not_read_counters(monkeypatch, capsys, flag):
         calls.append('read')
         return 1
     monkeypatch.setattr(memory, '_live_requested', counter)
-    memory.coordinator_memory_phase('exports-before')
+    monkeypatch.setattr(memory, '_dict_storage_snapshot', counter)
+    memory.coordinator_memory_phase('manifests-ready')
     assert calls == []
     assert capsys.readouterr().err == ''
 
@@ -31,9 +32,75 @@ def test_only_four_read_only_counters_in_order(monkeypatch, capsys, phase):
         monkeypatch.setattr(memory, name, counter)
     memory.coordinator_memory_phase(phase)
     assert calls == ['_live_requested', '_live_usable', '_mapped', '_reclaimable_raw']
-    assert capsys.readouterr().err == ('pcc coordinator memory phase=' + phase
+    expected = ('pcc coordinator memory phase=' + phase
         + ' live_requested_bytes=10 live_usable_bytes=16 mapped_bytes=65536 reclaimable_raw_slab_bytes=0\n')
+    if phase == 'manifests-ready':
+        expected += 'pcc coordinator dict storage phase=manifests-ready status=unavailable\n'
+    assert capsys.readouterr().err == expected
 
+
+def test_dictionary_snapshot_only_at_manifest_readiness_and_no_addresses(monkeypatch, capsys):
+    monkeypatch.setenv('PCC_PROFILE_COORDINATOR_MEMORY', '1')
+    for name in ('_live_requested', '_live_usable', '_mapped', '_reclaimable_raw'):
+        monkeypatch.setattr(memory, name, lambda: 1)
+    calls = []
+    output_address = 123456789
+    def stack(size):
+        assert size == 1792
+        calls.append('allocate-output')
+        return output_address
+    def snapshot(address):
+        assert address == output_address
+        calls.append('snapshot')
+        return 0
+    def load(address, offset):
+        assert address == output_address
+        return {0: 3, 8: 6, 16: 384, 24: 480,
+                32: 2, 40: 4, 48: 512, 56: 640}.get(offset, 0)
+    monkeypatch.setattr(memory, 'stack_alloc', stack)
+    monkeypatch.setattr(memory, '_dict_storage_snapshot', snapshot)
+    monkeypatch.setattr(memory, 'load_i64', load)
+    memory.coordinator_memory_phase('exports-returned')
+    assert calls == []
+    capsys.readouterr()
+    memory.coordinator_memory_phase('manifests-ready')
+    assert calls == ['allocate-output', 'snapshot']
+    report = capsys.readouterr().err
+    assert report.endswith('pcc coordinator dict storage phase=manifests-ready status=ok bins=4:3:6:384:480,8:2:4:512:640\n')
+    assert str(output_address) not in report
+
+
+@pytest.mark.parametrize('failure', [-1, MemoryError('snapshot allocation failure')])
+def test_dictionary_snapshot_failure_never_masks_compilation_error(monkeypatch, capsys, failure):
+    monkeypatch.setenv('PCC_PROFILE_COORDINATOR_MEMORY', '1')
+    for name in ('_live_requested', '_live_usable', '_mapped', '_reclaimable_raw'):
+        monkeypatch.setattr(memory, name, lambda: 1)
+    monkeypatch.setattr(memory, 'stack_alloc', lambda n: 123456789)
+    def snapshot(address):
+        if isinstance(failure, Exception):
+            raise failure
+        return failure
+    monkeypatch.setattr(memory, '_dict_storage_snapshot', snapshot)
+    error = ValueError('original')
+    with pytest.raises(ValueError) as caught:
+        try:
+            raise error
+        finally:
+            memory.coordinator_memory_phase('manifests-ready')
+    assert caught.value is error
+    assert capsys.readouterr().err.endswith('pcc coordinator dict storage phase=manifests-ready status=unavailable\n')
+
+
+def test_dictionary_snapshot_cancel_propagates(monkeypatch):
+    monkeypatch.setenv('PCC_PROFILE_COORDINATOR_MEMORY', '1')
+    for name in ('_live_requested', '_live_usable', '_mapped', '_reclaimable_raw'):
+        monkeypatch.setattr(memory, name, lambda: 1)
+    monkeypatch.setattr(memory, 'stack_alloc', lambda n: 123456789)
+    def cancel(address):
+        raise KeyboardInterrupt()
+    monkeypatch.setattr(memory, '_dict_storage_snapshot', cancel)
+    with pytest.raises(KeyboardInterrupt):
+        memory.coordinator_memory_phase('manifests-ready')
 
 def test_untrusted_phase_is_not_logged(monkeypatch, capsys):
     monkeypatch.setenv('PCC_PROFILE_COORDINATOR_MEMORY', '1')

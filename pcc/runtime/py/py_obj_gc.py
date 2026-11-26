@@ -15,11 +15,17 @@ __pcc_runtime_port__ = True
 
 from pcc.extern import extern, c_abi_export, c_ptr, c_int64, c_void
 from pcc.runtime.py.py_abi_constants import (
+    DICTENTRY_SIZE,
+    PYDICTOBJECT_CAPACITY_OFFSET,
+    PYDICTOBJECT_ENTRIES_OFFSET,
+    PYDICTOBJECT_INDICES_OFFSET,
     PYOBJECTHEADER_FLAGS_OFFSET,
     PYOBJECTHEADER_REFCOUNT_OFFSET,
     PYOBJECTHEADER_TYPE_TAG_OFFSET,
     PY_FLAG_GC_DEALLOCATING,
+    PY_FLAG_GC_TRACKED,
     PY_FLAG_IMMORTAL,
+    PY_TYPE_DICT,
     PY_TYPE_LIST,
 )
 from pcc.unsafe import (
@@ -27,13 +33,18 @@ from pcc.unsafe import (
     cstr,
     global_addr,
     global_load_ptr,
+    int_to_ptr,
     is_tagged_int,
     load_i32,
     load_i64,
     load_ptr,
+    memset,
     null,
+    ptr_add,
     ptr_eq,
     ptr_is_null,
+    stack_alloc,
+    store_i64,
 )
 
 
@@ -59,6 +70,116 @@ pcc_gc_default_table_lock = extern("pcc_gc_default_table_lock", (), c_void)
 pcc_gc_default_table_unlock = extern("pcc_gc_default_table_unlock", (), c_void)
 pcc_gc_tracked_materialize = extern("pcc_gc_tracked_materialize", (), c_int64)
 pcc_gc_tracked_dematerialize = extern("pcc_gc_tracked_dematerialize", (c_int64,), c_void)
+
+pcc_allocator_object_cells_enumerate_slice = extern(
+    "pcc_allocator_object_cells_enumerate_slice",
+    (c_ptr, c_int64, c_int64, c_int64, c_ptr, c_int64), c_int64,
+)
+pcc_gc_managed_pointer_index_enumerate_slice = extern(
+    "pcc_gc_managed_pointer_index_enumerate_slice",
+    (c_ptr, c_int64, c_int64, c_int64, c_ptr, c_int64), c_int64,
+)
+malloc_usable_size = extern("malloc_usable_size", (c_ptr,), c_int64)
+
+
+def _dict_storage_snapshot_add(obj, out) -> int:
+    if load_i32(obj, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_DICT:
+        return 0
+    flags: int = load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET)
+    # Like gc.get_objects, do not read the fields of a terminal object whose
+    # owner can already be clearing storage. The tracked bit is set only
+    # after both tables and the capacity have been initialized.
+    if (flags & PY_FLAG_GC_DEALLOCATING) != 0:
+        return 0
+    if (flags & PY_FLAG_IMMORTAL) == 0 and load_i64(obj, PYOBJECTHEADER_REFCOUNT_OFFSET) <= 0:
+        return 0
+    capacity: int = load_i64(obj, PYDICTOBJECT_CAPACITY_OFFSET)
+    if capacity < 4 or capacity > 144115188075855872 or (capacity & (capacity - 1)) != 0:
+        return -1
+    indices = load_ptr(obj, PYDICTOBJECT_INDICES_OFFSET)
+    entries = load_ptr(obj, PYDICTOBJECT_ENTRIES_OFFSET)
+    # The current dictionary storage ABI owns two separate raw bases.
+    # Reject an interior entries address before reading its allocator header
+    # if a future layout changes that contract.
+    if (ptr_is_null(indices) != 0 or ptr_is_null(entries) != 0
+            or ptr_eq(indices, entries) != 0
+            or ptr_eq(ptr_add(indices, capacity * 8), entries) != 0):
+        return -1
+    index_usable: int = malloc_usable_size(indices)
+    entry_usable: int = malloc_usable_size(entries)
+    if index_usable < capacity * 8 or entry_usable < capacity * DICTENTRY_SIZE:
+        return -1
+    lane: int = 0
+    size: int = capacity
+    while size > 4:
+        size = size >> 1
+        lane = lane + 1
+    off: int = lane * 32
+    store_i64(out, off, load_i64(out, off) + 1)
+    store_i64(out, off + 8, load_i64(out, off + 8) + 2)
+    store_i64(out, off + 16, load_i64(out, off + 16) + capacity * (8 + DICTENTRY_SIZE))
+    store_i64(out, off + 24, load_i64(out, off + 24) + index_usable + entry_usable)
+    return 0
+
+
+def _dict_storage_snapshot_walk(out, batch, cursor, outside_slabs: int) -> int:
+    # Keep the world stopped across every slice: releasing it would let
+    # registrations rehash or backshift the cursors, losing exact counts.
+    memset(cursor, 0, 32)
+    done_offset: int = 24
+    if outside_slabs != 0:
+        done_offset = 16
+    while load_i64(cursor, done_offset) == 0:
+        count: int = 0
+        if outside_slabs != 0:
+            count = pcc_gc_managed_pointer_index_enumerate_slice(
+                batch, 256, PY_FLAG_GC_TRACKED, PY_FLAG_GC_DEALLOCATING, cursor, 4096
+            )
+        else:
+            count = pcc_allocator_object_cells_enumerate_slice(
+                batch, 256, PY_FLAG_GC_TRACKED, PY_FLAG_GC_DEALLOCATING, cursor, 4096
+            )
+        if count < 0 or count > 256:
+            return -1
+        index: int = 0
+        while index < count:
+            if _dict_storage_snapshot_add(load_ptr(batch, index * 8), out) != 0:
+                return -1
+            index = index + 1
+    return 0
+
+
+@c_abi_export("pcc_gc_live_dict_storage_snapshot")
+def pcc_gc_live_dict_storage_snapshot(output_address: int) -> int:
+    """Cold diagnostic: count LIVE tracked dicts and their raw table bytes.
+
+    The caller provides 56 zero-independent bins, 32 bytes each, for powers
+    of two from 4 to 2**57. Each bin stores dict count, raw table block count,
+    requested bytes and allocator user-usable bytes. No allocation, root
+    retention, collection, materialization, or address publication in the
+    walk. The caller discards the entire result on -1; this is not RSS.
+    """
+    if output_address == 0:
+        return -1
+    out = int_to_ptr(output_address)
+    batch = stack_alloc(2048)
+    cursor = stack_alloc(32)
+    memset(out, 0, 1792)
+    owns_world: int = 0
+    if pcc_thread_owns_stopped_world() == 0:
+        if pcc_stop_the_world() != 0:
+            return -1
+        owns_world = 1
+    # These raw helpers report failure by status; no Python exception or
+    # cleanup root frame belongs in this stopped-world diagnostic.
+    result: int = _dict_storage_snapshot_walk(out, batch, cursor, 0)
+    if result == 0:
+        # The managed pointer index enumerates objects outside object slabs,
+        # so the two allocator owners are disjoint under the same stop.
+        result = _dict_storage_snapshot_walk(out, batch, cursor, 1)
+    if owns_world != 0:
+        pcc_resume_world()
+    return result
 
 
 def _tracked_snapshot_enter() -> int:
