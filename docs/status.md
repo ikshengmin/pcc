@@ -3532,9 +3532,28 @@ in the relevant section or issue and removes the entry.
    clean-source owner-level primitive cost (not TLS-only cost) and
    only an independently validated safe reuse design if worthwhile.
 
+   Exact clean-source native TLS owner cost (decef72c): source runtime
+   rebuilt112.792s peak395235328B, ELF2ef5126bc9fd7fffd2180d28b59af21bc9bc77d5939886e9c7cb92f8c04cfade;
+   seven modes, five quiet alternating triples, 10M iterations/case,
+   exact unchanged indirect controls. Paired extra CPU ns per operation:
+   registered current ID5.5258 (control drift.2955), magazine1.2168
+   (.8764), recursion enter+leave4.5801 (.3925), no-park enter+exit
+   4.6208 (.2433), safepoint3.1283 (.6975), tracked delta +1/-1 pair
+   6.3974 (.7743), empty exception get -.0214 (.2577; no measured cost).
+   Weighted w1 measured owner ceilings .490+.128+.204+.184+.111+
+   .156=1.272us/request (~2.4% earlier handler CPU); this includes
+   full owner functions, not a TLV-only cost, and the lock cost above
+   is separate. No broadly safe removal and no Linux case for a complex
+   cross-thread cache; Darwin remains a separate measurement. Native
+   x64 ID hot path has a176-byte frame, helper call and cold registration
+   spills, but entire measured owner only .49us/request. No TLS source
+   change accepted. Next attribute actual raw allocator requests/bytes,
+   object-vs-raw free paths and owner functions; seek structural lifetime
+   reduction independent of previously rejected sorted/factory patch.
+
    Claims:
    - Stage1 ARM typed trampoline branches shared resolution and sparse branch owner: Codex, Linux, 2026-11-26T20:16Z, area backend-aarch64-cfg
-   - Actual runtime thread-local access count and owner cost: Codex, Linux, 2026-11-26T20:01Z, area runtime-gc-tls
+   - Actual raw allocator callsite and slab lifecycle attribution: Codex, Linux, 2026-11-26T20:17Z, area runtime-gc-raw-allocation
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
