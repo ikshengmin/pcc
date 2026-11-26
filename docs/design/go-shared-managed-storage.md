@@ -304,3 +304,21 @@ occupied output, and no no-park lease during large private initialization.
 This qualifies a native Linux internal allocation/lifecycle owner, not
 cross-platform execution, arbitrary allocation success, a pause benchmark,
 or the still-frozen Go/Java frontend admissions.
+
+## Cross-target object ABI gate
+
+The final combined small/raw source at `534b4e9e` passed actual owned
+object emission on Linux AArch64, Darwin ARM64 and Windows x86-64 MSVC.
+For each target the six production owners (`py_obj`, `py_gc_backend`,
+`py_obj_dealloc`, the collector, bounded object-slot walker and described
+layout module) were compiled and emitted without external target tools;
+actual relocation sets identify one correct provider for the constructor's
+raw registration/geometry, slot dispatch and both retirement edges. The
+owned C frontend compiled the public `pcc_described_layout.h` caller with
+matching 64-bit argument/result signatures on each target, including
+Windows LLP64. Three focused tests passed under the unchanged 90 s / 1 GiB
+process-tree guard (33.91 s, 130,854,912 bytes peak). Linux x86-64 native
+execution passed as above; Linux AArch64, Darwin ARM64 and Windows x86-64
+native execution are **UNRUN**, not inferred from the object receipts.
+The next acceptance evidence is paired ordinary native handler QPS/CPU/RSS
+against the exact pre-tag source, not a change in declared language support.

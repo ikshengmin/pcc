@@ -441,3 +441,84 @@ def test_described_raw_mapping_lifecycle_native(tmp_path,pcc_runtime_archive):
     assert result.returncode==0,(result.stdout,result.stderr)
     run=subprocess.run([str(exe)],capture_output=True,timeout=30)
     assert (run.returncode,run.stdout,run.stderr)==(42,b'',b''),(run.returncode,run.stdout,run.stderr)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('target',('aarch64-unknown-linux-gnu','arm64-apple-darwin','x86_64-pc-windows-msvc'))
+def test_final_described_lifecycle_owned_cross_target_object_abi(tmp_path,monkeypatch,target):
+    """Actual self object and C caller ABI, never cross-target execution."""
+    import re
+    from pcc.frontends.python import owned_runtime_build
+    from pcc.backend.owned_object_emit import emit_owned_object
+    from pcc.ir.optimization.driver import optimize_ir
+    from pcc.driver.project import TranslationUnit
+    from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
+    from tests.owned_runtime_c_fixture import object_symbols
+
+    runtime=RUNTIME.parent
+    modules={
+        'py_obj': {'pcc_gc_described_alloc_into_root':('i64','ptr,ptr,i64,i64')},
+        'py_gc_backend': {'pcc_gc_pointer_register_raw_into_root':('i64','ptr,ptr')},
+        'py_obj_dealloc': {'py_dealloc_described_layout':('void','ptr')},
+        'freestanding_gc_backend0_collector': {'pcc_gc_backend0_dealloc_unreachable':('void','ptr')},
+        'freestanding_gc_object_slots': {'pcc_gc_visit_object_slots_slice':('i64','ptr,i64,i64,ptr,ptr,ptr')},
+        'freestanding_gc_described_layout': {
+            'pcc_gc_described_extent':('i64','ptr,i64,i64'),
+            'pcc_gc_described_slot_count':('i64','ptr,i64,i64'),
+            'pcc_gc_described_slot_offset':('i64','ptr,i64,i64,i64'),
+            'pcc_gc_described_initialize_private':('i64','ptr,i64,ptr,i64,i64'),
+            'pcc_gc_described_visit_slots_slice':('i64','ptr,i64,i64,ptr,ptr,ptr'),
+        },
+    }
+    assert set(modules)<=set(owned_runtime_build.runtime_modules(str(runtime),target))
+    definitions={};undefined={}
+    def symbols(path):
+        if 'windows' in target:
+            from pcc.backend.coff_x86_64 import parse_object
+            rows=parse_object(path.read_bytes()).symbols
+            return ({s.name for s in rows if s.name and s.section>0},
+                    {s.name for s in rows if s.name and s.section==0})
+        return ({line.split()[-1].lstrip('_') for line in object_symbols(path).stdout.splitlines()},
+                {line.split()[-1].lstrip('_') for line in object_symbols(path,undefined=True).stdout.splitlines()})
+    with monkeypatch.context() as guard:
+        guard.setattr(subprocess,'Popen',lambda *a,**k:pytest.fail('external target tool invoked'))
+        for module,expected in modules.items():
+            ir=tmp_path/(module+'.ll');obj=tmp_path/(module+'.o')
+            owned_runtime_build._compile_runtime_module(module,str(RUNTIME/(module+'.py')),str(ir),target)
+            text=ir.read_text()
+            for symbol,(result,parameters) in expected.items():
+                definition=re.search(r'define external '+result+r' @'+symbol+r'\(([^)]*)\)',text)
+                assert definition, (target,module,symbol)
+                assert ','.join(p.strip().split()[0] for p in definition.group(1).split(','))==parameters
+            obj.write_bytes(emit_owned_object(optimize_ir(text,owned_runtime_build.runtime_ir_passes(str(runtime))),target))
+            definitions[module],undefined[module]=symbols(obj)
+            assert set(expected)<=definitions[module]
+        # C ABI declarations use int64_t on all supported 64-bit data models
+        # (Windows LLP64 included), not the host's long width or a fake header.
+        code='''#include "pcc_described_layout.h"
+int64_t probe(void *out,const int64_t *d,int64_t n,int64_t count) {
+    return pcc_gc_described_alloc_into_root(out,d,n,count);
+}
+int64_t walk(void *owner,int64_t cursor,PccDescribedSlotVisitor callback,void *context,int64_t *state) {
+    return pcc_gc_described_visit_slots_slice(owner,cursor,3,callback,context,state);
+}'''
+        units=CEvaluator(backend='self',target_triple=target).compile_translation_units(
+            [TranslationUnit('cross.c',None,code)],use_system_cpp=False,
+            include_dirs=[str(runtime/'include')],frontend_opt_level=0,use_compile_cache=False)
+        caller=units[0][1];obj=tmp_path/'caller.o';obj.write_bytes(emit_owned_object(caller,target))
+        _defined,caller_undef=symbols(obj)
+    assert {'pcc_gc_described_alloc_into_root','pcc_gc_described_visit_slots_slice'}<=caller_undef
+    assert re.search(r'declare i64 @"?pcc_gc_described_alloc_into_root"?\(ptr[^,]*, ptr[^,]*, i64[^,]*, i64[^)]*\)',caller)
+    assert re.search(r'declare i64 @"?pcc_gc_described_visit_slots_slice"?\(ptr[^,]*, i64[^,]*, i64[^,]*, ptr[^,]*, ptr[^,]*, ptr[^)]*\)',caller)
+    # Verify the actual cross-object relocation obligations resolve to exactly
+    # one of the tested production owners, including raw publication and sweep.
+    for consumer,symbol,owner in (
+        ('py_obj','pcc_gc_pointer_register_raw_into_root','py_gc_backend'),
+        ('py_obj','pcc_gc_described_initialize_private','freestanding_gc_described_layout'),
+        ('py_obj','pcc_gc_described_extent','freestanding_gc_described_layout'),
+        ('py_obj_dealloc','pcc_gc_visit_object_slots','freestanding_gc_object_slots'),
+        ('freestanding_gc_backend0_collector','py_dealloc_described_layout','py_obj_dealloc'),
+        ('freestanding_gc_object_slots','pcc_gc_described_visit_slots_slice','freestanding_gc_described_layout'),
+    ):
+        assert symbol in undefined[consumer],(target,consumer,symbol)
+        assert {m for m,names in definitions.items() if symbol in names}=={owner}

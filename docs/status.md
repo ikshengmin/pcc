@@ -2630,9 +2630,16 @@ in the relevant section or issue and removes the entry.
    native collector controls pass; guard 17.77s/182,132,736 B. Eight
    source lifecycle models and exact four live graph-lock callsite
    classification passed. No cross-platform native or pause/QPS claim.
-   Next: broader platform/native + A/B acceptance and collector-interface
-   review before generic Go/Java lowering or unchanged upstream
-   acceptance. C++
+   Final small/raw cross-target object ABI: actual six production runtime
+   modules and C caller compiled self on AArch64 Linux, Darwin ARM64,
+   Windows x64 MSVC; all expected exact exported signatures, 64-bit C
+   arguments/results (LLP64 included), and unique constructor/visitor/
+   dealloc cross-object relocation owners. 3 focused checks passed under
+   90s/1GiB guard (33.91s,130,854,912 B). Native execution there UNRUN.
+   Linux ordinary paired QPS/CPU/RSS A/B against pre-tag 7763efd4 pending
+   exclusive timing; claim remains active. Next: platform native and
+   collector-interface review before generic Go/Java lowering or
+   unchanged upstream acceptance. C++
    [#14](https://github.com/ikshengmin/pcc/issues/14):
    implicit/explicit destructor exception specifications and the non-throwing
    override rule now select ordinary versus effect-gated D1 destruction.
