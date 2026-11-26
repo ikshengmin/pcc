@@ -452,7 +452,7 @@ def build_identity(options, command: list[str], environment: dict[str, str]) -> 
             "chunk_assignments": "bound by graph identity after full frontend pre-pass"},
         "wire_contracts": {"worker": "pcc.frontends.python.codegen_worker.v5", "ast": "pcc.frontends.python.py_ast.v1",
             "exports": "pcc.frontends.python.native_exports.v1",
-            "indexed_exports": "pcc.frontends.python.native_exports.indexed.v1",
+            "indexed_exports": "pcc.frontends.python.native_exports.indexed.v2",
             "effect_summary": "pcc.vthread.effect-summary.v1",
             "artifact": "ELF64-LE-ET_REL", "machine": 62},
     }

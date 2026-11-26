@@ -2495,8 +2495,58 @@ in the relevant section or issue and removes the entry.
    writer emits owned x86 Linux IR. This correction supersedes the earlier
    streaming writer's RSS receipt. DAG transport remains Next.
 
+   Versioned immutable preload tuple DAG now published: indexed.v2 writes
+   only proven immutable descriptor tuple/scalar graphs (at least 64 types),
+   with canonical type-tagged postorder nodes; immutable sharing never changes
+   descriptor values or root order. v1 remains readable and the writer falls
+   back for small/unsupported/beyond-bound graphs. v2 validates backward refs,
+   exact scalar types, all nodes, root indices, total logical expansion <=16M
+   items and depth <=128. Metadata preflight destination contract remains.
+   Actual 668-module fixture: T row 350,795 nested tuple occurrences / 726,468
+   logical items / max depth39 interned to 5,693 nodes and 1,193 type roots;
+   T JSON 5,046,730 -> 268,846 bytes (-94.7%); complete wire 29,513,459 ->
+   24,735,575 bytes. Legacy/v2 other rows unchanged.
+   Final guarded-code host CPython3.13.5 reader, five alternating fresh
+   pairs each: worker_resource_plan CPU .67314 -> .04718 s, peak156,092 ->
+   74,492 KiB; class_gen .79149 -> .15266 s, peak156,228 ->81,028 KiB;
+   AArch64 backend .66586 ->.11449 s, peak156,216 ->77,448 KiB. 15/15 CPU and
+   RSS wins; exact root semantic output hashes; unchanged legacy raw-index
+   control .05812 s /107,576 KiB. Corrected v1 writer -> v2 writer median
+   1.02618 -> .63389 s, 81,084 ->56,248 KiB (5/5 both); unchanged legacy
+   writer control noisy .795 s/159,672 KiB. No whole-stage speed inference.
+   Exact owned Linux x86 runtime built from candidate source under 3-job
+   3GiB guard in127.06s, peak383,053,824B, source/codegen provenance verified.
+   Actual pcc0+self+owned linker fixture admitted exact repo source closure
+   (55 modules, 167.7MB IR), compiled206.81s/peak1,318,576,128B, static ELF;
+   v2 read/write and eight GC loops print INDEXED_EXPORT_OWNERS_OK and output
+   bytes equal CPython SHA256
+   7f08d047935761b0a2db5f47f923d05fd8f92cf1c3bb03af0fc8b2fe88cc3e59.
+   The scratch fixture's explicit PCC_PACKAGE_SITE and owned linker are now
+   set in regression test. Separate exact codec body native ELF read the
+   actual v1/v2 T rows, identical expanded JSON; native canonical encoder
+   emitted exactly the host v2 T SHA256
+   c6bbad4c058c84f56313e401f9a6b028ae594639eba2dac85d1508f1ca3334ae.
+   297 focused host contracts pass, one native test deselected from that
+   host suite (actual pcc0 fixture executed separately); v1/v2 failure,
+   malformed and expansion/transport validation all tested. Broader host
+   checkpoint suite had 636 passes, 5 reds (old libpython-route and system
+   numpy symlink import inventory reproduced on prior source; 3 CPU guard
+   budget tests timed out under competing load); no whole-CI claim.
+   Full latest CI artifact attribution: Windows 15136410279 Stage1 compile
+   1180.880s/3,627,479,040B peak, Stage2 last sample1781.463s/2,653,753,344B
+   peak, 3 codegen modules done, class_gen active; Stage2 export608.662 vs
+   Stage1 63.797s, summary188.872 vs17.544s, preload193.750 vs20.364s.
+   Linux x64 15134943149 Stage1 compile1571.474s/2,936,516,608B peak,
+   Stage2 last sample1781.131s/3,198,173,184B peak (+8.91%), two codegen
+   modules done, cli_bootstrap active; export789.855 vs77.118s, summary
+   242.045 vs18.791s, preload263.820 vs24.797s. ARM owner15135581178
+   timeout1800.199s/4,753,969,152B whole-owner peak, class_gen active.
+   Stage2 <= Stage1 bar unmet. Next: actual native reader A/B follow-up,
+   then tackle summary-worker repeated effect export decode and provably
+   root-independent class reconstruction. Maintain same guards.
+
    Claims:
-   - Stage2 versioned immutable descriptor DAG transport: Codex, Linux, 2026-11-26T16:03Z, area selfhost
+   - none
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its

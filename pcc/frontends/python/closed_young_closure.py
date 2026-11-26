@@ -583,10 +583,8 @@ def _prepare_transport(exports_path, ast_dir, assigned_indices, *, snapshots=Non
         # stores every metadata, preload and module shard inline (D/F/P/T/G/
         # C/H/U/M rows); there are no external member files to leave unhashed.
         # A future external-member format needs a different transport proof.
-        if text.startswith(pipeline_exports._NATIVE_EXPORT_INDEXED_SCHEMA + "\n"):
-            wire_schema = pipeline_exports._NATIVE_EXPORT_INDEXED_SCHEMA
-            if wire_schema != "pcc.frontends.python.native_exports.indexed.v1":
-                return None, "unsupported indexed export transport schema"
+        wire_schema = pipeline_exports._indexed_native_export_schema(text)
+        if wire_schema:
             pipeline_exports._indexed_native_export_rows(text)
         else:
             payload = json.loads(text)

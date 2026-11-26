@@ -599,8 +599,9 @@ def _transport_fixture(tmp_path, *, indexed=False):
         options = {
             "module_dependencies": {"main": ("helper",), "helper": ()},
             "unique_class_preload_index": {
-                "types": (), "base_keys": (),
-                "roots": {name: ((), ()) for name in native},
+                "types": (("class", "C"),) * pipeline_exports._PRELOAD_TUPLE_DAG_MIN_TYPES
+                         if indexed == "dag" else (),
+                "base_keys": (), "roots": {name: ((), ()) for name in native},
             },
         }
     pipeline_exports._write_native_exports_wire(str(exports_path), native, {}, **options)
@@ -610,7 +611,7 @@ def _transport_fixture(tmp_path, *, indexed=False):
     return str(exports_path), str(ast_dir)
 
 
-@pytest.mark.parametrize("indexed", [False, True])
+@pytest.mark.parametrize("indexed", [False, True, "dag"])
 def test_transport_binds_production_wire_and_exact_assigned_ast_snapshots(tmp_path, indexed):
     from pcc.frontends.python import pipeline_ast_wire, pipeline_exports
 
@@ -618,6 +619,8 @@ def test_transport_binds_production_wire_and_exact_assigned_ast_snapshots(tmp_pa
     token, reason = prepare_closed_young_transport(exports_path, ast_dir, [1, 0])
     assert reason == ""
     assert token["assigned_indices"] == [1, 0]
+    if indexed == "dag":
+        assert token["exports"]["wire_schema"] == pipeline_exports._NATIVE_EXPORT_INDEXED_DAG_SCHEMA
     assert [record["index"] for record in token["asts"]] == [1, 0]
     assert validate_closed_young_transport(token, exports_path, ast_dir, [1, 0]) == ""
     snapshots, reason = load_closed_young_transport(token, exports_path, ast_dir, [1, 0])

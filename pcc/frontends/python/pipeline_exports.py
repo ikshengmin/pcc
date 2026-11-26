@@ -22,6 +22,22 @@ _py_ast_field_value = _pipeline_ast_wire._py_ast_field_value
 _find_substring = _pipeline_ir_text.find_substring
 _NATIVE_EXPORT_WIRE_SCHEMA = "pcc.frontends.python.native_exports.v1"
 _NATIVE_EXPORT_INDEXED_SCHEMA = "pcc.frontends.python.native_exports.indexed.v1"
+_NATIVE_EXPORT_INDEXED_DAG_SCHEMA = "pcc.frontends.python.native_exports.indexed.v2"
+_PRELOAD_TUPLE_DAG_SCHEMA = "pcc.frontends.python.preload_tuple_dag.v1"
+_PRELOAD_TUPLE_DAG_MIN_TYPES = 64
+# The dense representation must not admit arbitrarily large logical trees
+# or nesting beyond the legacy reader's practical recursion envelope.
+# Larger valid producer graphs remain readable through the legacy format.
+_PRELOAD_TUPLE_DAG_MAX_EXPANDED_ITEMS = 16 * 1024 * 1024
+_PRELOAD_TUPLE_DAG_MAX_DEPTH = 128
+
+
+def _indexed_native_export_schema(text: str) -> str:
+    if text.startswith(_NATIVE_EXPORT_INDEXED_SCHEMA + "\n"):
+        return _NATIVE_EXPORT_INDEXED_SCHEMA
+    if text.startswith(_NATIVE_EXPORT_INDEXED_DAG_SCHEMA + "\n"):
+        return _NATIVE_EXPORT_INDEXED_DAG_SCHEMA
+    return ""
 
 
 def _export_param_types(args, raw_pointer_names=()):
@@ -1465,6 +1481,134 @@ def _native_export_indexed_module_name(value) -> str:
     return value
 
 
+def _preload_tuple_dag_intern(value, identities, indexes, nodes, expanded, depths) -> int:
+    """Intern an immutable tuple in a deterministic postorder table.
+
+    Source identity shortcuts repeated traversal, but never decides the wire
+    id: structurally equal, type-tagged rows get the same id regardless of
+    sharing history. Unsupported leaves keep the caller on the legacy wire.
+    """
+    if type(value) is not tuple:
+        return -1
+    identity = id(value)
+    prior = identities.get(identity)
+    if prior is not None:
+        return prior
+    key_items = []
+    wire_items = []
+    item_count = 1
+    depth = 1
+    for item in value:
+        item_count += 1
+        if type(item) is tuple:
+            child_id = _preload_tuple_dag_intern(item, identities, indexes, nodes, expanded, depths)
+            if child_id < 0:
+                return -1
+            item_count += expanded[child_id] - 1
+            depth = max(depth, depths[child_id] + 1)
+            key_items.append((0, child_id))
+            wire_items.append([child_id])
+        elif type(item) is str:
+            key_items.append((1, item))
+            wire_items.append(item)
+        elif type(item) is bool:
+            key_items.append((2, item))
+            wire_items.append(item)
+        elif type(item) is int:
+            key_items.append((3, item))
+            wire_items.append(item)
+        elif item is None:
+            key_items.append((4, None))
+            wire_items.append(None)
+        else:
+            return -1
+        if (item_count > _PRELOAD_TUPLE_DAG_MAX_EXPANDED_ITEMS
+                or depth > _PRELOAD_TUPLE_DAG_MAX_DEPTH):
+            return -1
+    key = tuple(key_items)
+    row_id = indexes.get(key)
+    if row_id is None:
+        row_id = len(nodes)
+        nodes.append(wire_items)
+        expanded.append(item_count)
+        depths.append(depth)
+        indexes[key] = row_id
+    # All input tuple identities remain alive via the original root graph.
+    identities[identity] = row_id
+    return row_id
+
+
+def _encode_preload_tuple_dag(descriptors):
+    """Return a compact immutable descriptor transport, or None for v1."""
+    identities = {}
+    indexes = {}
+    nodes = []
+    roots = []
+    expanded = []
+    depths = []
+    total_items = 0
+    for descriptor in descriptors:
+        node_id = _preload_tuple_dag_intern(descriptor, identities, indexes, nodes, expanded, depths)
+        if node_id < 0:
+            return None
+        total_items += expanded[node_id]
+        if total_items > _PRELOAD_TUPLE_DAG_MAX_EXPANDED_ITEMS:
+            return None
+        roots.append(node_id)
+    return {"schema": _PRELOAD_TUPLE_DAG_SCHEMA, "nodes": nodes, "roots": roots}
+
+
+def _decode_preload_tuple_dag(payload):
+    """Decode each immutable node once; only backward references are valid."""
+    if (type(payload) is not dict or len(payload) != 3
+            or payload.get("schema") != _PRELOAD_TUPLE_DAG_SCHEMA):
+        raise ValueError("invalid indexed preload tuple DAG")
+    nodes = payload.get("nodes")
+    roots = payload.get("roots")
+    if type(nodes) is not list or type(roots) is not list:
+        raise ValueError("invalid indexed preload tuple DAG")
+    decoded = []
+    expanded = []
+    depths = []
+    for row in nodes:
+        if type(row) is not list:
+            raise ValueError("invalid indexed preload tuple DAG node")
+        items = []
+        item_count = 1
+        depth = 1
+        for item in row:
+            if type(item) is list:
+                if (len(item) != 1 or type(item[0]) is not int
+                        or item[0] < 0 or item[0] >= len(decoded)):
+                    raise ValueError("invalid indexed preload tuple DAG reference")
+                child_id = item[0]
+                items.append(decoded[child_id])
+                item_count += expanded[child_id]
+                depth = max(depth, depths[child_id] + 1)
+            elif (type(item) is str or type(item) is bool
+                    or type(item) is int or item is None):
+                items.append(item)
+                item_count += 1
+            else:
+                raise ValueError("invalid indexed preload tuple DAG scalar")
+            if (item_count > _PRELOAD_TUPLE_DAG_MAX_EXPANDED_ITEMS
+                    or depth > _PRELOAD_TUPLE_DAG_MAX_DEPTH):
+                raise ValueError("invalid indexed preload tuple DAG expansion")
+        decoded.append(tuple(items))
+        expanded.append(item_count)
+        depths.append(depth)
+    result = []
+    total_items = 0
+    for root in roots:
+        if type(root) is not int or root < 0 or root >= len(decoded):
+            raise ValueError("invalid indexed preload tuple DAG root")
+        total_items += expanded[root]
+        if total_items > _PRELOAD_TUPLE_DAG_MAX_EXPANDED_ITEMS:
+            raise ValueError("invalid indexed preload tuple DAG expansion")
+        result.append(decoded[root])
+    return tuple(result)
+
+
 def _write_indexed_native_exports_wire(
     path: str,
     native_exports,
@@ -1504,6 +1648,14 @@ def _write_indexed_native_exports_wire(
     ):
         raise ValueError("invalid indexed external class preload index")
 
+    schema = _NATIVE_EXPORT_INDEXED_SCHEMA
+    preload_transport = preload_types
+    if len(preload_types) >= _PRELOAD_TUPLE_DAG_MIN_TYPES:
+        dag = _encode_preload_tuple_dag(preload_types)
+        if dag is not None:
+            schema = _NATIVE_EXPORT_INDEXED_DAG_SCHEMA
+            preload_transport = dag
+
     # Preserve the preflight boundary: every metadata conversion must
     # succeed before opening the destination. Retain rendered lines, not
     # their larger temporary JSON-wire trees, during that preflight.
@@ -1511,7 +1663,7 @@ def _write_indexed_native_exports_wire(
         ("D", derived_class_map),
         ("F", function_object_uses),
         ("P", dependencies),
-        ("T", preload_types),
+        ("T", preload_transport),
         ("G", preload_base_keys),
         ("C", contextual_modules),
         ("H", contextual_host_exports),
@@ -1520,7 +1672,7 @@ def _write_indexed_native_exports_wire(
     for tag, value in metadata_rows:
         metadata_lines.append(tag + "\t" + json.dumps(_native_export_to_wire(value)) + "\n")
     with open(path, "w", encoding="utf-8") as stream:
-        stream.write(_NATIVE_EXPORT_INDEXED_SCHEMA + "\n")
+        stream.write(schema + "\n")
         for row_line in metadata_lines:
             stream.write(row_line)
         row_line = ""
@@ -1558,7 +1710,9 @@ def _indexed_native_export_rows(text: str, defer_payloads: bool = False):
     """
 
     lines = text.splitlines()
-    if not lines or lines[0] != _NATIVE_EXPORT_INDEXED_SCHEMA:
+    if not lines or lines[0] not in (
+        _NATIVE_EXPORT_INDEXED_SCHEMA, _NATIVE_EXPORT_INDEXED_DAG_SCHEMA,
+    ):
         raise ValueError("invalid indexed frontend native exports file")
     metadata = {}
     preload_payloads = {}
@@ -1639,7 +1793,13 @@ def _read_indexed_native_exports_wire(text: str, root_module: str = ""):
     derived_class_map = _indexed_native_export_metadata(metadata, "D")
     function_object_uses = _indexed_native_export_metadata(metadata, "F")
     module_dependencies = _indexed_native_export_metadata(metadata, "P")
-    preload_types = _indexed_native_export_metadata(metadata, "T")
+    if _indexed_native_export_schema(text) == _NATIVE_EXPORT_INDEXED_DAG_SCHEMA:
+        try:
+            preload_types = _decode_preload_tuple_dag(json.loads(metadata["T"]))
+        except Exception as exc:
+            raise ValueError("invalid indexed frontend native export metadata") from exc
+    else:
+        preload_types = _indexed_native_export_metadata(metadata, "T")
     preload_base_keys = _indexed_native_export_metadata(metadata, "G")
     contextual_modules = ()
     if "C" in metadata:
@@ -1849,7 +2009,7 @@ def _read_native_exports_wire(path: str, include_function_object_uses: bool = Fa
 def _decode_native_exports_wire(text: str, include_function_object_uses: bool = False):
     """Decode an already-read native-export wire without further file access."""
 
-    if text.startswith(_NATIVE_EXPORT_INDEXED_SCHEMA + "\n"):
+    if _indexed_native_export_schema(text):
         native_exports, derived_class_map, function_object_uses, _preload = (
             _read_indexed_native_exports_wire(text)
         )
@@ -1889,7 +2049,7 @@ def _read_native_exports_wire_for_module(path: str, module_name: str):
 def _decode_native_exports_wire_for_module(text: str, module_name: str):
     """Decode one module's export view from an already verified byte snapshot."""
 
-    if text.startswith(_NATIVE_EXPORT_INDEXED_SCHEMA + "\n"):
+    if _indexed_native_export_schema(text):
         native_exports, derived_class_map, _uses, unique_class_preload = (
             _read_indexed_native_exports_wire(text, module_name)
         )
@@ -1912,7 +2072,7 @@ def _read_native_exports_wire_raw_modules(path: str):
 
     with open(path, "r", encoding="utf-8") as stream:
         text = stream.read()
-    if text.startswith(_NATIVE_EXPORT_INDEXED_SCHEMA + "\n"):
+    if _indexed_native_export_schema(text):
         _metadata, _preloads, module_payloads, module_order = (
             _indexed_native_export_rows(text)
         )

@@ -2,6 +2,7 @@
 
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 
@@ -120,8 +121,9 @@ def test_owned_indexed_errors_and_lazy_validation_match_borrowed_decoder(
 @pytest.mark.parametrize("metadata_tag", ["D", "F", "P", "T", "G", "C", "H"])
 @pytest.mark.parametrize("existing", [False, True])
 @pytest.mark.parametrize("error_type", [MemoryError, RecursionError, ValueError])
+@pytest.mark.parametrize("dag", [False, True])
 def test_indexed_metadata_conversion_failure_preserves_destination(
-    tmp_path, monkeypatch, metadata_tag, existing, error_type,
+    tmp_path, monkeypatch, metadata_tag, existing, error_type, dag,
 ):
     # The existing writer converts all metadata before opening the output.
     # This protects that boundary only; later U/M writes are not atomic.
@@ -153,7 +155,8 @@ def test_indexed_metadata_conversion_failure_preserves_destination(
         exports._write_native_exports_wire(
             str(output), {"root": {}}, {}, module_dependencies={"root": ()},
             unique_class_preload_index={
-                "types": (), "base_keys": (), "roots": {"root": ((), ())},
+                "types": (("class", "C"),) * exports._PRELOAD_TUPLE_DAG_MIN_TYPES if dag else (),
+                "base_keys": (), "roots": {"root": ((), ())},
             },
         )
     assert caught.value is error
@@ -193,13 +196,19 @@ def main():
         "unused": {"unused": {"kind": "constant", "value": 17}},
     }
     derived = {"Base": ("dep", "Child")}
-    preload = {"types": (("class", "Child"),), "base_keys": (("Base", 0),),
+    descriptor_rows = []
+    for descriptor_index in range(64):
+        descriptor_rows.append(("class", "Class" + str(descriptor_index), "dep",
+                                (("field", ("int", 64, True)),), ()))
+    preload = {"types": tuple(descriptor_rows), "base_keys": (("Base", 0),),
                "roots": {"root": ((), ()), "dep": ((), ()), "unused": ((), ())}}
     path = sys.argv[1]
     _write_native_exports_wire(
         path, native, derived, (("root", "entry"),),
         module_dependencies={"root": ("dep",)}, unique_class_preload_index=preload,
     )
+    with open(path, "r", encoding="utf-8") as stream:
+        assert stream.read().startswith("pcc.frontends.python.native_exports.indexed.v2\\n")
     count = 0
     while count < 8:
         full, classes, uses = _read_native_exports_wire(path, True)
@@ -224,8 +233,14 @@ main()
 
 @pytest.mark.integration
 def test_native_indexed_export_lifecycle_all_collectors(
-    tmp_path, pcc_runtime_archive, python_program_compiler,
+    tmp_path, monkeypatch, pcc_runtime_archive, python_program_compiler,
 ):
+    # A scratch entry point cannot implicitly import arbitrary compiler
+    # internals. Admit this repository's exact source graph explicitly.
+    repo = str(Path(__file__).resolve().parents[2])
+    monkeypatch.setenv("PCC_PACKAGE_SITE", repo)
+    monkeypatch.setenv("PYTHONPATH", repo, prepend=os.pathsep)
+    monkeypatch.setenv("PCC_SELF_LINK", "pcc")
     source = tmp_path / "indexed_export_owners.py"
     source.write_text(_NATIVE_PROGRAM, encoding="utf-8")
     reference_path = tmp_path / "reference.indexed"
@@ -249,3 +264,94 @@ def test_native_indexed_export_lifecycle_all_collectors(
         assert result.stdout == reference.stdout
         assert result.stderr == ""
         assert output.read_bytes() == reference_path.read_bytes()
+
+
+def test_preload_tuple_dag_encoding_is_deterministic_and_scalar_type_exact():
+    common = ("int", 64, True)
+    shared = (("class", "A", "mod", (("x", common),), ()),
+              ("class", "B", "mod", (("y", common),), ()),
+              ("literal", True, 1, False, 0, None))
+    # Reconstruction loses object identities; canonical transport must not.
+    rebuilt = exports._native_export_from_wire(json.loads(json.dumps(
+        exports._native_export_to_wire(shared))))
+    assert rebuilt == shared
+    encoded = exports._encode_preload_tuple_dag(shared)
+    assert encoded == exports._encode_preload_tuple_dag(rebuilt)
+    decoded = exports._decode_preload_tuple_dag(json.loads(json.dumps(encoded)))
+    assert json.dumps(exports._native_export_to_wire(decoded)) == json.dumps(
+        exports._native_export_to_wire(shared))
+    assert decoded[0][3][0][1] is decoded[1][3][0][1]
+    assert type(decoded[2][1]) is bool and type(decoded[2][2]) is int
+    assert type(decoded[2][3]) is bool and type(decoded[2][4]) is int
+    # Values that compare equal but have distinct scalar types cannot merge.
+    distinct = (("literal", True), ("literal", 1))
+    distinct_wire = exports._encode_preload_tuple_dag(distinct)
+    assert distinct_wire["roots"][0] != distinct_wire["roots"][1]
+
+
+@pytest.mark.parametrize("bad", [
+    {"schema": "foreign", "nodes": [[]], "roots": [0]},
+    {"schema": exports._PRELOAD_TUPLE_DAG_SCHEMA, "nodes": {}, "roots": [0]},
+    {"schema": exports._PRELOAD_TUPLE_DAG_SCHEMA, "nodes": [[]], "roots": {}},
+    {"schema": exports._PRELOAD_TUPLE_DAG_SCHEMA, "nodes": [[[0]]], "roots": [0]},
+    {"schema": exports._PRELOAD_TUPLE_DAG_SCHEMA, "nodes": [[[1]], []], "roots": [1]},
+    {"schema": exports._PRELOAD_TUPLE_DAG_SCHEMA, "nodes": [[], [[-1]]], "roots": [1]},
+    {"schema": exports._PRELOAD_TUPLE_DAG_SCHEMA, "nodes": [[], [[True]]], "roots": [1]},
+    {"schema": exports._PRELOAD_TUPLE_DAG_SCHEMA, "nodes": [[], [[0, 0]]], "roots": [1]},
+    {"schema": exports._PRELOAD_TUPLE_DAG_SCHEMA, "nodes": [[], [{}]], "roots": [0]},
+    {"schema": exports._PRELOAD_TUPLE_DAG_SCHEMA, "nodes": [[1.0]], "roots": [0]},
+    {"schema": exports._PRELOAD_TUPLE_DAG_SCHEMA, "nodes": [[]], "roots": [True]},
+    {"schema": exports._PRELOAD_TUPLE_DAG_SCHEMA, "nodes": [[]], "roots": [1]},
+    {"schema": exports._PRELOAD_TUPLE_DAG_SCHEMA, "nodes": [[]], "roots": [0], "extra": []},
+])
+def test_preload_tuple_dag_rejects_malformed_nodes_and_references(bad):
+    with pytest.raises(ValueError, match="invalid indexed preload tuple DAG"):
+        exports._decode_preload_tuple_dag(bad)
+    rows = [(name, bad if name == "T" else value) for name, value in _rows()]
+    text = _document(rows).replace(exports._NATIVE_EXPORT_INDEXED_SCHEMA,
+                                   exports._NATIVE_EXPORT_INDEXED_DAG_SCHEMA, 1)
+    with pytest.raises(ValueError, match="invalid indexed frontend native export metadata"):
+        exports._read_indexed_native_exports_wire(text, "root")
+
+
+def test_versioned_dag_writer_preserves_v1_semantics_and_raw_module_inventory(tmp_path, monkeypatch):
+    native = {"root": {}, "dep": {}}
+    descriptors = tuple(("class", "C" + str(index), "dep", (("field", ("int", 64, True)),), ())
+                        for index in range(exports._PRELOAD_TUPLE_DAG_MIN_TYPES))
+    preload = {"types": descriptors, "base_keys": (("dep.C0", 0),),
+               "roots": {"root": ((), ()), "dep": (("dep.C0",), ())}}
+    options = dict(module_dependencies={"root": ("dep",)}, unique_class_preload_index=preload)
+    path = tmp_path / "dag.indexed"
+    exports._write_native_exports_wire(str(path), native, {}, **options)
+    dag_text = path.read_text()
+    assert exports._indexed_native_export_schema(dag_text) == exports._NATIVE_EXPORT_INDEXED_DAG_SCHEMA
+    raw_dag = exports._read_native_exports_wire_raw_modules(str(path))
+    monkeypatch.setattr(exports, "_PRELOAD_TUPLE_DAG_MIN_TYPES", len(descriptors) + 1)
+    old = tmp_path / "old.indexed"
+    exports._write_native_exports_wire(str(old), native, {}, **options)
+    old_text = old.read_text()
+    assert exports._indexed_native_export_schema(old_text) == exports._NATIVE_EXPORT_INDEXED_SCHEMA
+    assert raw_dag == exports._read_native_exports_wire_raw_modules(str(old))
+    for root in ("", "root", "dep"):
+        assert exports._read_indexed_native_exports_wire(dag_text, root) == (
+            exports._read_indexed_native_exports_wire(old_text, root))
+    # Mutable / unsupported legacy descriptors never enter the DAG transport.
+    monkeypatch.setattr(exports, "_PRELOAD_TUPLE_DAG_MIN_TYPES", 0)
+    preload["types"] = (("legacy", {"field": 1}),)
+    exports._write_native_exports_wire(str(path), native, {}, **options)
+    assert exports._indexed_native_export_schema(path.read_text()) == exports._NATIVE_EXPORT_INDEXED_SCHEMA
+
+
+def test_preload_tuple_dag_bounds_logical_tree_work_and_writer_fallback(monkeypatch):
+    data = (("class", "C", ("int", 64, True)),) * 4
+    encoded = exports._encode_preload_tuple_dag(data)
+    assert exports._decode_preload_tuple_dag(encoded) == data
+    monkeypatch.setattr(exports, "_PRELOAD_TUPLE_DAG_MAX_EXPANDED_ITEMS", 20)
+    with pytest.raises(ValueError, match="DAG expansion"):
+        exports._decode_preload_tuple_dag(encoded)
+    assert exports._encode_preload_tuple_dag(data) is None
+    monkeypatch.setattr(exports, "_PRELOAD_TUPLE_DAG_MAX_EXPANDED_ITEMS", 1000)
+    monkeypatch.setattr(exports, "_PRELOAD_TUPLE_DAG_MAX_DEPTH", 1)
+    with pytest.raises(ValueError, match="DAG expansion"):
+        exports._decode_preload_tuple_dag(encoded)
+    assert exports._encode_preload_tuple_dag(data) is None
