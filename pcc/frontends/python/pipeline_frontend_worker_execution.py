@@ -1048,7 +1048,27 @@ def run_codegen_worker(
                             input_receipt_capture = begin_capture(
                                 direct_module, input_receipt_context, direct_passes,
                             )
-                        if direct_lines_output:
+                        # A Darwin object whose emitter input is unchanged is
+                        # reused (pcc/frontends/python/direct_object_cache.py).
+                        direct_cache_path = ""
+                        direct_cached_object = None
+                        if (
+                            direct_lines_output
+                            and is_aarch64_darwin_triple(direct_target)
+                            and input_receipt_capture is None
+                        ):
+                            from pcc.frontends.python import direct_object_cache
+
+                            direct_cache_path = direct_object_cache.cache_path(
+                                direct_module, direct_target, ir_dir, index,
+                            )
+                            direct_cached_object = direct_object_cache.read(direct_cache_path)
+                        if direct_cached_object is not None:
+                            if worker_timing:
+                                sys.stderr.write(
+                                    "pcc direct object cache hit module=" + module_name + "\n"
+                                )
+                        elif direct_lines_output:
                             if phase_timing is not None:
                                 phase_timing.route = "indexed-native-sections"
                             phase_started = phase_timing.start() if phase_timing is not None else 0
@@ -1208,6 +1228,9 @@ def run_codegen_worker(
                                     direct_stack_map_plans.clear()
                                     if not validate_direct:
                                         direct_asm = ""
+                                elif direct_cached_object is not None:
+                                    encoded = direct_cached_object
+                                    direct_cached_object = b""
                                 else:
                                     if direct_lines_output:
                                         phase_started = phase_timing.start() if phase_timing is not None else 0
@@ -1243,6 +1266,10 @@ def run_codegen_worker(
                                 phase_started = phase_timing.start() if phase_timing is not None else 0
                                 with open(direct_path, "wb") as stream:
                                     stream.write(encoded)
+                                if direct_cache_path and direct_cached_object is None:
+                                    from pcc.frontends.python import direct_object_cache
+
+                                    direct_object_cache.store(direct_cache_path, encoded)
                                 if phase_timing is not None:
                                     phase_timing.add(11, phase_started)
                                 if checkpoint_root or host_batch:
