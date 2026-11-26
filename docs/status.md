@@ -1397,6 +1397,37 @@ in the relevant section or issue and removes the entry.
        calls, and the diagnostics-log call `py_obj_getattr` makes while the
        log is off; about 1.2 us of json's 6.8 (self-time guess). Parts in
        `py_list.py` wait for the (d) 4b claim.
+   Empty root-clear experiment (Codex, Linux, same actual handler source
+   and diagnostic arms as below): retire private operand roots on checked
+   success after `pcc_gc_root_move` or after each unpack item has already
+   been explicitly cleared, preserving flag and frame leave order. Static
+   actual gateway baseline had 56 adjacent redundant clear pairs, mostly
+   sequence unpack. Native instrumented handler C20 10/50 delta800,
+   five exact w1 pairs: store_root 308.05125 -> 300.05125, empty clear
+   108.30 -> 100.30, all other counters exactly equal. w4 medians
+   315.46 -> 307.325, empty 114.74125 ->106.71. Primitive fixed-count
+   screen localized all eight to JSON (58 ->50 roots, 16 ->8 empty clears;
+   allocation and refcount entries equal); other 27 primitives unchanged
+   except noise in multithread scheduler counters. Native own-root
+   finalizer/exception witness passes; 47 focused host passes and the same
+   eight failures as exact base, one new IR success/failed-move test passes.
+   Uninstrumented C100x300 5 A/B+control: w1 QPS 17850 ->19336,
+   duplicate base control19481, CPU us 56.93 ->52.26 control52.49 (4/5);
+   w4 38964 ->41747 control39877, CPU96.51 ->89.06 control94.23 (3/5).
+   JSON fixed 30k timed + 30k warm operations, pinned process CPU us/op
+   21.252 ->18.648, duplicate base18.361, 2/5, exact checksum & allocations.
+   Thus no stable incremental speed beyond control; not merged.
+   RSS apparent +6 MiB was file residency, not heap: smaps Pss_File
+   10544 ->16452 KiB while anonymous8888 ->8896. After fsync and
+   POSIX_FADV_DONTNEED on both owned artifacts, two pairs w1 total
+   19290 ->19356 KiB, anonymous8790 ->8788; w4 total26164 ->25548.
+   Preserve this control for future native A/B. Next: JSON `_encode_object`
+   and `_encode_array` use sequence unpack; `_store_unpack_root_target`
+   returns no proof even when its checked successful move empties source,
+   so both the caller's immediate clear and final release repeat work.
+   Make successful ownership transfer explicit, combine both eliminations
+   with other actual high-count sites, then measure five paired real JSON
+   and handler CPU/QPS and memory with an equalized file-residency control.
    Linux handler measurement (Codex, 2026-11-26, base e5a2ca85 plus
    facade dispatch fix now `1820d5fd`, gateway `b1490486`, host CPython
    3.13.5 self native ELF; full handler smoke passes 1/4 carriers):
@@ -2153,7 +2184,6 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
-   - Eliminate provably empty root clear calls, compiler IR pass or local proof (disjoint generator files): Codex, Linux, 2026-11-26T16:10Z, area runtime-codegen
    - J2 delegated park handoff proof and shared frame-save design (generator_lowering, disjoint from call-dispatch, runtime and Stage2 preload): Codex, Linux, 2026-11-26T16:00Z, area frontend-python
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
