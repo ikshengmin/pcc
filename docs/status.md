@@ -2017,6 +2017,50 @@ in the relevant section or issue and removes the entry.
        before existing frame saves, and verify that publication, callback
        order, stack-map identity and resumed child ownership stay exact;
        then reconsider shared save-prefix or park-live-slot reduction.
+       J2 delegated park handoff (Codex, Linux, 2026-11-26): one
+       registered activation-only owner cell receives the freshly yielded
+       child result after scalar return/null checks; the persistent child
+       slot is not changed. No intervening call before publication; the
+       existing shared park exit takes the result after its unchanged
+       cleanup. A common exact entry slot/flag save prefix dispatches to
+       each original suffix only after the primary resume switch's case
+       span is complete (direct indexed capture). Broad admission rejected:
+       it affected hot small scheduler functions. Admit only >=64 static
+       slots and >=16 lexically proven delegate sites, not ordinary yield
+       or await. In the actual gateway b1490486a closure, only the large
+       proxy resume qualifies: 95,620 -> 84,228 IR lines (-11.9%),
+       9,852 -> 4,044 static frame moves (-59%); whole closure
+       1,172,323 -> 1,160,931 lines. Native_stats, TaskScope and primitive
+       modules remain byte-identical. The isolated actual x86 proxy object
+       shrinks 3,428,824 -> 3,144,576 bytes (-8.3%). Toggle
+       PCC_GENERATOR_SHARED_FRAME_SAVE=0 is in the frontend cache key;
+       disabled fixture IR and actual executable are byte-identical to
+       their original baseline. Linux source-matched native text/direct
+       20-site fixtures on one/four carriers preserve child ownership,
+       aliases, error and finalizer output; ordinary generator/coroutine
+       send/throw/close matches CPython. Host adjacent gates 98 passes vs
+       baseline 90, same 34 pre-existing failures; cross-target owned
+       Darwin emission passes (not a Mac runtime test). Compiler closure
+       contextual probe (624 sources) changed generator module fallback
+       count zero; not a complete Stage1 bootstrap.
+       Real proxy owner backend emission, five alternating quiet Linux
+       CPU-pinned pairs, 19.984 -> 18.038 s (-9.74%, 5/5); unchanged
+       control 2.001 -> 2.053 s (2.68% median absolute paired drift),
+       control-normalized median -12.53%, 5/5. Both owner arms and the
+       control are byte-stable within arm. A first loaded five-pair run
+       was noisy and cannot establish speed. Single cold native gateway
+       build 117.76 -> 114.59 s wall, 287.09 -> 270.61 s CPU, not a
+       five-pair full-build result. Handler C100 x300 five pairs w1
+       19,899 -> 20,789 QPS, 50.80 -> 49.29 us CPU/request, control
+       20,308/50.28; w4 38,622 -> 36,712, 96.74 -> 101.08, control
+       37,917/97.25. The longer isolated w4 C100 x1000 five-pair repeat
+       after equal file-cache treatment went 36,637 -> 38,769 QPS,
+       98.08 -> 95.19 us, control 38,314/96.19 (4/5 raw wins for both).
+       Opposite noisy throughput effects are not a reproducible handler
+       speedup/regression; no QPS benefit claimed. The admitted result
+       is the measured backend-owner compile CPU/object reduction only.
+       Next: park-live-slot reduction by proof, or a single error landing
+       per function without adding hot-path ownership work.
    J2s. Stage1 compile time (the user, 2026-11-26: target five minutes,
        six workers). A macOS Stage1 on dcc443bcf's tree took 2163 s wall
        under host load and 8795 s CPU; its 622 codegen workers took about
@@ -2215,7 +2259,6 @@ in the relevant section or issue and removes the entry.
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
    - Linux actual reference-count entry categories (tagged/null/immortal/terminal, diagnostic only): Codex, Linux, 2026-11-26T16:37Z, area runtime-gc
-   - J2 delegated park handoff proof and shared frame-save design (generator_lowering, disjoint from call-dispatch, runtime and Stage2 preload): Codex, Linux, 2026-11-26T16:00Z, area frontend-python
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:

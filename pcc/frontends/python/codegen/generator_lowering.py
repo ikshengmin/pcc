@@ -72,6 +72,11 @@ _STOP_ITERATION_TAG = 8
 
 _GENERATOR_OPERAND_ROOT_GROUP_SIZE = 16
 _GENERATOR_TERMINAL_CLEAR_GROUP_SIZE = 16
+# Performance admission only, not an ownership proof. Restrict additional
+# park control flow to large static frames with many proven delegate sites;
+# small hot request/scheduler functions keep their original inline saves.
+_SHARED_DELEGATE_MIN_STATIC_SLOTS = 64
+_SHARED_DELEGATE_MIN_SITES = 16
 
 
 def generator_operand_root_group(host, slot):
@@ -517,6 +522,57 @@ def emit_generator_may_park_sync(
     return native_result
 
 
+def _delegated_park_handoff_slot(host):
+    """One activation-only owner cell for a delegate's fresh yielded result.
+
+    Unlike the persistent child-frame slot, this cell is never saved: its
+    sole nonnull store lies on a park edge and that edge has no continuation
+    or error branch before the existing yielded-result take. Each resume
+    activation initializes it to NULL and registers it before any body call.
+    """
+    ctx = host._generator_ctx_stack[-1]
+    if (ctx.get("frame_slot_prefix_count", 0) < _SHARED_DELEGATE_MIN_STATIC_SLOTS
+            or ctx.get("delegate_site_count", 0) < _SHARED_DELEGATE_MIN_SITES
+            or str(os.environ.get("PCC_GENERATOR_SHARED_FRAME_SAVE", "1") or "1").strip() == "0"
+            or str(os.environ.get("PCC_GENERATOR_SHARED_EXIT", "1") or "1").strip() == "0"
+            or any(entry[0] is host.current_function for entry in host._handled_exception_scopes)
+            or host._generator_frame_helper("set").name != "py_gen_frame_set"):
+        return None
+    for record in host._fn_valueclass_payload_root_slots.get(host.current_function.name, ()):
+        if not record[3]:
+            return None
+    # A park that cannot share its exact leading save plan buys nothing
+    # from this extra registered cell. Check the same conservative flag
+    # inventory before allocating it; the save emitter validates again.
+    prefix_count = ctx["frame_slot_prefix_count"]
+    skipped = ctx.get("cpy_skip_save_names", ())
+    for name, (index, slot) in ctx["frame_slots"].items():
+        if index >= prefix_count:
+            break
+        if (name in skipped or name not in host._owned_local_names
+                or name not in host._owned_local_has_value
+                or host._owned_local_flag_allocas.get(name) is not slot
+                or host._owned_local_flag_slots.get(name) is None):
+            return None
+    entry = ctx.get("delegated_park_handoff")
+    if entry is not None:
+        name, slot = entry
+        # Structured lowering may restore a cloned lexical environment.
+        # The activation root registry owns the original slot, regardless.
+        if name not in host.env:
+            host.env[name] = (slot, _CSTR, DynType(name="dyn"))
+        return slot
+    name = host._fresh("gen.delegate.handoff")
+    slot = host._alloca_in_entry(_CSTR, name=name, init_null=True)
+    host.env[name] = (slot, _CSTR, DynType(name="dyn"))
+    # This slot is an owning frame root while the yielded value crosses the
+    # save/cleanup calls. It is not a source local or a persistent operand:
+    # ordinary local cleanup must not drop the owner before the handoff.
+    host._ensure_local_gc_frame_root(name, slot, _CSTR, host._gc_one_slot_frame_map())
+    ctx["delegated_park_handoff"] = (name, slot)
+    return slot
+
+
 def emit_generator_may_park_child(
     host,
     expr: Call,
@@ -668,9 +724,18 @@ def emit_generator_may_park_child(
     child_unwind_bb = parent_fn.append_basic_block(
         name=host._fresh("vthread.delegate.child.unwind")
     )
+    handoff_slot = _delegated_park_handoff_slot(host)
+    if handoff_slot is not None:
+        # From py_gen_next_direct's fresh owner to this edge the only
+        # emitted instructions are scalar loads, comparisons and branches.
+        # No intervening call may collect, finalize, or inspect the value.
+        # The cell starts NULL on every activation and every publication
+        # terminates in exactly one take; a raw store transfers this owner.
+        host.builder.store(yielded, handoff_slot)
     host._emit_generator_yield_value(
         yielded,
         resume_err_target=child_unwind_bb,
+        result_slot=handoff_slot,
     )
     resume_ok_bb = host.builder._block
     host.builder.position_at_end(child_unwind_bb)
@@ -2201,6 +2266,7 @@ class GeneratorLoweringMixin:
         self,
         fd: FuncDef,
         owner_class_name: Optional[str] = None,
+        delegate_sites=None,
     ) -> list[str]:
         names: list[str] = []
         global_names = self._collect_explicit_global_names(fd.body)
@@ -2395,6 +2461,8 @@ class GeneratorLoweringMixin:
                     )
                     if hidden not in names:
                         names.append(hidden)
+                    if delegate_sites is not None:
+                        delegate_sites.add(hidden)
                 elif (
                     isinstance(node, Call)
                     and isinstance(node.func, Name)
@@ -2409,6 +2477,8 @@ class GeneratorLoweringMixin:
                     hidden = vthread_delegate_frame_name(node, node.func.ident)
                     if hidden not in names:
                         names.append(hidden)
+                    if delegate_sites is not None:
+                        delegate_sites.add(hidden)
                 elif isinstance(node, Call) and isinstance(node.func, Attr):
                     method_key = vthread_proven_method_call_key(
                         node,
@@ -2425,6 +2495,8 @@ class GeneratorLoweringMixin:
                         )
                         if hidden not in names:
                             names.append(hidden)
+                        if delegate_sites is not None:
+                            delegate_sites.add(hidden)
                         # A local method cannot simultaneously be a compiled
                         # sibling module export, so skip that independent
                         # resolution path.
@@ -2451,6 +2523,8 @@ class GeneratorLoweringMixin:
                         )
                         if hidden not in names:
                             names.append(hidden)
+                        if delegate_sites is not None:
+                            delegate_sites.add(hidden)
                         for slot_name in _dataclass_field_names(node):
                             if slot_name == "span":
                                 continue
@@ -2475,6 +2549,8 @@ class GeneratorLoweringMixin:
                             )
                             if hidden not in names:
                                 names.append(hidden)
+                            if delegate_sites is not None:
+                                delegate_sites.add(hidden)
                 for slot_name in _dataclass_field_names(node):
                     if slot_name == "span":
                         continue
@@ -2505,9 +2581,11 @@ class GeneratorLoweringMixin:
         owner_class_name = None
         if class_info is not None:
             owner_class_name = class_info.name
+        delegate_sites: set[str] = set()
         frame_names = self._collect_generator_frame_names(
             fd,
             owner_class_name,
+            delegate_sites,
         )
         if worker_timing:
             sys.stderr.write(
@@ -2527,6 +2605,7 @@ class GeneratorLoweringMixin:
             symbol_name,
             class_info,
             method_kind,
+            len(delegate_sites),
         )
         if worker_timing:
             sys.stderr.write(
@@ -2728,6 +2807,7 @@ class GeneratorLoweringMixin:
         symbol_name: Optional[str] = None,
         class_info=None,
         method_kind: Optional[str] = None,
+        delegate_site_count: int = 0,
     ) -> ir.Function:
         base_name = symbol_name or self._user_symbol(fd.name)
         name = f"{base_name}__gen_resume"
@@ -2889,6 +2969,8 @@ class GeneratorLoweringMixin:
                 "resume_function": fn,
                 "frame_root": frame_root,
                 "frame_slots": frame_slots,
+                "frame_slot_prefix_count": len(frame_slots),
+                "delegate_site_count": delegate_site_count,
                 "frame_names": frame_names,
                 "dispatch_bb": dispatch_bb,
                 "switch": switch_inst,
@@ -3008,6 +3090,19 @@ class GeneratorLoweringMixin:
 
     def _emit_generator_shared_exits(self, ctx) -> None:
         """Fill the shared exits once the body has registered every slot."""
+        # Finish each deferred save dispatch only now. The direct indexed
+        # switch representation stores one contiguous case span: interleaving
+        # its cases with the resume dispatch's cases while lowering the body
+        # would corrupt both spans. All resume cases are complete here.
+        for info in ctx.get("shared_frame_saves", {}).values():
+            self.builder.position_at_end(info[0])
+            cases = info[3]
+            if len(cases) == 1:
+                self.builder.branch(cases[0][1])
+            else:
+                dispatch = self.builder.switch(info[1], cases[0][1])
+                for state_id, target in cases[1:]:
+                    dispatch.add_case(ir.Constant(_I64, state_id), target)
         exits = ctx.get("shared_exits", {})
         for kind in ("park", "finish"):
             shared = exits.get(kind)
@@ -3104,17 +3199,13 @@ class GeneratorLoweringMixin:
         )
         return value
 
-    def _emit_generator_save_frame(self) -> None:
-        ctx = self._generator_ctx_stack[-1]
-        # One load serves the whole save: its runtime calls reach no gate.
-        frame = self._generator_current_frame(ctx)
-        # cpy for-loop targets hold raw libpython pointers while their
-        # loop is being emitted; those must never be stored into the
-        # frame py_list (its barriers/dealloc dereference pcc headers).
-        # The cpy for lowering proves the name is not read across a
-        # suspension before registering it here.
+    def _generator_frame_save_plan(self, ctx):
+        # cpy for-loop targets hold raw libpython pointers while their loop
+        # is being emitted; the lowering proves that these names are not read
+        # across a suspension before registering them here.
         skip_names = ctx.get("cpy_skip_save_names", ())
         move_owned = self._generator_frame_helper("set").name == "py_gen_frame_set"
+        plan = []
         for name, (idx, slot) in ctx["frame_slots"].items():
             if name in skip_names:
                 continue
@@ -3122,6 +3213,13 @@ class GeneratorLoweringMixin:
                     if (move_owned and name in self._owned_local_names
                         and name in self._owned_local_has_value
                         and self._owned_local_flag_allocas.get(name) is slot) else None)
+            plan.append((idx, slot, flag))
+        return plan
+
+    def _emit_generator_frame_save_plan(self, ctx, plan) -> None:
+        # One load serves the whole save: its runtime calls reach no gate.
+        frame = self._generator_current_frame(ctx)
+        for idx, slot, flag in plan:
             if flag is not None:
                 # The activation cleanup that follows would release this
                 # owned local: move its reference into the frame instead of
@@ -3141,6 +3239,62 @@ class GeneratorLoweringMixin:
                 self._generator_frame_helper("set"),
                 [frame, ir.Constant(_I64, idx), value],
             )
+
+    def _emit_generator_save_frame(self) -> None:
+        ctx = self._generator_ctx_stack[-1]
+        self._emit_generator_frame_save_plan(ctx, self._generator_frame_save_plan(ctx))
+
+    def _generator_store_park_exit(self, shared, state_id, result_slot, value) -> None:
+        self.builder.store(ir.Constant(_I64, state_id), shared["state"])
+        if result_slot is not None:
+            self.builder.store(self._as_gc_ptr(result_slot), shared["take"])
+            self.builder.store(ir.Constant(_CSTR, None), shared["value"])
+        else:
+            self.builder.store(ir.Constant(_CSTR, None), shared["take"])
+            self.builder.store(value, shared["value"])
+
+    def _emit_shared_generator_frame_save(self, ctx, shared, state_id, result_slot, value) -> bool:
+        """Share the static frame-save prefix of parks with the same owners.
+
+        The early shared edge reaches the same root-stack state as the
+        existing shared park exit: no handled exception scopes, and the
+        frame save itself enters/leaves no activation root frames. The
+        dedicated registered delegate handoff carries the fresh owner.
+        The park-specific suffix keeps exactly its original slots and flags.
+        """
+        count = ctx["frame_slot_prefix_count"]
+        plan = self._generator_frame_save_plan(ctx)
+        # An omitted initial slot (e.g. the yielded owner) or any non-owned
+        # prefix entry keeps the original inline save. Since the prefix was
+        # registered at entry, its exact slot/flag identities dominate all
+        # eligible parks.
+        prefix = plan[:count]
+        if len(prefix) != count:
+            return False
+        for index, (position, _slot, flag) in enumerate(prefix):
+            if position != index or flag is None:
+                return False
+        key = tuple((id(slot), id(flag)) for _idx, slot, flag in prefix)
+        saved = ctx.setdefault("shared_frame_saves", {})
+        info = saved.get(key)
+        suffix = self.current_function.append_basic_block(self._fresh("gen.save.suffix"))
+        self._generator_store_park_exit(shared, state_id, result_slot, value)
+        if info is None:
+            block = self.current_function.append_basic_block(self._fresh("gen.save.shared"))
+            self.builder.branch(block)
+            self.builder.position_at_end(block)
+            self._emit_generator_frame_save_plan(ctx, prefix)
+            state = self.builder.load(shared["state"], name=self._fresh("gen.save.state"))
+            # The terminator and all its cases are emitted together after
+            # the main resume dispatch has received its last case.
+            saved[key] = (block, state, prefix, [(state_id, suffix)])
+        else:
+            self.builder.branch(info[0])
+            info[3].append((state_id, suffix))
+        self.builder.position_at_end(suffix)
+        if len(plan) > count:
+            self._emit_generator_frame_save_plan(ctx, plan[count:])
+        return True
 
     def _emit_generator_stop_iteration(
         self,
@@ -3288,13 +3442,27 @@ class GeneratorLoweringMixin:
         saved_skip = ctx.get("cpy_skip_save_names", ())
         if result_name is not None:
             ctx["cpy_skip_save_names"] = tuple(saved_skip) + (result_name,)
-        self._emit_generator_save_frame()
+        shared = None
+        shared_save = False
+        # Only the previously admitted, dedicated delegated-owner cell
+        # uses this early common save edge. Ordinary yields, await outputs
+        # and small hot virtual-thread functions retain the inline program.
+        handoff = ctx.get("delegated_park_handoff")
+        if handoff is not None and result_slot is handoff[1]:
+            shared = self._generator_shared_exit(ctx, "park")
+            if shared is not None:
+                shared_save = self._emit_shared_generator_frame_save(
+                    ctx, shared, state_id, result_slot, value,
+                )
+        if not shared_save:
+            self._emit_generator_save_frame()
         ctx["cpy_skip_save_names"] = saved_skip
         if worker_timing:
             sys.stderr.write("pcc frontend generator yield save-frame done\n")
             sys.stderr.write("pcc frontend generator yield cleanup start\n")
         self._emit_suspend_handled_exception_scopes()
-        shared = self._generator_shared_exit(ctx, "park")
+        if shared is None:
+            shared = self._generator_shared_exit(ctx, "park")
         if shared is not None:
             # The shared park exit releases the union of every park's owned
             # locals, each by its flag; clear the yielded owner's flag so it
@@ -3305,13 +3473,8 @@ class GeneratorLoweringMixin:
                 if result_flag is not None:
                     self.builder.store(ir.Constant(_I1, 0), result_flag)
             self._emit_generator_add_case(state_id, cont_bb)
-            self.builder.store(ir.Constant(_I64, state_id), shared["state"])
-            if result_slot is not None:
-                self.builder.store(self._as_gc_ptr(result_slot), shared["take"])
-                self.builder.store(ir.Constant(_CSTR, None), shared["value"])
-            else:
-                self.builder.store(ir.Constant(_CSTR, None), shared["take"])
-                self.builder.store(value, shared["value"])
+            if not shared_save:
+                self._generator_store_park_exit(shared, state_id, result_slot, value)
             self.builder.branch(shared["block"])
             self.builder.position_at_end(cont_bb)
         else:
