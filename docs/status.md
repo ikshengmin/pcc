@@ -920,8 +920,29 @@ in the relevant section or issue and removes the entry.
    padding probe, and preserved independent G++ evidence. No fixture,
    expectations, compiler policy or CI guard weakened.
 
+   Exact previously failed shared ordinary coverage receipt15145043938
+   (run45856871699 source6cbafc4a): lane10489, 5411 PASS,68 true
+   failures,2 interrupted,170 prerequisites UNRUN,4838 unattempted
+   after guard anomaly. Cross-module None-return ABI fixture one actual
+   failure: uninstalled checkout script scripts/pcc_multi.py could not
+   import pcc. Reproduced exact original node after clearing inherited
+   PYTHONPATH locally (1 fail/1 PASS); bind checkout root explicitly
+   only to existing script subprocess, same command and cwd. Actual
+   returned combined IR still verifies every declare/define return
+   match, sync None void, async None coroutine ptr, and direct call
+   ABI, unchanged assertions. Whole affected file 2/2 PASS; guard
+   COMPLETE4.118s/110710784 B under unchanged90s/1GiB. No compiler
+   production, test expectation or resource policy change.
+   Remaining actual failures grouped by source file: Darwin TLS default
+   signing16; freestanding errno LLVM2; frame registry LLVM1 and flags1;
+   generator bulk2/init1/owner transfer2 removed selector; generator
+   frame root initialization25; handoff receipt1; imported constructor
+   pinned ABI6; Darwin closed-world ownership1; industrial worker
+   memory1; IR scaffold integer8. Independent corrections pending;
+   no hosted lane acceptance inferred.
+
    Claims:
-   - cross-module None-return ABI fixture explicit uninstalled checkout import root: Codex, Linux, 2026-11-26T19:17Z, area ci-cross-module-reference-import
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and

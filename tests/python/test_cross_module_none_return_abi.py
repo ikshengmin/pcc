@@ -123,11 +123,15 @@ def _repo_root() -> Path:
     raise RuntimeError("AGENTS.md not found above " + __file__)
 
 
-def test_cross_module_declarations_match_definitions(tmp_path):
+def test_cross_module_declarations_match_definitions(tmp_path, monkeypatch):
+    # Hosted source lanes intentionally install only dependencies, not pcc.
+    # This child must not depend on a caller's inherited PYTHONPATH.
+    monkeypatch.delenv("PYTHONPATH", raising=False)
     (tmp_path / "helper_mod.py").write_text(HELPER, encoding="utf-8")
     (tmp_path / "main.py").write_text(MAIN, encoding="utf-8")
     out = tmp_path / "toy_ir"
-    env = os.environ.copy()
+    root = _repo_root()
+    env = dict(os.environ, PYTHONPATH=str(root))
     env.pop("LC_ALL", None)
     build = subprocess.run(
         [
@@ -138,7 +142,7 @@ def test_cross_module_declarations_match_definitions(tmp_path):
             f"{tmp_path / 'helper_mod.py'}=helper_mod",
         ],
         text=True, capture_output=True, timeout=280, env=env,
-        cwd=str(_repo_root()),
+        cwd=str(root),
     )
     assert build.returncode == 0, build.stderr[-2000:]
 
