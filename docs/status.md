@@ -1405,6 +1405,31 @@ in the relevant section or issue and removes the entry.
        calls, and the diagnostics-log call `py_obj_getattr` makes while the
        log is off; about 1.2 us of json's 6.8 (self-time guess). Parts in
        `py_list.py` wait for the (d) 4b claim.
+   Actual RC category attribution (Codex, Linux x86_64, same native handler
+   source e5a2ca85 plus facade fix `1820d5fd`, gateway b1490486):
+   diagnostic-only 29 atomic entry/branch counters in py_obj, C20
+   (50-10) rounds delta800 requests, 5 alternating pairs, w1 identical.
+   `pcc_gc_retain_known` 96.60/request: NULL27.50, tagged5.20, immortal
+   58.75, actual increment5.15 (94.7% no-op). `pcc_gc_release_known`
+   174.20125: NULL64.10, tagged5.00125, immortal74.90, decrement30.20
+   (82.7% no-op), 29.20 nonterminal/1.00 terminal. No verify, negative
+   or nonpositive fallback. Known combined 270.80 entries, 235.45 no-op
+   (86.9%); do not add to checked APIs as independent cost.
+   `py_incref`118.2525: NULL7, tagged1.0025, fast immortal26.4, atomic
+   46.75, checked tail37.1. `py_decref`230.75: NULL21.1, tagged0,
+   fast immortal99.5, CAS nonterminal38.6, checked tail71.55.
+   w4 medians known retain96.05 (27.5 NULL,5.10 tagged,58.3 immortal,
+   actual5.15); known release189.90 (80.34 NULL,5.06 tagged,74.45
+   immortal, actual30.2, terminal1). Checked inc119.42 and dec232.17.
+   Native probe binary SHA564bc14fa0512c7ef4505221cc6e8c152ec1dacea44ef96b6c2d075aa09dbc36;
+   input/output handler verified, diagnostic timings not used, no source
+   instrumentation published. Next high ROI: quantify statically provable
+   tagged/null/immortal SSA and proven immortal root loads. `_gc_retain`
+   presently emits a call even when `_value_is_never_gc_object` is true
+   (the same exact emitter-owned proof already suppresses `_gc_release`).
+   Test symmetric retain-elision as a narrow slice, but only measure
+   actual call-count reduction, cost and 5 A/B+control; do not assume all
+   runtime immortal/NULL cases have compile-time proof.
    Second empty-root experiment (Codex, Linux): narrower real JSON
    sequence-unpack candidate, `_store_unpack_root_target` returns true
    only after checked move into local; immediate clear omitted only then,
@@ -2258,7 +2283,6 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
-   - Linux actual reference-count entry categories (tagged/null/immortal/terminal, diagnostic only): Codex, Linux, 2026-11-26T16:37Z, area runtime-gc
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
