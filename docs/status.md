@@ -185,6 +185,14 @@ Stage1 on either platform; Linux x86-64 and Windows did. No fixed point proved.
 answers here or in chat; the agent that next takes the unit records the answer
 in the relevant section or issue and removes the entry.
 
+- Item 3 (empty-root clear, Codex 2026-11-26): two actual native A/B
+  rounds removed eight confirmed redundant operations or proved both
+  sequence-unpack clear sites redundant, but no reproducible CPU/QPS
+  gain beyond duplicate control. Do not merge either as a speed unit.
+  Options: keep them rejected, or admit exact count reduction as a
+  correctness-checked mechanical simplification in a measured larger
+  bundle. Recommendation: defer this slice and attack RC/TLS first.
+
 - Item 1, issues #9, #4 and #8 (asked by Claude, 2026-11-24). They describe
   collectors 1-4, which no longer exist: #9 weak callbacks and finalizers
   under acyclic resurrection on GC1-4, #4 a GC3 timeout with four carriers,
@@ -1397,6 +1405,28 @@ in the relevant section or issue and removes the entry.
        calls, and the diagnostics-log call `py_obj_getattr` makes while the
        log is off; about 1.2 us of json's 6.8 (self-time guess). Parts in
        `py_list.py` wait for the (d) 4b claim.
+   Second empty-root experiment (Codex, Linux): narrower real JSON
+   sequence-unpack candidate, `_store_unpack_root_target` returns true
+   only after checked move into local; immediate clear omitted only then,
+   other target kinds still release, final dedicated item frames retire
+   flags/LIFO without second clear. Exact native mixed local/subscript
+   assignment, finalizer and short-iterable exception witness passes,
+   CPython parity, new IR failure/leave proof; 42 focused host pass with
+   exact two existing red and nine deselected. Handler smoke passes.
+   Static proof removes both redundant calls for checked local moves;
+   no fresh dynamic count for this second candidate. Equalized native
+   files with fsync/fadvise, warm both. JSON fixed-count 5 pairs CPU
+   18.252 ->18.087 us/op, duplicate base17.991, 3/5; unchanged dict
+   control0.841 ->0.907, duplicate0.856. Actual handler C100x300 w1
+   QPS21465 ->21187, duplicate19083; CPU47.79 ->48.09 dupe53.81.
+   w4 first: QPS38034 ->43302, dupe38608 (4/5), CPU98.22 ->86.62
+   dupe95.40. Longer repeat C100x1000 did not reproduce: QPS40323
+   ->38895 dupe38611, CPU92.17 ->95.45 dupe96.55. Allocation counts
+   and output equal, equalized RSS within control. No stable speed gain,
+   not merged. After two screened empty-root elimination units stop
+   this sub-area until the maintainer decides whether to bundle exact
+   work removal below timing floor. Next independent runtime ownership
+   target: quantify RC and TLS accesses, not redo these two candidates.
    Empty root-clear experiment (Codex, Linux, same actual handler source
    and diagnostic arms as below): retire private operand roots on checked
    success after `pcc_gc_root_move` or after each unpack item has already
@@ -2184,7 +2214,6 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
-   - JSON sequence-unpack checked owner transfer: remove both provably empty clears (assignment_store/statement lowering only): Codex, Linux, 2026-11-26T16:29Z, area runtime-codegen
    - J2 delegated park handoff proof and shared frame-save design (generator_lowering, disjoint from call-dispatch, runtime and Stage2 preload): Codex, Linux, 2026-11-26T16:00Z, area frontend-python
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
