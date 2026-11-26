@@ -476,16 +476,24 @@ def test_install_blocks_libpython_linked_artifact_in_pcc_native_mode(tmp_path):
     assert Path(result["manifest_path"]).exists()
     assert not (tmp_path / "cache" / "demo_pkg" / "pcc-package.json").exists()
 
-    compat = install_package(
-        str(wheel),
-        target_dir=tmp_path / "site_libpython",
-        cache_dir=tmp_path / "cache_libpython",
-        abi="libpython",
-    )
-    assert compat["ok"] is True
-    assert compat["links_libpython"] is True
-    assert compat["no_libpython_runtime"] is False
-    assert (tmp_path / "cache_libpython" / "demo_pkg" / "pcc-package.json").exists()
+    # The direct libpython route is retired. A legacy ABI label (including
+    # CPython extension compatibility without libpython) cannot bypass the
+    # same artifact edge rejection or create a successful package cache row.
+    for abi, suffix in (("libpython", "libpython"), ("cpython-compat", "compat")):
+        cache = tmp_path / ("cache_" + suffix)
+        compat = install_package(
+            str(wheel),
+            target_dir=tmp_path / ("site_" + suffix),
+            cache_dir=cache,
+            abi=abi,
+        )
+        assert compat["ok"] is False
+        assert compat["links_libpython"] is True
+        assert compat["no_libpython_runtime"] is False
+        assert compat["link_libpython_edges"]
+        assert compat["diagnostics"][0]["code"] == "PCC-PKG-003"
+        assert Path(compat["manifest_path"]).exists()
+        assert not (cache / "demo_pkg" / "pcc-package.json").exists()
 
 
 def test_install_blocks_cpython_extension_abi_in_pcc_native_mode(tmp_path):
