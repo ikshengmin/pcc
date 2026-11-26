@@ -154,12 +154,19 @@ under each item and through Git alone.
 
 **Checkpoint.** Last checkpoint: `7ce5cf663`, validated by
 [run 44358778171](https://github.com/ikshengmin/pcc/actions/runs/44358778171).
-That run is a red baseline. Pending push-triggered exact-source validation:
-[run 45663526933](https://github.com/ikshengmin/pcc/actions/runs/45663526933),
-head `1f26ddde4c812c6774c5e457e912fe705828afd2`, observed pending after
-the authorized non-skip result. It includes the worker, reference and
-Stage2 improvements; the earlier run 45643044565 retains its independent
-evidence. Do not dispatch a duplicate; compare actual terminal results. The latest completed
+That run is a red baseline. Prior push-triggered exact-source validation
+[run 45663526933](https://github.com/ikshengmin/pcc/actions/runs/45663526933)
+completed failure (31 red, 18 green, 3 canceled, 2 skipped). Its successor
+[run 45844665220](https://github.com/ikshengmin/pcc/actions/runs/45844665220),
+head `b346a48a`, produced Linux x64, ARM64 and Windows Stage1; all three
+Stage2 owners completed failure (1800s timeout), Mac still active. Latest
+maintenance fixes and performance units through `73fd3fe0` are not covered
+by that run. This non-skip status commit triggers a new exact-source
+validation of the integrated fixes; existing useful runs are not canceled
+(the workflow queue retains pending runs). Include the worker-prior and
+platform input repairs, native vthread alias fix, owned assert support,
+GC cache optimization, stack-map validation and Stage2 export v2. Do not
+claim any hosted lane green merely from focused tests. The latest completed
 [checkpoint comparison](investigations/checkpoint-validation-45427972345.md)
 keeps that baseline: candidate `7ec14d388` has exact test regressions
 [#19](https://github.com/ikshengmin/pcc/issues/19) and
