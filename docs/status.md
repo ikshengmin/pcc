@@ -1931,7 +1931,7 @@ in the relevant section or issue and removes the entry.
    on 2026-11-26.
 
    Claims:
-   - J2 plan (b), (e), (f), one unit each ((a) and (c) done in dcc443bcf, (d) not merged): (b) a park saves only the slots live across it; (e) shared call-site error cleanup; (f) fewer `py_err_occurred` checks on the normal path; then one QPS measurement: Claude, macOS, 2026-11-26T06:53Z, area runtime-codegen (`pcc/frontends/python/codegen/` `exception_lowering.py`, `generator_lowering.py`, `ownership_lowering.py`, `call_object_lowering.py` and their tests; none of these is in item 2 (d) U7-U14 or its uncommitted `runtime_abi.py`/`unsafe_lowering.py` edits)
+   - B3 then B2, four-worker negative scaling (the user, 2026-11-26: "按你的顺序来吧"): instance creation's class reference counts, then sleep's scheduler shared state; each measured with `pcc_perf.py prim`/`table`: Claude, macOS, 2026-11-26T13:19Z, area runtime-gc
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
@@ -2158,7 +2158,7 @@ in the relevant section or issue and removes the entry.
    [Phase investigation](investigations/stage2-worker-budget-parity-45643044565.md).
 
    Claims:
-   - Stage1 compile time on macOS (J2s): Claude, macOS, 2026-11-26T09:45Z, area backend (`self_backend_aarch64_typed_peepholes.py`, `self_backend_aarch64_typed_pass_context.py`, `self_backend_aarch64_fragments.py`, the AArch64 allocator `self_backend_aarch64_darwin_regalloc.py`, the Mach-O link files, `pcc/frontends/python/direct_object_cache.py` and their tests; not `self_backend_aarch64_typed_pair.py` or `self_backend_aarch64_typed_cfg.py`, which the Stage2 pairing/trampoline unit above holds)
+   - none
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
