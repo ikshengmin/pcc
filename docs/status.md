@@ -1390,6 +1390,31 @@ in the relevant section or issue and removes the entry.
        calls, and the diagnostics-log call `py_obj_getattr` makes while the
        log is off; about 1.2 us of json's 6.8 (self-time guess). Parts in
        `py_list.py` wait for the (d) 4b claim.
+   Linux handler measurement (Codex, 2026-11-26, base e5a2ca85 plus
+   facade dispatch fix now `1820d5fd`, gateway `b1490486`, host CPython
+   3.13.5 self native ELF; full handler smoke passes 1/4 carriers):
+   C100 x100 rounds, 5 rotating PCC/asyncio/duplicate-PCC controls,
+   contemporaneous other builds: w1 21664 QPS / 48.19 us CPU/request,
+   asyncio 61771 /25.61, control 21435 /48.85; w4 39245 /97.25,
+   asyncio 125992 /57.88, control 39465 /97.02. Native binary SHA
+   a8cf4ebe5f55c8b1c36a0f36027e27457b2df843b80915267c5b07d4a79e002b.
+   Independent diagnostic-only runtime instrumented 10 entries and
+   counted API calls over C20 x (50-10) rounds = 800 requests, 5
+   alternating pairs. w1: store_root 308.05, NULL->NULL 108.30 (35.2%),
+   take 19.25, known store/take 0, py_incref 118.25, py_decref 230.75,
+   retain_known 96.60, release_known 174.20, allocations 38.45. All
+   five pairs identical. w4 medians: store_root 316.10, NULL->NULL
+   115.40 (36.5%), take 19.26, known store/take 0, py_incref 119.65,
+   py_decref 232.51, retain_known 96.16, release_known 193.34, alloc
+   38.45. Entry counts overlap (do not sum as independent costs).
+   Diagnostic counts match uninstrumented allocation counter and confirm
+   Mac attribution; instrumented binary not used for timing, no source
+   instrumentation published. Native image is stripped; precise hardware
+   cycle preflight unavailable on Linux, software task-clock preflight
+   passes but cannot bind sample IPs to function symbols in this image.
+   Next: statically prove and eliminate redundant empty-root clear calls
+   without skipping trace visibility, terminal release, debug or alias
+   semantics; target the real request path, 5 paired A/B plus control.
    Linux handler correctness blocker (Codex, source `e5a2ca85`, gateway
    `b1490486`): a fresh self-compiled native handler linked successfully
    (runtime 85.65s, total 219.22s) but trapped in public host-only
@@ -2121,7 +2146,6 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
-   - Linux native handler smoke and lifecycle counts after facade dispatch fix (isolated diagnostic build): Codex, Linux, 2026-11-26T15:59Z, area runtime-gc
    - J2 delegated park handoff proof and shared frame-save design (generator_lowering, disjoint from call-dispatch, runtime and Stage2 preload): Codex, Linux, 2026-11-26T16:00Z, area frontend-python
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
