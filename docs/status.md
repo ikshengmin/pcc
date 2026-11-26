@@ -243,7 +243,19 @@ compiler typed CFG `81af95e8`, exact four-platform worker-prior test
 fix `bd763672`, and unchanged NumPy C++ frontier header fixes
 `b53d7e49`, `54ba01e6`, `9ea658c7`, `fdbe7161`. This non-skip receipt
 queued [run 45868668374](https://github.com/ikshengmin/pcc/actions/runs/45868668374),
-exact head `9223aca1`, observed pending; existing runs remain intact. Do not claim any hosted lane green from focused tests. The latest completed
+exact head `9223aca1`, observed pending; existing runs remain intact.
+A further distinct integrated checkpoint includes production private AST v2
+`14c70ccef` (32 real sidecars 66.43 -> 16.406 MB, 15/15 native paired
+CPU/RSS wins, all downstream summaries exact), x64 planner `f345bf154`
+and register-copy `f0b17ed3` (actual large owner CPU -8.29% raw,
+-10.913% normalized, 5/5 exact outputs; full small worker neutral),
+internal #13 described-managed lifetime and mapping slices `1191c19d`
+and `534b4e9e` (frontends remain frozen; ordinary QPS inconclusive),
+and truthful Windows own CPU-time observation `d62115a0`. No guard or
+deadline loosened; actual full Stage2 and six-worker Stage1 targets remain
+unmet. This status-only non-skip commit queues the new immutable snapshot
+without cancelling or rerunning earlier runs. Do not claim any hosted lane
+green from focused tests. The latest completed
 [checkpoint comparison](investigations/checkpoint-validation-45427972345.md)
 keeps that baseline: candidate `7ec14d388` has exact test regressions
 [#19](https://github.com/ikshengmin/pcc/issues/19) and
@@ -2686,9 +2698,38 @@ in the relevant section or issue and removes the entry.
    lifetime, typed C ABI, structured inventory, suffix scratch) were updated
    on 2026-11-26.
 
+   Closed-world immediate factory handoff (exact source 7763efd4; Linux,
+   2026-11-26): diagnostic measured 4.05 completed result wrappers/request,
+   all immediately consumed; net wrapper primitive 283–325 ns. Narrow
+   generic compiler proof tested direct lexical module-qualified factory,
+   explicit private discriminator, public dynamic ABI, ordinary generator
+   value and exception semantics. Both candidate iterations are REJECTED,
+   not production changes. Final single-body thin public wrapper+direct
+   root take reduced RX growth from 14,240 to 6,272 bytes; RW/TLS unchanged.
+   15 host tests, 24 scoped native tests incl finalization and four-carrier
+   shared-container races, native audits w1/w4, 625-source contextual six
+   modules all fallback zero. Exact 5 repeats allocations/request
+   38.45 -> 34.40 (w1/w4). Final C100 * 1000, alternating 5 triples
+   (identical baseline control, CPU8 w1 / CPUs4–8 w4):
+   w1 QPS 18,790.83 -> 19,802.68, CPU 53.8534 -> 51.1004 us/request,
+   5/5 each; paired normalized QPS +4.038%, CPU -3.443% vs max control
+   floor 2.242%/2.932%, but peak RSS 27,348,992 -> 27,471,872 B
+   (normalized +0.434% vs max control 0.240%). w4 QPS 40,469.22 ->
+   41,220.78, CPU 91.5529 -> 89.6980 us, 5/5 raw; paired normalized
+   +1.612%/-2.079% within control floors 11.557%/11.318%, inconclusive.
+   Peak RSS 31,875,072 -> 31,981,568 B; max STW median w1 2140 ->
+   2428 us, w4 1935 -> 1962 us, both within max unchanged control.
+   First duplicate-body candidate also had peak RSS regression, with
+   smaps attribution primarily file-mapped pages, not anonymous heap.
+   Final exact binary SHA 8f7be47324951252a66a54b21af68f6ce4c7b98186ab737a24dc4c5c247ccea4;
+   baseline SHA 135ed295823122b28d04ae87395da63e7e3b2a02cd47fa3f6383f1765d78f504.
+   Keep public protocol unchanged; don't retry the same factory patch.
+   Next: measure allocation count and cost attributable to ordinary
+   list/tuple/iterator ownership, prove a generic non-escaping candidate
+   before attempting removal. No benchmark-specific shortcuts.
+
    Claims:
    - Stage1 x64 sparse block ownership and frame event projections: Codex, Linux, 2026-11-26T18:26Z, area backend-x64-frame
-   - Closed-world continuation factory immediate result handoff proof and narrow candidate: Codex, Linux, 2026-11-26T17:39Z, area runtime-codegen-factory
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
