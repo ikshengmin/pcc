@@ -2351,7 +2351,7 @@ in the relevant section or issue and removes the entry.
 
    Stage2 coordinator indexed export writer: the seven metadata rows now
    convert and write one wire value at a time instead of retaining every
-   converted tree through all module writes. Host CPython 3.13, real closed-
+   converted tree through all module writes. Host CPython 3.12.14, real closed-
    world export class surface from 668 compiler frontend/backend/IR modules,
    825 common types and 379 sensitive roots, final index 1,193 descriptors:
    five alternating fresh-process pairs, peak RSS median 92,636 -> 79,188 KiB
@@ -2369,8 +2369,35 @@ in the relevant section or issue and removes the entry.
    hosted Stage2 terminal receipts and eliminate repeated class reconstruction
    only with a provably unchanged root-dependent binding/order witness.
 
+   Stage2 native indexed export reader now retains complete module/preload
+   rows and slices only the selected closure's payloads and its root delta.
+   Header/inventory validation and other raw-payload users keep their original
+   contract. The offset-tuple variant saved RSS but lost CPU (warm 0/5);
+   rejected. Intact strings avoid that cost. Real 29,513,459-byte indexed wire
+   from the preceding fixture, host CPython 3.13.5, five alternating fresh
+   pairs per root: worker_resource_plan (1 selected module) peak 181,296 ->
+   159,024 KiB, class_gen (10) 181,420 -> 159,144 KiB, AArch64 backend (16)
+   181,428 -> 159,148 KiB; each 5/5, equal initial RSS about 82,068 KiB.
+   CPU medians 0.744 -> 0.746 (2/5), 0.880 -> 0.849 (5/5), 0.938 -> 0.893
+   (4/5) seconds. Aggregate of the three roots 2.654 -> 2.460 (4/5); independent
+   same-process aggregate 1.666 -> 1.552 (4/5, unchanged raw-index control
+   0.0267 -> 0.0279 s). Fresh raw-index control peak 110,640 KiB. Exact
+   semantic wire output hashes agree in every root/arm; 234 host contracts
+   pass, 2 native integration nodes not run. New payload-slice-count witness
+   fails old (unrelated module and all preload payloads copied); changed
+   reader emits owned x86 Linux IR. No whole-stage/native timing claim.
+   Windows run 45844665220 owner artifact 15134536420: Stage2/3 owner timeout
+   1800.174 s (not RSS limit), whole-owner peak 2,792,398,848 B. Stage1 step
+   duration 1283 s; wall parity remains false. No exact Stage2 phase attribution
+   until full diagnostics arrive. Next: descriptor DAG transport design:
+   actual T row 5,046,730 bytes, 350,795 nested tuple occurrences but 5,693
+   distinct tuples. Intern immutable descriptor nodes in a versioned
+   postorder transport, preserving old-wire reading, malformed-data rejection,
+   type equality and exact root binding/order. Do not adopt without
+   controlled reader/writer CPU and RSS evidence.
+
    Claims:
-   - Stage2 indexed export reader repeated staging and decode: Codex, Linux, 2026-11-26T15:52Z, area selfhost
+   - none
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its

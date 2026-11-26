@@ -511,3 +511,41 @@ def test_indexed_writer_releases_each_wire_metadata_row_before_converting_next(
     assert pipeline_exports._read_native_exports_wire(
         path, include_function_object_uses=True,
     ) == (exports, derived, uses)
+
+
+def test_indexed_module_reader_slices_only_selected_payload_rows(tmp_path):
+    exports = {"root": {}, "dep": {}, "unrelated": {}}
+    path = tmp_path / "exports.indexed"
+    pipeline_exports._write_native_exports_wire(
+        path, exports, {}, module_dependencies={"root": ("dep",)},
+        unique_class_preload_index=type_infer.build_unique_external_class_preload_index(exports),
+    )
+    observed = []
+
+    class TrackedRow(str):
+        def __getitem__(self, key):
+            # Only the final JSON payload slice, not the row headers.
+            if isinstance(key, slice) and key.stop is None:
+                first, sep, rest = self.partition("\t")
+                if sep and first in ("M", "U"):
+                    module, sep, payload = rest.partition("\t")
+                    if sep and key.start == len(first) + len(module) + 2:
+                        observed.append((first, module))
+            return super().__getitem__(key)
+
+    class TrackedText(str):
+        def splitlines(self):
+            return [TrackedRow(line) for line in super().splitlines()]
+
+    raw = TrackedText(path.read_text(encoding="utf-8"))
+    actual = pipeline_exports._decode_native_exports_wire_for_module(raw, "root")
+    assert actual[0] == {"root": {}, "dep": {}}
+    assert actual[3] is True
+    assert sorted(observed) == [("M", "dep"), ("M", "root"), ("U", "root")]
+    observed.clear()
+    _metadata, preloads, modules, order = pipeline_exports._indexed_native_export_rows(raw)
+    # The other index consumers still see raw payload strings and a complete
+    # inventory, not the reader's internal complete-row representation.
+    assert order == ("root", "dep", "unrelated")
+    assert all(isinstance(value, str) for value in (*preloads.values(), *modules.values()))
+    assert len(observed) == 6

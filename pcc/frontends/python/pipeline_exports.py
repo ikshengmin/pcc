@@ -1545,8 +1545,12 @@ def _write_indexed_native_exports_wire(
             )
 
 
-def _indexed_native_export_rows(text: str):
-    """Index line payloads without repeated whole-string UTF-8 slicing."""
+def _indexed_native_export_rows(text: str, defer_payloads: bool = False):
+    """Index rows without repeated whole-string UTF-8 slicing.
+
+    The module reader can retain intact rows instead of copying every
+    module and preload payload. Other consumers keep the payload-string API.
+    """
 
     lines = text.splitlines()
     if not lines or lines[0] != _NATIVE_EXPORT_INDEXED_SCHEMA:
@@ -1578,7 +1582,10 @@ def _indexed_native_export_rows(text: str):
                 raise ValueError(
                     "duplicate indexed frontend native export module"
                 )
-            target_payloads[module_name] = line[second_tab + 1 :]
+            if defer_payloads:
+                target_payloads[module_name] = line
+            else:
+                target_payloads[module_name] = line[second_tab + 1 :]
             if tag == "M":
                 module_order.append(module_name)
         elif tag in ("D", "F", "P", "T", "G", "C", "H"):
@@ -1613,9 +1620,16 @@ def _indexed_native_export_metadata(metadata, tag: str):
         ) from exc
 
 
+def _indexed_module_row_payload(row: str) -> str:
+    # The index already verified both delimiters and the module name.
+    first_tab = row.find("\t")
+    second_tab = row.find("\t", first_tab + 1)
+    return row[second_tab + 1 :]
+
+
 def _read_indexed_native_exports_wire(text: str, root_module: str = ""):
     metadata, preload_payloads, module_payloads, module_order = (
-        _indexed_native_export_rows(text)
+        _indexed_native_export_rows(text, True)
     )
     derived_class_map = _indexed_native_export_metadata(metadata, "D")
     function_object_uses = _indexed_native_export_metadata(metadata, "F")
@@ -1667,14 +1681,14 @@ def _read_indexed_native_exports_wire(text: str, root_module: str = ""):
         module_name = pending.pop()
         if module_name in selected:
             continue
-        payload = module_payloads.get(module_name)
-        if payload is None:
+        row = module_payloads.get(module_name)
+        if row is None:
             raise ValueError(
                 "indexed frontend native exports reference missing module"
             )
         try:
             module_exports = _native_export_from_owned_wire(
-                json.loads(payload)
+                json.loads(_indexed_module_row_payload(row))
             )
         except Exception as exc:
             raise ValueError(
@@ -1733,8 +1747,9 @@ def _read_indexed_native_exports_wire(text: str, root_module: str = ""):
         module_exports = decoded.get(module_name) if selected_module else None
         if module_exports is None and selected_module:
             try:
+                row = module_payloads[module_name]
                 module_exports = _native_export_from_owned_wire(
-                    json.loads(module_payloads[module_name])
+                    json.loads(_indexed_module_row_payload(row))
                 )
             except Exception as exc:
                 raise ValueError(
@@ -1761,8 +1776,9 @@ def _read_indexed_native_exports_wire(text: str, root_module: str = ""):
     unique_class_preload = None
     if root_module:
         try:
+            row = preload_payloads[root_module]
             root_delta = _native_export_from_owned_wire(
-                json.loads(preload_payloads[root_module])
+                json.loads(_indexed_module_row_payload(row))
             )
         except Exception as exc:
             raise ValueError(
