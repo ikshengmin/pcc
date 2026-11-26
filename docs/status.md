@@ -2570,9 +2570,20 @@ in the relevant section or issue and removes the entry.
    overload/limit program returned 42 with empty streams, matching G++
    14.2 and byte-identical IR/object to the existing `<climits>` spelling.
    Unchanged NumPy halffloat.cpp now stops at missing ctype.h (same SHA),
-   still no emitted object. Next NumPy C++: owned ctype.h spelling,
-   then actual generated configuration; no fabricated inputs or production
-   acceptance. The new 45856871699 Java and Go receipts reproduce the
+   still no emitted object. Owned C++ <ctype.h> now shares the exact
+   <cctype> C-linkage int(int) declarations; ten target/include-order checks
+   across Linux x86-64/AArch64, Darwin AArch64 and Windows LLP64, all 14
+   identical external-call IR/object artifacts, and no fake macro/provider.
+   65 focused host source tests passed, native static owned-linked x86 ELF
+   no-call program passed. Existing owned toupper (fixed C locale) matched
+   G++ 14.2 for all valid int arguments -1..255 through both global/std
+   spellings, exit 42 and empty streams; selected archive source/object
+   hashes matched current runtime owner, strict full archive fixture added.
+   Other classification/locale runtime providers are not qualified.
+   Unchanged NumPy halffloat.cpp (same SHA) now reaches missing generated
+   _numpyconfig.h, the shared C/C++ prerequisite, no object emitted.
+   Next NumPy: actual generated configuration; no fabricated inputs or
+   production acceptance. The new 45856871699 Java and Go receipts reproduce the
    existing strict source frontiers: Java reference 15140386201 204/4 and
    integration 15139682668 1255/4, Go integration 15141110841 878/2;
    no oracle waiver or project-specific substitution.
@@ -2613,7 +2624,7 @@ in the relevant section or issue and removes the entry.
    neither an external token nor a caller-provided crate named core waives it.
 
    Claims:
-   - NumPy C++ owned ctype.h spelling: Codex, Linux, 2026-11-26 17:26 UTC, area frontend-cpp
+   - none
 5. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:

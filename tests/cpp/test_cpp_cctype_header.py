@@ -2,14 +2,16 @@
 
 Original PCC tests of N4659 [cctype.syn], [namespace.udecl], [dcl.link].
 https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2017/n4659.pdf
-The native no-call cases qualify inclusion/public compilation only. All actual
-ctype calls below remain unresolved external relocations; no ASCII substitute,
-host libc, or assembly implementation is used to claim their semantics.
+The native no-call cases qualify inclusion/public compilation only. Declaration-only calls below remain unresolved external relocations. A separate
+owned-runtime test exercises the existing toupper provider in its fixed C locale;
+no host libc or assembly substitute is used for owned execution.
 """
 import os
+import platform
 import re
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -107,9 +109,9 @@ def test_std_import_does_not_create_a_second_overload_candidate():
 
 @pytest.mark.parametrize('header', ('ctype.h', 'stdio.h', 'vector'))
 def test_missing_cpp_headers_do_not_fall_back_to_c_or_host_headers(header):
-    # <stdio.h> now has an owned spelling. Keep this original no-fallback node:
+    # <ctype.h> and <stdio.h> now have owned spellings. Preserve no fallback:
     # opting out of owned headers must not expose C/fake-libc or host headers.
-    cpp_args = ['-nostdinc'] if header == 'stdio.h' else None
+    cpp_args = ['-nostdinc'] if header in ('ctype.h', 'stdio.h') else None
     with pytest.raises(RuntimeError, match='header not found: ' + re.escape(header)):
         preprocess_cpp('#include <' + header + '>\n', cpp_args=cpp_args)
 
@@ -192,3 +194,94 @@ def test_public_header_inclusion_executes_but_does_not_claim_ctype_runtime(sourc
                             capture_output=True, timeout=20)
     assert result.returncode == 0, result.stderr
     record_execution(oracle, expected)
+
+
+@pytest.mark.parametrize('target', (
+    'x86_64-unknown-linux-gnu', 'aarch64-unknown-linux-gnu',
+    'arm64-apple-darwin', 'x86_64-pc-windows-msvc', 'x86_64-w64-windows-gnu',
+))
+@pytest.mark.parametrize('headers', (
+    ('ctype.h', 'cctype', 'ctype.h'), ('cctype', 'ctype.h', 'cctype'),
+))
+def test_c_header_spelling_reuses_exact_declarations_on_each_target(target, headers):
+    checks = ''.join('#ifdef ' + name + '\n#error unexpected macro\n#endif\n'
+                     for name in (*NAMES, 'EOF'))
+    src = ''.join('#include <' + h + '>\n' for h in headers) + checks
+    parser = CppParser(target_triple=target)
+    parser.parse(preprocess_cpp(src, target_triple=target))
+    for name in NAMES:
+        direct = parser.scope.names[name].overloads
+        imported = parser.scope.names['std'].namespace_scope.names[name].overloads
+        assert len(direct) == len(imported) == 1 and direct[0] is imported[0]
+        d = direct[0]
+        assert d.language_linkage == 'C' and d.c_name == name
+        assert d.dtype == 'int' and d.parameters == ('int',) and not d.defined
+
+
+@pytest.mark.parametrize('name', NAMES)
+def test_c_header_spelling_has_exact_external_call_artifact(name):
+    body = 'int main(){return ::' + name + '(-1)+std::' + name + '(255);}'
+    c = compile_public('#include <ctype.h>\n' + body, use_compile_cache=False)[0][1]
+    cxx = compile_public('#include <cctype>\n' + body, use_compile_cache=False)[0][1]
+    assert c == cxx
+    obj = emit_owned_object(c, TARGET)
+    assert obj == emit_owned_object(cxx, TARGET)
+    assert _object_symbol_sets(parse_relocatable(obj))[1] == frozenset((name,))
+    with pytest.raises(ElfError, match=r'^undefined static ELF symbols: ' + name + r'$'):
+        link_object(obj)
+
+
+@pytest.mark.integration
+@pytest.mark.pcc_gate(unavailable=None if sys.platform == 'linux' and platform.machine().lower() in (
+    'amd64', 'x86_64') else 'requires owned x86-64 Linux static ELF execution')
+def test_c_header_spelling_native_no_call(tmp_path, monkeypatch):
+    source = '#include <ctype.h>\n#include <cctype>\n#include <ctype.h>\nint main(){int isalpha=42;return isalpha;}'
+    with monkeypatch.context() as guard:
+        def forbidden(*args, **kwargs):
+            raise AssertionError('owned header compilation invoked external process')
+        guard.setattr(subprocess, 'Popen', forbidden)
+        ir = compile_public(source, use_compile_cache=False)[0][1]
+        ref = compile_public(source.replace('ctype.h', 'cctype'), use_compile_cache=False)[0][1]
+        assert ir == ref
+        obj = emit_owned_object(ir, TARGET)
+        assert not _object_symbol_sets(parse_relocatable(obj))[1]
+        executable = link_object(obj)
+    binary = tmp_path / 'owned'
+    binary.write_bytes(executable)
+    binary.chmod(0o700)
+    record_execution(binary, Execution(42, b'', b''))
+
+
+CTYPE_H_TOUPPER_PROGRAM = """#include <ctype.h>
+#include <cctype>
+int main(){
+    for(int x=-1;x<=255;++x){
+        int expected=x;
+        if(x>=97 && x<=122)expected=x-32;
+        if(::toupper(x)!=expected)return 1;
+        if(std::toupper(x)!=expected)return 2;
+    }
+    return 42;
+}
+"""
+
+
+def run_ctype_h_native(directory, archive, monkeypatch, target):
+    from pcc.backend.owned_elf_link import link_inputs
+    obj, exe = directory / 'ctype-header.o', directory / 'ctype-header'
+    with monkeypatch.context() as guard:
+        guard.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('external compiler/linker invoked'))
+        units = CEvaluator(backend='self', target_triple=target).compile_translation_units(
+            [TranslationUnit('ctype.cpp', None, CTYPE_H_TOUPPER_PROGRAM)],
+            use_system_cpp=False, frontend_opt_level=0, use_compile_cache=False)
+        obj.write_bytes(emit_owned_object(units[0][1], target))
+        link_inputs(target=target, output=str(exe), objects=[str(obj)], archives=[str(archive)])
+    record_execution(exe, Execution(42, b'', b''))
+
+
+@pytest.mark.integration
+@pytest.mark.pcc_gate(unavailable=None if sys.platform == 'linux' and platform.machine().lower() in (
+    'amd64', 'x86_64', 'aarch64', 'arm64') else 'requires owned Linux toupper runtime execution')
+def test_ctype_h_toupper_fixed_c_locale_complete_domain(tmp_path, pcc_runtime_archive, monkeypatch):
+    from pcc.frontends.python.pipeline_targets import host_target_triple
+    run_ctype_h_native(tmp_path, pcc_runtime_archive, monkeypatch, host_target_triple())
