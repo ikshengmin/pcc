@@ -118,6 +118,7 @@ def test_handoff_owned_import_census_source_policy():
     assert {"re", "sys"} <= native and {"re", "sys"}.isdisjoint(required)
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_handoff_provider_closed_world_aarch64(tmp_path, monkeypatch):
     assert sys.platform == "darwin" and platform.machine() == "arm64", (
         "this independent gate requires the Darwin arm64 CI runner")

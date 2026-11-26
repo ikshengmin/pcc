@@ -1113,8 +1113,32 @@ in the relevant section or issue and removes the entry.
    unchanged production and resource policy; host ELF model, not a
    native runtime/hosted CI acceptance claim.
 
+   Darwin-only indexed handoff prerequisite (2026-11-26): hosted
+   Linux ordinary artifact15145043938 selected the explicitly
+   Darwin-arm64-only closure node and failed its unchanged host
+   assertion. Local exact file reproduced1 FAIL/1 PASS; inventory
+   raw2 selected2, no prerequisite. Actual dedicated Mac indexed
+   profile receipt15146648514 (c20c2c01 run45862787448) ran same exact
+   node setup/call/teardown PASS,17.93s/JUnit1, no skips; 5-provider
+   closure/543 definitions/29 actual helpers/6 body-negative controls.
+   This is host-pcc0 compile-only, not native program execution.
+   Current pre-marker test/provider SHA match that receipt; current
+   compiler different, so current Mac gate still UNRUN.
+   Added the exact declarative Darwin AND arm64 pcc_gate, retaining
+   original in-body native host requirement and dedicated profile.
+   New contract test failed before marker; after change actual Linux
+   source inventory raw2 canonical nodes intact, selected1, exact
+   closure node retained as ordinary UNRUN_PREREQUISITE (not PASS);
+   source campaign remains INCOMPLETE_UNRUN absent separate transfer.
+   Dedicated execution verifier rejects actual Linux collection;
+   negative host gate controls linux x64/arm, Darwin x64/Windows and
+   positive Darwin arm64 admission model retain exact node policy.
+   Guarded13 PASS/1 genuine Mac prerequisite deselected,
+   COMPLETE1.289s/45268992 B unchanged90s/1GiB. No ownership transfer,
+   test-body, resource limit or coverage acceptance change.
+
    Claims:
-   - Darwin ARM64 indexed handoff exact prerequisite and dedicated gate contract: Codex, Linux collection, 2026-11-26T20:09Z, area ci-indexed-handoff-host-gate
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and

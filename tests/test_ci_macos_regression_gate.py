@@ -1066,3 +1066,50 @@ def test_gc_workflow_triggers_cover_fixtures_and_keep_existing_job_budgets():
     assert "--darwin-preflight-reserve-bytes 536870912" in job
     assert job.count("--out-dir build/macos-regressions") == 2
     assert "--profile" not in job
+
+
+def test_indexed_handoff_closure_requires_exact_darwin_arm64_host(tmp_path, monkeypatch):
+    import ast
+    from tests import conftest as repository_gates
+    from scripts.ci_validation_run import campaign_status
+
+    node = INDEXED_SPLIT_NODES["indexed-handoff-closure"][0]
+    path, function_name = node.split("::")
+    source = ast.parse((ROOT / path).read_text())
+    function = next(item for item in source.body
+                    if isinstance(item, ast.FunctionDef) and item.name == function_name)
+    markers = [mark for mark in function.decorator_list
+               if isinstance(mark, ast.Call) and ast.unparse(mark.func) == "pytest.mark.pcc_gate"]
+    assert len(markers) == 1, "ordinary collection needs the exact host prerequisite"
+    assert not markers[0].args
+    declaration = {keyword.arg: ast.literal_eval(keyword.value) for keyword in markers[0].keywords}
+    assert declaration == {"platforms": ("darwin",), "machines": ("arm64",)}
+    # The actual execution's host assertion remains mandatory too.
+    assert isinstance(function.body[0], ast.Assert)
+    assert ast.unparse(function.body[0].test) == "sys.platform == 'darwin' and platform.machine() == 'arm64'"
+    assert "indexed-handoff-closure" in gate.PROFILES["indexed-split"]
+    assert dict(gate.GATES)["indexed-handoff-closure"] == (node,)
+
+    # These are gate-policy controls, not fabricated executions on a Mac.
+    marker = SimpleNamespace(name="pcc_gate", args=(), kwargs=declaration)
+    item = SimpleNamespace(iter_markers=lambda name: iter([marker]) if name == "pcc_gate" else iter(()))
+    for host, machine, admitted in (
+        ("linux", "x86_64", False), ("linux", "aarch64", False),
+        ("darwin", "x86_64", False), ("win32", "AMD64", False),
+        ("darwin", "arm64", True),
+    ):
+        with monkeypatch.context() as patch:
+            patch.setattr(repository_gates, "_gate_sys", SimpleNamespace(platform=host))
+            patch.setattr(repository_gates, "_gate_platform", SimpleNamespace(machine=lambda: machine))
+            assert (repository_gates._pcc_gate_blocked_reason(item) is None) is admitted
+
+    # The Source lane must preserve an unavailable node as UNRUN, and
+    # the dedicated gate must never accept a collection/deselection as PASS.
+    row = {"nodeid": node, "status": "UNRUN_PREREQUISITE"}
+    assert campaign_status({"batches": [], "unrun": [row], "lane_count": 1}) == "INCOMPLETE_UNRUN"
+    reports = _reports([node])
+    reports.insert(1, {"event": "deselected", "nodeids": [node]})
+    path = tmp_path / "live.jsonl"
+    _write_reports(path, reports)
+    with pytest.raises(AssertionError):
+        gate.verify_execution_report(path, [node])
