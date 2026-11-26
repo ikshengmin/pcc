@@ -428,6 +428,47 @@ three-root test, now fixed5f49dbca; no resource relaxation. Prior
 workflow run before this distinct normal non-skip checkpoint. Existing
 useful queued/active runs preserved, no rerun or cancellation.
 
+As of 2026-11-26T23:12Z a distinct cumulative immutable source snapshot
+at production head 5f2ba802 follows #644 run
+[45904354249](https://github.com/ikshengmin/pcc/actions/runs/45904354249),
+exact head e5b706922147e7798305268f004e7eaf1f318288, observed pending;
+verified first-parent ancestry through accepted changes:
+99cb997f opt-in exact live coordinator dictionary storage histogram
+diagnostic only (actual native explicit counts/owner/bytes tests and
+four concurrent workers, flag-off empty stderr; no coallocation,
+no performance or whole Stage2 peak claim);
+c2c65d99 explicit cross-module raw i64/u64 free-function descriptor
+(actual isolated native baseline75 vs reference37, candidate37;
+signed/unsigned boundaries and boxed42 exact, host2/2+adjacent102,
+strict contextual626 both fallback0; no broad field ABI migration);
+5f2ba802 exact AMD64 read-only unwind section type (target/name/flags
+specific, preserves payload and relocations,8/8 focused, actual self
+raw closure1/1, source preimage controls50/50, adjacent165/165,
+context626 fallback0). The unchanged hosted LLVM frame-registry
+object advances from unsupported .eh_frame type to genuine unsupported
+TLSGD relocation19 and external __tls_get_addr. Full reference
+remains red; no relocation allowance, no oracle suppression.
+Target-qualified freestanding x64 Linux initial-exec metadata is
+next separate source unit, not included. Rejected Stage2 rebound
+candidates and unaccepted Stage1/GC next claims are not production.
+No worker, resource or deadline gate relaxed. Existing queued #644
+has exactly one run; production parent 5f2ba802 had zero runs before
+this normal non-skip source-distinct checkpoint. No cancel/rerun.
+
+Latest exact #638 native bootstrap all four incomplete, Mac actual
+inner timeout600.350s partial peak1,780,563,968B (artifact15157120792),
+outer623.415s/2,296,070,144B (15156203987); ARM partial Stage2 peak
+4,302,229,504B at1781.966s/three complete codegen, class_gen rendered
+not completed (15155144445). Mac current native-prior process guard
+also independently timeout124; actual package/wheel later unrun.
+Mac marker pressure identity mismatch fixed0846c755 after that
+snapshot; nonintegration collection actual memory limit98.457s
+2,836,889,600B over unchanged2,831,859,712B. Linux/ARM/Win marker
+integration remainder budget exhausted UNRUN. #638 aggregate exact
+14 completed source campaigns / 21908 PASS, excludes11 unresolved
+producers, not global green. No complete Stage2 <= Stage1 or
+six-worker Stage1 300s acceptance.
+
 Do not claim any hosted lane green from focused tests. The latest completed
 [checkpoint comparison](investigations/checkpoint-validation-45427972345.md)
 keeps that baseline: candidate `7ec14d388` has exact test regressions
