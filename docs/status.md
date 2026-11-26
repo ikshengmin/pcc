@@ -821,7 +821,7 @@ in the relevant section or issue and removes the entry.
    a hypothesis, not another authorized scope split.
 
    Claims:
-   - none
+   - sorted slot transaction one-collector ownership model (remove obsolete GC4 hooks, retain live failures): Codex, Linux, 2026-11-26T19:06Z, area ci-sorted-slot-model
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
