@@ -40,7 +40,22 @@ def _indexed_native_export_schema(text: str) -> str:
     return ""
 
 
-def _export_param_types(args, raw_pointer_names=()):
+def _export_method_abi_type_descriptor(ty):
+    """Method ABI metadata preserves explicit source machine integer lanes."""
+    from pcc.frontends.python.py_ast import IntType as _IntType
+    if _closed_world_is_node(ty, _IntType):
+        name = _py_ast_field_value(ty, "name", "")
+        if name != "int":
+            width = _py_ast_field_value(ty, "width", 0)
+            signed = _py_ast_field_value(ty, "signed", None)
+            if (name not in ("pcc.i64", "pcc.u64") or type(width) is not int
+                    or width != 64 or signed is not (name == "pcc.i64")):
+                raise ValueError("invalid explicit method machine integer ABI")
+            return ("raw_int", name, width, signed)
+    return encode_type(ty)
+
+
+def _export_param_types(args, raw_pointer_names=(), exact_machine_int=False):
     """Return normalized runtime param types for cross-module exports.
 
     Multi-file extern declarations only need the lowered runtime
@@ -53,15 +68,18 @@ def _export_param_types(args, raw_pointer_names=()):
         if not isinstance(name, str) or name == "":
             continue
         ann = resolve_raw_pointer_annotation(_export_annotation_or_none(a), raw_pointer_names)
-        param_tys.append(encode_type(ann) if ann is not None else ("dyn",))
+        param_tys.append(
+            ("dyn",) if ann is None else
+            _export_method_abi_type_descriptor(ann) if exact_machine_int else encode_type(ann)
+        )
     return param_tys
 
 
-def _export_return_type(ret_ty, raw_pointer_names=()):
+def _export_return_type(ret_ty, raw_pointer_names=(), exact_machine_int=False):
     ret_ty = resolve_raw_pointer_annotation(ret_ty, raw_pointer_names)
     if ret_ty is None:
         return ("dyn",)
-    return encode_type(ret_ty)
+    return _export_method_abi_type_descriptor(ret_ty) if exact_machine_int else encode_type(ret_ty)
 
 
 def _export_returns_none(ret_ty) -> bool:
@@ -1167,7 +1185,7 @@ def _export_module_defines_str_default_cells(ast_body) -> bool:
 
 
 def _export_call_sig(args, owning_module=None, top_level_func_names=(), raw_pointer_names=(),
-                     str_default_cells=False):
+                     str_default_cells=False, exact_machine_int=False):
     from pcc.frontends.python.py_ast import StrLit as _StrLit
 
     sig = []
@@ -1178,7 +1196,7 @@ def _export_call_sig(args, owning_module=None, top_level_func_names=(), raw_poin
         item = {
             "name": _py_ast_field_value(a, "name", ""),
             "kind": _py_ast_field_value(a, "kind", "pos"),
-            "annotation": encode_type(ann),
+            "annotation": _export_method_abi_type_descriptor(ann) if exact_machine_int else encode_type(ann),
             "default": default,
             "has_default": _py_ast_field_value(a, "has_default", False),
         }

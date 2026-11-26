@@ -1389,8 +1389,9 @@ in the relevant section or issue and removes the entry.
    free-function route remains independently open. No integrated
    hosted/native-pcc1/Stage1/2 or performance acceptance claimed.
 
+   - 2026-11-26 exact cross-module raw machine integer method ABI: isolated exact baseline `cd15c218` owned ELF printed 75 rather than CPython 37 because the method metadata erased the explicit machine lane to boxed int; candidate preserves source-owned `pcc.i64`/`pcc.u64` only for method parameter/call-signature/return descriptors, validates exact named 64-bit signedness before the generic tuple cache (rejects non-Boolean alias), legacy ordinary int remains ordinary and free-function wire unchanged. Test-first nine failures → nine passes, exact indexed and legacy wire round trips, native provider and consumer signatures agree. Fresh source-provenance runtime archive SHA `770606d6b0e3d653bc52b14295275dc47b74eb989eab9df69ee64aead101c775` re-admitted in guard 88.785s / 384,147,456B. Isolated native output 37 exact (candidate ELF `39fa245486b333f2da473dc141ae1d955bb7d661b13c9b1a8b0da2a2b4b753bf`, guard 33.752s / 356,909,056B); full owned ELF `88736f7462ad50c029cd12563440871275acfef9009a317a796bc88ffdcc9e10` signed minimum/maximum, unsigned 0/2^63/2^64−1 and ordinary boxed 42 exact against CPython (33.313s / 355,508,224B). Adjacent host 110 pass / six integration deselected (25.707s / 120,111,104B); strict contextual closure 625 modules with zero fallback for `pipeline_exports` (62.722s / 674,816,000B), `pipeline_context` (69.813s / 662,159,360B), `export_meta` (63.464s / 612,593,664B), each under 1 GiB cap / 2 GiB reserve, unchanged 600s contextual/90s native guards. No broad free-function or field ABI migration; independent hosted native pcc1/platform, Stage2 full and performance acceptance remain UNRUN for this change.
    Claims:
-   - Exact cross-module raw machine integer method ABI metadata: Codex, Linux, 2026-11-26T21:15Z, area raw-machine-method-abi
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and

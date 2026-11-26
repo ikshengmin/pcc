@@ -129,6 +129,10 @@ def decode_type(desc):
         return desc
     if not isinstance(desc, tuple) or len(desc) == 0:
         raise TypeError(f"invalid export type descriptor: {desc!r}")
+    if desc[0] == "raw_int":
+        # Validate before the generic tuple cache: False and integer 0
+        # compare equal as cache keys, but only a real Boolean is ABI proof.
+        return _decode_type_uncached(desc)
     try:
         cached = _DECODE_TYPE_CACHE.get(desc, _DECODE_TYPE_MISSING)
     except TypeError:
@@ -147,6 +151,15 @@ def _decode_type_uncached(desc):
     tag = desc[0]
     if tag == "raw_pointer":
         return RawPointerType(name="pcc.extern.c_rawptr")
+    if tag == "raw_int":
+        # A raw lane is never inferred from a legacy ordinary-int descriptor.
+        # Reject malformed names, width or signedness instead of silently
+        # substituting the boxed Python integer ABI.
+        if (len(desc) != 4 or desc[1] not in ("pcc.i64", "pcc.u64")
+                or type(desc[2]) is not int or desc[2] != 64
+                or desc[3] is not (desc[1] == "pcc.i64")):
+            raise TypeError("invalid raw integer export descriptor")
+        return IntType(name=desc[1], width=desc[2], signed=desc[3])
     if tag == "int":
         width = desc[1] if len(desc) > 1 else 64
         signed = desc[2] if len(desc) > 2 else True
