@@ -2988,8 +2988,14 @@ def _object_magazine_drain_locked(
 @c_abi_export("pcc_allocator_object_magazine_take")
 def _object_magazine_take(state, usable: i64) -> c_ptr:
     index: i64 = _object_magazine_class(usable)
-    cell = _object_magazine_pop(state, index)
+    # The common object-cache hit owns the detached cell. Read the head
+    # once and update its list and count before clearing the free poison.
+    head_offset: i64 = OBJECT_MAGAZINE_HEADS + index * 8
+    count_offset: i64 = OBJECT_MAGAZINE_COUNTS + index * 8
+    cell = load_ptr(state, head_offset)
     if ptr_is_null(cell) == 0:
+        store_ptr(state, head_offset, load_ptr(cell, 0))
+        store_i64(state, count_offset, load_i64(state, count_offset) - 1)
         store_i64(cell, 8, 0)
         return cell
     limit: i64 = _object_magazine_limit(usable) // 2
@@ -3012,9 +3018,16 @@ def _object_magazine_take(state, usable: i64) -> c_ptr:
 @c_abi_export("pcc_allocator_object_magazine_put")
 def _object_magazine_put(state, cell, usable: i64) -> None:
     index: i64 = _object_magazine_class(usable)
-    _object_magazine_push(state, index, cell)
+    # The caller already owns the FREE, poisoned cell. Keep the just
+    # incremented count in a scalar for the drain decision.
+    head_offset: i64 = OBJECT_MAGAZINE_HEADS + index * 8
+    count_offset: i64 = OBJECT_MAGAZINE_COUNTS + index * 8
+    store_ptr(cell, 0, load_ptr(state, head_offset))
+    store_ptr(state, head_offset, cell)
+    count: i64 = load_i64(state, count_offset) + 1
+    store_i64(state, count_offset, count)
     limit: i64 = _object_magazine_limit(usable)
-    if load_i64(state, OBJECT_MAGAZINE_COUNTS + index * 8) >= limit:
+    if count >= limit:
         pcc_allocator_lock_acquire()
         _object_magazine_drain_locked(state, index, usable, limit // 2)
         pcc_allocator_lock_release()

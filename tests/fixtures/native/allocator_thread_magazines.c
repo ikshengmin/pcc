@@ -57,6 +57,19 @@ int main(void) {
         free(p);
     }
     pcc_allocator_lock_release();
+    /* Exceed the 256-cell cache limit, then consume the drained and
+       cached cells again. Every detached cell must remain distinct. */
+    void *burst[600];
+    for (int round = 0; round < 2; ++round) {
+        for (int i = 0; i < 600; ++i) {
+            burst[i] = pcc_allocator_alloc_object(64);
+            if (!burst[i]) return 26;
+            for (int j = 0; j < i; ++j) {
+                if (burst[i] == burst[j]) return 27;
+            }
+        }
+        for (int i = 0; i < 600; ++i) free(burst[i]);
+    }
     if (pcc_allocator_live_requested_bytes() != requested) return 13;
     if (pcc_allocator_live_usable_bytes() != usable) return 14;
     int64_t mapped = pcc_allocator_mapped_bytes();

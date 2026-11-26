@@ -1362,6 +1362,28 @@ in the relevant section or issue and removes the entry.
        calls, and the diagnostics-log call `py_obj_getattr` makes while the
        log is off; about 1.2 us of json's 6.8 (self-time guess). Parts in
        `py_list.py` wait for the (d) 4b claim.
+   Lifecycle allocation unit (Codex, Linux x86_64, source `605ddc2f`):
+   on the cached object-family take/put path, fold the intrusive head/count
+   updates into the callers and reuse the incremented scalar for the drain
+   threshold. Public helper symbols, refill/drain locking, poison and LIVE
+   publication/retirement ordering are unchanged. Five alternating pairs
+   of 3M managed-cell cycles (32..144 bytes, allocate, initialize, publish,
+   exact check, retire, free), self-generated allocator assembly with GCC
+   reference harness `benchmarks/c/allocator_object_lifecycle_churn.c`:
+   process CPU median 170.87 -> 157.54 ns/cell (-7.8%, 5/5), cache-disabled
+   control 215.95 -> 213.32 ns/cell (2/5, noisy). Independent initial run
+   170.77 -> 158.72 ns/cell (5/5), control 180.16 -> 186.96. All checksums
+   and live requested/usable deltas match. Standalone pthread remote-free
+   4 workers x 25 x 600 cells, each arm 3/3 passes with identical accounting.
+   Native magazine fixture extends burst to 600 cells and reuses it twice;
+   syntax checked, full native integration and handler QPS unqualified.
+   Repro: compile allocator using `compile_python(..., emit_llvm_only=True,
+   python_library=True, target_triple='x86_64-unknown-linux-gnu')`, then
+   `emit_self_asm` for the same triple and `gcc -c` as test assembler.
+   Link the benchmark with GCC `-O2 -fno-builtin`; execute 3000000 0 and
+   3000000 1 in alternating pairs. Next: count actual request allocations
+   and refcount calls on a current native handler before estimating QPS;
+   prioritize redundant empty-root clears and TLS access count, not ABI deletion.
    J1 result (Claude, 2026-11-26, local Mac, arms of 9de68e502 with and
    without the change): the container lock takes a free stripe with one
    CAS and spins reading only when it is held; `py_obj_getattr` tests the
@@ -2033,7 +2055,6 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
-   - Lifecycle protocol allocation/free and reference count attribution (Linux, disjoint from root-slot codegen and Darwin TLS): Codex, Linux, 2026-11-26T15:43Z, area runtime-gc
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
