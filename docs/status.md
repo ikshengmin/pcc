@@ -798,9 +798,30 @@ in the relevant section or issue and removes the entry.
    constraints. Next: reduce unnecessary collection imports while
    preserving all nodes/groups/workers; qualify on exact pinned hosted
    CPython/pytest with unchanged resource envelope.
+   Candidate test-only deferred direct execution imports in 45 actual
+   function bodies (no proxy), preserving fixture registration and
+   exact AST apart from imports. Fresh-import regression failed before
+   on all four imports and passed after; affected ordinary resource and
+   three external-dependent test files 156 PASS, four integration nodes
+   UNRUN, guard34.29s/469204992 B. Actual exclusive paired collection
+   at source8139a33d, same two modules, five alternating base/candidate/
+   unchanged-base-control triples, exactly identical raw115 nodes/
+   six integration, 111 selected without native gate, canonical IDs,
+   lane/group/gate and selection digest
+   2ff94c2307bcac5e0f767837d96ce5d7218e724d660f86d0c8dc2c750571f496.
+   Three imports deferred (pool already imported by actual conftest),
+   but median actual process RSS62799872→65208320 B/control62808064
+   (+3.84%,0/5) and peak62689280→64954368/control62730240 (+3.61%,0/5).
+   Same-base max drift0.04%/0.23%. Existing pycache state across local
+   checkouts is not fully matched, no causal loss claim; no meaningful
+   measured reduction. Reject/revert candidate and regression source;
+   no scheduling, gate or test inventory change. Raw receipt SHA256
+   bb5b64a6044d66efffe0fc5cb2bef34fa5d6709fbe9a1c7e22c0e5f9c3bc2c2b.
+   Larger collection module parser/assertion-rewrite footprint remains
+   a hypothesis, not another authorized scope split.
 
    Claims:
-   - worker-resource test-only collection import footprint, preserve group and execution owners: Codex, Linux, 2026-11-26T18:47Z, area ci-resource-test-collection-heap
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
