@@ -2333,6 +2333,7 @@ in the relevant section or issue and removes the entry.
    on 2026-11-26.
 
    Claims:
+   - J2s typed CFG pass redundant span/candidate scanning on actual Stage1 compiler modules (typed_cfg/pass_context only, disjoint from AArch64 selection/regalloc and runtime GC): Codex, Linux, 2026-11-26T17:04Z, area backend-stage1
    - Inline generator frame known-RC no-op guards and actual native A/B: Codex, Linux, 2026-11-26T17:02Z, area runtime-gc
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
