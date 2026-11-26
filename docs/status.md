@@ -4750,8 +4750,32 @@ in the relevant section or issue and removes the entry.
    Next measured repeated method-generation owner: source binding
    traversal/call argument and IR call publication costs.
 
+   Actual entry-hoist terminator scan attribution (diagnostic only).
+   Nested method profile showed 561,229 _instruction_opname_text calls,
+   of which480,922 came from _position_at_entry_hoist_point via
+   _instruction_is_terminator. Same old exact source/native AST/context
+   read-only host wrapper COMPLETE70.195403 s / 840,278,016 B, original
+   byte-identical 57,304,557-byte assembly SHA256
+   7165f5ed623388294453b9a74154db3e9562185daf3d9f446b03c35811777e16.
+   Count receipt SHA256 08972cb6d0f106fdef232192841884fbbac49b0612295b4e82c4d81f24c7fa1c.
+   All156 methods,6,465 entry hoists exact owned Block/direct builder,
+   no-text/fallback0, no inline anchor. 4,932 flags false scanned
+   479,389 exact empty-text records, no terminator;1,533 flags true
+   found terminal record at final position, one scan each, no trailing
+   records. Largest reverse scan895; total480,922. Native metadata
+   cannot be blindly trusted for raw text; Block.append/insert and
+   _replace_record_text are distinct from direct compact API.
+   Production candidate only with exact owned Block/IRBuilder/Module
+   guard and monotonic module-level raw-text mutation marker (one field
+   per Module, no per-Block/per-direct-instruction overhead). Any text
+   anywhere conservatively falls back to existing textual scan. For
+   proven direct-only false flag end placement, true flag verify last
+   terminator then numeric position, custom/mixed/trailing fallback.
+   Require mutation coverage, actual ordered projection, native
+   source-matched A/B, contextual proof and exact old output.
+
    Claims:
-   - Stage2 entry-hoist terminator scan actual owner attribution: Codex, Linux, 2026-11-26T20:18Z, area selfhost
+   - Stage2 direct-only entry hoist positioning: Codex, Linux, 2026-11-26T20:24Z, area selfhost
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
