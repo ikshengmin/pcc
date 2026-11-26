@@ -1685,6 +1685,46 @@ in the relevant section or issue and removes the entry.
    70% of the gap is stack traffic. Frame layout is (h); next are value
    stores to stack slots and small constant-size `memset`/`memmove`
    (+560 and +361 cycles; clang expands them inline).
+   P0 allocation model design (Claude, 2026-11-26; the user said to do it,
+   answering waiting-list P0 (c) with "at least LLVM parity"). Evidence:
+   `pcc_gc_store_root` (arm qps-ea1ea73) saves x19-x24 and the frame record
+   on every entry and restores all of them on every exit, the
+   `slot == NULL` return included, because its arguments are copied into
+   callee-saved registers at entry: they are live across the calls of its
+   slow paths (`py_incref_checked_tail`, `py_decref`). Not the cause:
+   post-safepoint reloads (447 reload pairs after 328551 calls in the whole
+   benchmark binary; the one collector does not move objects). After a
+   call the next instruction is most often `mov` (84707) or `sub` (63166,
+   mostly a root-slot address for the next call). Current model
+   (`self_backend_aarch64_darwin_regalloc.py`): one linear function-wide
+   interval per value; any call position inside it forces x19-x28;
+   every value keeps its slot; the prologue saves every assigned
+   callee-saved register and every epilogue restores them. Plan, each step
+   measured alone with `pcc_perf.py instr` and `table` against a control
+   arm and gated by the native and bootstrap checks:
+   (1) Liveness with holes: per-block live-in/live-out by a backward
+   dataflow over the CFG (bitsets per block), and "crosses a call" means
+   live after that call instruction, not a call anywhere inside the
+   linear hull, which today also counts calls on other paths.
+   (2) Shrink-wrapping: save the used callee-saved registers and the frame
+   record at the nearest common dominator of the blocks that use them and
+   restore them on the exits those blocks reach; paths that use neither
+   (early returns, call-free fast paths) run neither. Arguments stay in
+   x0-x7 until the wrapped region copies them. Safepoints are calls, so
+   every stack-map record lies inside the wrapped region and frame-relative
+   slot offsets keep their meaning there.
+   (3) Cold-call splitting, only if (1)+(2) leave the fast paths of hot
+   helpers saving registers: a value live across calls that lie only on
+   paths into an error landing or a `*_checked_tail` slow helper keeps a
+   caller-saved register and is stored to its existing slot before such a
+   call and reloaded after it; the coldness rule is structural and tested,
+   never a per-function list.
+   (4) Then the instruction-selection items of the exact ranking: address
+   folding (`adrp`+`add`+`ldr` -> `adrp`+`ldr`), bit tests as `tbz`/`tbnz`,
+   tag ranges as one unsigned compare, no `nop` on executed paths, small
+   constant `memset`/`memmove` inline. Compile-time budget: the dataflow is
+   linear in blocks times live words; Stage1 worker replays (array_core,
+   hoist_predicates) must not slow down beyond their run spread.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2
