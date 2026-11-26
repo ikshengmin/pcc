@@ -1200,6 +1200,8 @@ class Block:
         op = _opname_of(line)
         self._instrs.append(InstructionRecord(line, op, self))
         self._text_lines.append(line)
+        if type(self.parent) is Function:
+            self.parent._has_raw_text_records = True
 
     def insert(self, idx: int, line: str) -> None:
         if line is None or not isinstance(line, str):
@@ -1216,8 +1218,18 @@ class Block:
             InstructionRecord(line, _opname_of(line), self),
         )
         self._text_lines.insert(idx, line)
+        if type(self.parent) is Function:
+            self.parent._has_raw_text_records = True
 
     def _replace_record_text(self, rec: InstructionRecord, text: str) -> None:
+        if type(self.parent) is Function:
+            self.parent._has_raw_text_records = True
+        # Mark the record's actual owner too if a caller supplied a record
+        # from a different block/function. Text mutation precedes lookup.
+        if (type(rec) is InstructionRecord and type(rec.block) is Block
+                and rec.block.parent is not self.parent
+                and type(rec.block.parent) is Function):
+            rec.block.parent._has_raw_text_records = True
         rec.text = text
         i = 0
         while i < len(self._instrs):
@@ -1402,6 +1414,9 @@ class Function(Value):
         self.calling_convention = ""
         self._metadata: dict[str, _MetadataNode] = {}
         self._direct_indexed_builder = None
+        # Monotonic proof for owned direct compact entry placement. Raw
+        # text in any block of this function disables the no-scan path.
+        self._has_raw_text_records = False
         self._direct_indexed_function_cache = None
         self._direct_first_libpython_callee = ""
         # Mark external if no blocks ever appended — subset of llvmlite's

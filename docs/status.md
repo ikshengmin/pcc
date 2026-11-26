@@ -4999,8 +4999,79 @@ in the relevant section or issue and removes the entry.
    Require mutation coverage, actual ordered projection, native
    source-matched A/B, contextual proof and exact old output.
 
+   Verified direct-only entry-hoist positioning (production implementation,
+   Linux) rejects module-wide marker: actual temporal raw intersection
+   all6,465 hoists had prior raw text in module; function-clean5,298
+   visits479,755 of480,922 (99.76%), function-prior-raw1,167 only1,167
+   visits, entry itself clean all. Ordered projection SHA256
+   22d5d866472c67248e5aa494d24752098a8c4206e8463fc89c2cbe806865ac66:
+   4,151 unique snapshots/1,737,269 records,6,465 queries/1,788,109
+   records visited;1,533 true-tail identity scans1,308,720 visits.
+   Function monotonic marker, only raw append/insert/record text
+   replacement; no direct emitter mutation/per-record or per-Block
+   field. Exact Function/Module/Block/IRBuilder ownership/route guard;
+   false termination flag/function clean -> end; true flag verifies
+   exact final Record owner and terminator -> numeric insertion point.
+   Inline anchor precedence, text/mixed/custom/trailing/wrong owner
+   fallback unchanged. Actual old-source host singleton candidate
+   COMPLETE80.914s/847,556,608B (concurrent diagnostic only; no timing
+   A/B): same727 functions/332,713 inst/86,393 blocks, fallback0,
+   exact57,304,557-byte assembly SHA256 7165f5ed623388294453b9a74154db3e9562185daf3d9f446b03c35811777e16;
+   false reverse visits479,389->0,total480,922->1,533; no old forward
+   identity scan on verified final records. Exact current candidate
+   full625-module context capture both changed production modules:
+   ir.py963 functions/129,269 inst; ownership_lowering.py190/55,605;
+   zero fallback/no libpython edges, COMPLETE72.327s/397,111,296B.
+   Real native42-module static fixture actual IR classes and exact
+   old/new method/helper bodies; contract passes raw mutations,
+   trailing compact record, inline anchor and clean/terminated paths.
+   Five exclusive alternating baseline/candidate/control triples,
+   pinned CPU, same candidate binary and exact ordered projected
+   entries: inner2.127783->.031632s (-98.513%,5/5,control-.851%);
+   full process CPU9.059856->6.695150s (-26.101%,5/5,control-3.200%);
+   RSS386,472->386,472KiB median,control0. All15 exact positions/checksum,
+   receipt SHA256 2f15a87ccc4ac204fbd8617bdbece1e77c1a77119250783f8a86710f3ecd6d8f.
+   Stronger source-matched separate static owner binaries, same fixture
+   path, sole exact old/new hoist body difference, actual preimage and
+   candidate IR classes and independently source-matched owned runtime
+   archives; 5 alternating exclusive triples, all15 exact:
+   inner2.184601->.032293s (-98.522%,5/5,control+.705%), full process
+   CPU9.183733->7.021626s (-23.543%,5/5,control+.598%);
+   wall9.340329->7.187359s (-23.050%,5/5,control+.939%);
+   RSS386,272->385,892KiB (-380KiB/-0.0984%,5/5,control-8KiB).
+   Harness COMPLETE130.674s, receipt SHA256
+   5c94d2fb98f43b3ec444de5634c587ef778ab5db4cc9ea5991cc39f7242f99e4.
+   Independent identical-source/path native Function allocation fixture
+   actual preimage/candidate runtime and class layouts, 5 triples each
+   count727/4096: count727 requested787,372->793,188B (+5,816B,
+   exactly+8/Function), usable961,616->961,616B (5/5 ties); count4096
+   median requested5,340,586->5,373,354B (+32,768B), usable6,310,656
+   unchanged (individual large-run GC variation). Independent tiny
+   allocation-only process RSS +68KiB at both counts (727 +.317%,
+   4096 +.226%, control0); do not hide this synthetic footprint.
+   smaps short-process sampling inconclusive for causal attribution:
+   file mapping median-60KiB; anon/heap727 +348KiB vs control-72,
+   4096 +4KiB vs control-4. Actual source-matched projected owner
+   process RSS -380KiB all5 beyond control, so qualify this measured
+   owner, not a blanket memory guarantee/whole bootstrap result.
+   Allocation fixture receipt SHA256
+   d582f12d9dc0dfd96b4a4020bdb46135d89ff29943cc47c0477064a71f5c6575.
+   Focused regression guard: 131 pass/18 fail/1 deselect vs untouched
+   exact8fc6331e preimage119 pass/18 fail/1 deselect; all18 identical
+   failed node IDs and error lines (existing stale shared-pinned model
+   missing cbranch and root-leave model missing cleanup-plan helper).
+   Test-only explicit distinct Function discriminator in injected fake
+   ir namespace preserves custom owner path and baseline failure; no
+   hidden failure change. Twelve new placement/mutation contracts pass.
+   Existing unrelated whole-stage ABI contextual test intentionally
+   stopped with33 green dots, not claimed; excluded only that named
+   test from focused replay; both changed production modules exact
+   full contextual proof completed above. Next actual class method
+   owner: repeated IR builder call publication/argument lowering;
+   retain exact source/current native phase evidence. No full Stage2
+   bootstrap or limits change claimed.
+
    Claims:
-   - Stage2 direct-only entry hoist positioning: Codex, Linux, 2026-11-26T20:24Z, area selfhost
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its

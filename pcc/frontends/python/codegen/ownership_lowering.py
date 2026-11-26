@@ -1832,6 +1832,31 @@ class OwnershipLoweringMixin:
         if anchor is not None:
             self.builder.position_before(anchor)
             return
+        # The owned compact emitter installs every terminator through the
+        # builder's terminating APIs and never appends raw text without
+        # marking the function. Avoid re-reading its growing entry prefix.
+        # A text/custom/mixed owner retains the reverse textual oracle.
+        if (type(fn) is ir.Function and type(fn.module) is ir.Module
+                and type(entry) is ir.Block and entry.parent is fn
+                and type(self.builder) is ir.IRBuilder
+                and self.builder._direct_indexed_no_text
+                and fn._direct_indexed_builder is not None
+                and not fn.module._direct_indexed_retain_text):
+            if not entry._terminated and not fn._has_raw_text_records:
+                self.builder.position_at_end(entry)
+                return
+            # Even if another block used raw text, a verified final record
+            # is exactly where the reverse scan would stop. Avoid the
+            # second forward identity scan inside position_before.
+            if entry._terminated and entry._instrs:
+                index = len(entry._instrs) - 1
+                last = entry._instrs[index]
+                if (type(last) is ir.InstructionRecord and last.block is entry
+                        and self._instruction_is_terminator(last)):
+                    self.builder._block = entry
+                    self.builder._fn = fn
+                    self.builder._pos = index
+                    return
         terminator = None
         for instr in reversed(entry._instrs):
             if self._instruction_is_terminator(instr):

@@ -111,6 +111,10 @@ class Block:
         return bool(self._instrs and self._instrs[-1].opname in ("branch", "ret", "ret_void"))
 
 
+class OwnedIRFunction:
+    """Exact production Function discriminator; this CFG model is custom IR."""
+
+
 class Function:
     def __init__(self, name="f", return_type=None):
         self.name = name
@@ -201,6 +205,7 @@ def body_model():
         {"ir": SimpleNamespace(
             PointerType=PointerType, VoidType=VoidType, IntType=IntType,
             GlobalVariable=GlobalVariable, Constant=Constant, IRBuilder=Builder,
+            Function=OwnedIRFunction,
         ), "RawPointerType": RawPointerType, "L1CodegenError": AssertionError},
         sinks=("_alloca_in_entry", "_as_gc_ptr", "_fresh",
                "_value_available_at_insertion_point", "_ir_type_matches",
