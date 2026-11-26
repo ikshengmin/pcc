@@ -159,6 +159,23 @@ offset, and reject malformed, overlapping, unaligned or overflowing shapes
 before any payload access. Maximum logical i64 extent does not certify that
 an allocation of that size can succeed.
 
+The second independent slice binds an exact requested allocation extent to
+validated geometry in private zeroed backing. The initializer writes only
+immutable repeat_count and descriptor metadata, rejects mismatches and any
+second binding, and does not write tag/refcount/flags or publish visibility.
+The shared raw visitor accepts only this initialized, still-live owner. It
+computes the exact ordinal count from the immutable descriptor and reads only
+selected offsets, in fixed-then-repeated order, with role=1; its cursor state
+uses the existing `[next or -1, examined]` convention. Its bounded work is
+constant metadata reads plus one offset-table read per examined slot; there
+is no repeated complete descriptor validation before each slot or slice and
+no inspecting scalar bits to infer pointers. The caller owns lifetime,
+collector exclusion and no-park of the callback. The native private mixed
+backing control mutates seven exact owned addresses across four bounded calls
+and preserves four pointer-shaped scalar fields, header/metadata and
+zero-capacity behavior. This has no registered object, collection, cycle or
+concurrency implication.
+
 The helpers intentionally **do not publish a tag or a managed object**. Do
 not connect a frontend until every following production dispatch and handoff
 is implemented and tested. The current source audit locates these owners:

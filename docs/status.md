@@ -2496,7 +2496,6 @@ in the relevant section or issue and removes the entry.
    on 2026-11-26.
 
    Claims:
-   - #13 described-layout validated owner metadata and bounded slot visitor (no tag until all lifecycle owners ready): Codex, Linux, 2026-11-26T17:35Z, area runtime-gc-described-layout
    - J2s actual Linux x64 Stage1 indexed worker stack-map planning repeated-work attribution (self_backend_precise_stackmaps x64 only, disjoint from runtime GC and AArch64 selection): Codex, Linux, 2026-11-26T17:35Z, area stage1-codegen
    - Native completed-continuation allocation attribution and create/take/release cost: Codex, Linux, 2026-11-26T17:25Z, area runtime-gc
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
@@ -2535,7 +2534,20 @@ in the relevant section or issue and removes the entry.
    The [shared storage design](design/go-shared-managed-storage.md#first-geometry-slice-checked-fixed-and-repeated-slots-not-a-tag-admission)
    records allocation/extent, four refcount tag checks, bounded visitor,
    both dealloc dispatchers, sweep/clear, young/full tracking and owning
-   root handoff. Next: integrate descriptor-backed allocation + tag/slot
+   root handoff. Second independent runtime slice: private initializer
+   binds validated immutable metadata to the exact allocation request,
+   rejecting mismatches and second initialization without mutation.
+   Bounded precise visitor visits only selected offsets/role=1 (constant
+   metadata work plus one table read per slot) and resumes on the common
+   state cursor. Raw native mixed backing fixture visited seven owned
+   addresses in four calls, cleared only those and preserved four actual
+   pointer-shaped scalar words, header/metadata, and zero-capacity case.
+   48 scoped tests passed, guarded 3.02s/100,052,992 B; same self-owned
+   cross-target exports. No managed tag, registered owner, actual collect,
+   root or concurrency claim. The existing pcc_gc_alloc publishes the
+   type tag/cell before returning, so private geometry must be initialized
+   before that publication, not by an unqualified after-return store.
+   Next: integrate descriptor-backed allocation + tag/slot
    dispatch atomically, then real rooted pointer-free/reference-bearing
    and cycle/young/full/explicit collect tests; no Go/Java frontend use
    or production admission until complete. C++

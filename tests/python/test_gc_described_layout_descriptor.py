@@ -21,7 +21,7 @@ def descriptor(prefix, stride, fixed=(), repeated=(), version=1):
 
 
 @pytest.fixture
-def geometry():
+def geometry_namespace():
     """Run the actual raw bodies with checked memory; no simulated collector."""
     tree = ast.parse(SOURCE.read_text())
     def checked_load(words, offset):
@@ -29,9 +29,20 @@ def geometry():
         assert offset // 8 < len(words), 'descriptor table read outside supplied memory'
         return words[offset // 8]
     ns = {'i64': int, 'c_abi_export': lambda _: lambda f: f,
-          'ptr_is_null': lambda p: int(p is None), 'load_i64': checked_load}
+          'ptr_is_null': lambda p: int(p is None), 'load_i64': checked_load,
+          'load_ptr': checked_load,
+          'store_ptr': lambda p, off, val: p.__setitem__(off // 8, val),
+          'store_i64': lambda p, off, val: p.__setitem__(off // 8, val),
+          'ptr_add': lambda p, off: (p,off),
+          'call_void_ptr_i64_ptr': lambda f, slot, role, ctx: f(slot,role,ctx)}
     nodes = [n for n in tree.body if isinstance(n, (ast.Assign, ast.FunctionDef))]
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(SOURCE), 'exec'), ns)
+    return ns
+
+
+@pytest.fixture
+def geometry(geometry_namespace):
+    ns = geometry_namespace
     return tuple(ns[n] for n in ('pcc_gc_described_extent', 'pcc_gc_described_slot_count',
                                   'pcc_gc_described_slot_offset'))
 
@@ -115,6 +126,84 @@ def test_abi_layout_header_and_runtime_module_are_explicit():
     assert SOURCE.stem in runtime_modules(str(ROOT / 'pcc/runtime'), TARGET)
 
 
+def test_validated_private_initialization_is_exact_and_one_time(geometry_namespace):
+    bind = geometry_namespace['pcc_gc_described_initialize_private']
+    data = descriptor(48,24,(40,),(0,16))
+    owner = [7, 11, None, 0] + [0] * 11
+    before = list(owner)
+    for extent, desc, size, repeat in ((119,data,64,3),(121,data,64,3),
+            (120,data,56,3),(120,descriptor(32,0),40,3),(24,data,64,3),
+            (120,data,64,-1)):
+        assert bind(owner,extent,desc,size,repeat) == 0
+        assert owner == before
+    assert bind(owner,120,data,64,3) == 1
+    assert owner[0:2] == [7,11] and owner[2] is data and owner[3] == 3
+    assert owner[4:] == before[4:]
+    after = list(owner)
+    assert bind(owner,120,data,64,3) == 0 and owner == after
+
+
+@pytest.mark.parametrize('budget',(1,2,3,7,MAX_I64))
+def test_bounded_visitor_preserves_owned_slot_order_and_ignores_scalar_bits(geometry_namespace,budget):
+    bind = geometry_namespace['pcc_gc_described_initialize_private']
+    visit = geometry_namespace['pcc_gc_described_visit_slots_slice']
+    data = descriptor(48,24,(40,),(0,16))
+    owner = [0,0,None,0] + [0] * 11
+    assert bind(owner,120,data,64,3) == 1
+    sentinel = object()
+    for i in range(4,15): owner[i] = sentinel
+    seen=[]
+    def callback(slot,role,ctx):
+        base,offset=slot
+        assert base is owner and role==1 and ctx is sentinel
+        assert base[offset//8] is sentinel
+        seen.append(offset)
+        base[offset//8]=None
+    cursor=0
+    while cursor>=0:
+        state=[123,456]
+        assert visit(owner,cursor,budget,callback,sentinel,state)==1
+        assert 0 < state[1] <= budget
+        cursor=state[0]
+    assert seen == [40,48,64,72,88,96,112]
+    assert [owner[i] for i in (4,7,10,13)] == [sentinel]*4
+    assert owner[2] is data and owner[3]==3
+
+
+def test_empty_backing_and_invalid_slices_never_call_visitor(geometry_namespace):
+    bind = geometry_namespace['pcc_gc_described_initialize_private']
+    visit = geometry_namespace['pcc_gc_described_visit_slots_slice']
+    owner=[0,0,None,0]
+    called=lambda *_: pytest.fail('must not visit scalar metadata or invalid input')
+    state=[1,2]
+    assert visit(owner,0,1,called,None,state)==0 and state==[-1,0]
+    assert bind(owner,32,descriptor(32,8,(),(0,)),48,0)==1
+    for cursor,limit,callback in ((-1,1,called),(0,0,called),(0,-1,called),(0,1,None)):
+        state=[1,2]
+        assert visit(owner,cursor,limit,callback,None,state)==0 and state==[-1,0]
+    assert visit(owner,0,1,called,None,state)==1 and state==[-1,0]
+    assert visit(owner,MAX_I64,1,called,None,state)==1 and state==[-1,0]
+    assert visit(owner,0,1,called,None,None)==0
+
+
+def test_slice_work_reads_only_selected_offsets_not_full_descriptor(geometry_namespace):
+    bind = geometry_namespace['pcc_gc_described_initialize_private']
+    visit = geometry_namespace['pcc_gc_described_visit_slots_slice']
+    class Observed(list):
+        def __init__(self,values): super().__init__(values); self.reads=[]
+        def __getitem__(self,index): self.reads.append(index); return super().__getitem__(index)
+    data=Observed(descriptor(32+8000,0,tuple(range(32,8032,8))))
+    owner=[0,0,None,0]+[0]*1000
+    assert bind(owner,len(owner)*8,data,len(data)*8,0)==1
+    data.reads.clear()
+    seen=[]
+    state=[-1,0]
+    assert visit(owner,998,1,lambda slot,role,ctx: seen.append(slot[1]),None,state)==1
+    assert state==[999,1] and seen==[32+998*8]
+    assert len(data.reads)<=7
+    assert [i for i in data.reads if i>=5]==[5+998]
+
+
 @pytest.mark.integration
 @pytest.mark.pcc_gate(unavailable=None if sys.platform == 'linux' and platform.machine().lower() in (
     'x86_64', 'amd64') else 'requires native Linux x86-64 ELF')
@@ -133,8 +222,18 @@ def test_descriptor_geometry_executes_owned_native_code(tmp_path, monkeypatch):
         symbols = parse_relocatable(obj).symbols
         assert {s.name for s in symbols if s.name and s.section_index == 0} == set()
         assert {s.name for s in symbols if s.binding == 1 and s.section_index != 0} == {
-            'pcc_gc_described_extent', 'pcc_gc_described_slot_count', 'pcc_gc_described_slot_offset'}
+            'pcc_gc_described_extent', 'pcc_gc_described_slot_count', 'pcc_gc_described_slot_offset',
+            'pcc_gc_described_initialize_private','pcc_gc_described_visit_slots_slice'}
         code = r'''#include "pcc_described_layout.h"
+typedef struct Trace { int64_t *base; int64_t *offsets; int64_t count; int64_t bad; int64_t value; } Trace;
+static void record(void *slot,int64_t role,void *context) {
+    Trace *t=(Trace *)context;
+    int64_t *p=(int64_t *)slot;
+    if(role!=1 || t->count>=7 || *p!=t->value) {t->bad=1;return;}
+    t->offsets[t->count]=(p-t->base)*8;
+    t->count++;
+    *p=0;
+}
 int main(void) {
     const int64_t bytes[] = {PCC_DESCRIBED_DESCRIPTOR_VERSION,32,1,0,0};
     const int64_t mixed[] = {1,48,24,1,2,40,0,16};
@@ -151,6 +250,30 @@ int main(void) {
     if (pcc_gc_described_extent(bad,sizeof(bad),0)!=-1) return 7;
     if (pcc_gc_described_extent(bytes,sizeof(bytes),9223372036854775776LL)!=-1) return 8;
     if (pcc_gc_described_extent(bytes,sizeof(bytes)-1,1)!=-1) return 9;
+    int64_t owner[15]={0};
+    owner[0]=7;owner[1]=11;
+    if (pcc_gc_described_initialize_private(owner,119,mixed,sizeof(mixed),3)) return 10;
+    if (owner[2]!=0 || owner[3]!=0) return 11;
+    if (!pcc_gc_described_initialize_private(owner,sizeof(owner),mixed,sizeof(mixed),3)) return 12;
+    if (pcc_gc_described_initialize_private(owner,sizeof(owner),mixed,sizeof(mixed),3)) return 13;
+    int64_t value=(int64_t)(void*)owner;
+    for (int i=4;i<15;i++) owner[i]=value;
+    int64_t offsets[7]={0};
+    Trace t;t.base=owner;t.offsets=offsets;t.count=0;t.bad=0;t.value=value;
+    int64_t state[2]={0,0};int64_t cursor=0;
+    while(cursor>=0){
+        if (!pcc_gc_described_visit_slots_slice(owner,cursor,2,record,&t,state)) return 14;
+        if(state[1]<=0 || state[1]>2) return 15;
+        cursor=state[0];
+    }
+    if(t.bad || t.count!=7) return 16;
+    for(int i=0;i<7;i++) if(offsets[i]!=expected[i] || owner[expected[i]/8]!=0) return 17;
+    if(owner[4]!=value || owner[7]!=value || owner[10]!=value || owner[13]!=value) return 18;
+    if(owner[0]!=7 || owner[1]!=11 || owner[2]!=(int64_t)(void*)mixed || owner[3]!=3) return 19;
+    if(pcc_gc_described_visit_slots_slice(owner,-1,2,record,&t,state) || state[0]!=-1 || state[1]!=0) return 20;
+    int64_t empty[4]={0};
+    if(!pcc_gc_described_initialize_private(empty,sizeof(empty),bytes,sizeof(bytes),0)) return 21;
+    if(!pcc_gc_described_visit_slots_slice(empty,0,2,record,&t,state) || state[0]!=-1 || state[1]!=0 || t.bad || t.count!=7) return 22;
     return 42;
 }'''
         caller = CEvaluator(backend='self', target_triple=TARGET).compile_translation_units(
@@ -175,7 +298,8 @@ def test_descriptor_geometry_emits_owned_64_bit_cross_target_objects(tmp_path, m
         guard.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('external target tool invoked'))
         runtime_ir(SOURCE, ir, target)
         text = ir.read_text()
-        for name in ('pcc_gc_described_extent', 'pcc_gc_described_slot_count', 'pcc_gc_described_slot_offset'):
+        for name in ('pcc_gc_described_extent', 'pcc_gc_described_slot_count', 'pcc_gc_described_slot_offset',
+                     'pcc_gc_described_initialize_private','pcc_gc_described_visit_slots_slice'):
             assert f'define external i64 @{name}(ptr ' in text
         image = emit_owned_object(text, target)
     obj = tmp_path / 'descriptor.o'; obj.write_bytes(image)
@@ -187,4 +311,5 @@ def test_descriptor_geometry_emits_owned_64_bit_cross_target_objects(tmp_path, m
     else:
         assert object_symbols(obj, undefined=True).stdout == ''
         defined = {line.split()[-1].lstrip('_') for line in object_symbols(obj).stdout.splitlines()}
-    assert {'pcc_gc_described_extent', 'pcc_gc_described_slot_count', 'pcc_gc_described_slot_offset'} <= defined
+    assert {'pcc_gc_described_extent', 'pcc_gc_described_slot_count', 'pcc_gc_described_slot_offset',
+            'pcc_gc_described_initialize_private','pcc_gc_described_visit_slots_slice'} <= defined

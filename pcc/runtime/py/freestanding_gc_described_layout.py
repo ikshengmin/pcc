@@ -9,12 +9,14 @@ is admitted here; the collector's tag dispatch remains unchanged.
 """
 from pcc import i64
 from pcc.extern import c_abi_export
-from pcc.unsafe import load_i64, ptr_is_null
+from pcc.unsafe import call_void_ptr_i64_ptr, load_i64, load_ptr, ptr_add, ptr_is_null, store_i64, store_ptr
 
 __pcc_freestanding__ = True
 
 _DESC_VERSION = 1
 _DESC_HEADER_BYTES = 40
+_OBJECT_DESCRIPTOR_OFFSET = 16
+_OBJECT_REPEAT_COUNT_OFFSET = 24
 _OBJECT_FIELDS_OFFSET = 32
 _MAX_I64 = 9223372036854775807
 
@@ -90,3 +92,70 @@ def pcc_gc_described_slot_offset(descriptor, descriptor_bytes: i64, repeat_count
     ref: i64 = remaining % element_refs
     return (load_i64(descriptor, 8) + element * load_i64(descriptor, 16)
             + load_i64(descriptor, _DESC_HEADER_BYTES + (fixed_refs + ref) * 8))
+
+
+@c_abi_export("pcc_gc_described_initialize_private")
+def pcc_gc_described_initialize_private(owner, allocation_extent: i64, descriptor, descriptor_bytes: i64, repeat_count: i64) -> i64:
+    """Bind geometry exactly once, while the zeroed raw owner is private.
+
+    Caller holds the readable allocation and immutable descriptor alive. This
+    must finish BEFORE allocator/collector visibility; it never publishes a
+    header, root, tag, or reference. No safepoint may split the final stores.
+    Rejected inputs leave every byte of the owner unchanged.
+    """
+    if ptr_is_null(owner) != 0 or allocation_extent < _OBJECT_FIELDS_OFFSET:
+        return 0
+    if pcc_gc_described_extent(descriptor, descriptor_bytes, repeat_count) != allocation_extent:
+        return 0
+    if ptr_is_null(load_ptr(owner, _OBJECT_DESCRIPTOR_OFFSET)) == 0 or load_i64(owner, _OBJECT_REPEAT_COUNT_OFFSET) != 0:
+        return 0
+    store_i64(owner, _OBJECT_REPEAT_COUNT_OFFSET, repeat_count)
+    store_ptr(owner, _OBJECT_DESCRIPTOR_OFFSET, descriptor)
+    return 1
+
+
+@c_abi_export("pcc_gc_described_visit_slots_slice")
+def pcc_gc_described_visit_slots_slice(owner, cursor: i64, limit: i64, visitor, context, state_out) -> i64:
+    """Bounded visit of an already validated immutable layout (not tag dispatch).
+
+    The owner and descriptor must stay live; the descriptor and repeat count
+    were bound by initialize_private and cannot subsequently change. This
+    trusted-owner helper never validates the descriptor again, scans scalar
+    bytes, reads reference contents, retains slot addresses or parks. The
+    callback must obey the collector's own no-retirement/no-park protocol.
+    state_out is [next ordinal or -1, number examined], exactly the common
+    collector cursor convention. Every visited slot has owned-reference role.
+    """
+    if ptr_is_null(state_out) != 0:
+        return 0
+    store_i64(state_out, 0, -1)
+    store_i64(state_out, 8, 0)
+    if ptr_is_null(owner) != 0 or ptr_is_null(visitor) != 0 or cursor < 0 or limit <= 0:
+        return 0
+    descriptor = load_ptr(owner, _OBJECT_DESCRIPTOR_OFFSET)
+    if ptr_is_null(descriptor) != 0:
+        return 0
+    repeats: i64 = load_i64(owner, _OBJECT_REPEAT_COUNT_OFFSET)
+    prefix: i64 = load_i64(descriptor, 8)
+    stride: i64 = load_i64(descriptor, 16)
+    fixed_refs: i64 = load_i64(descriptor, 24)
+    element_refs: i64 = load_i64(descriptor, 32)
+    total: i64 = fixed_refs + element_refs * repeats
+    examined: i64 = 0
+    while cursor < total and examined < limit:
+        offset: i64 = 0
+        if cursor < fixed_refs:
+            offset = load_i64(descriptor, _DESC_HEADER_BYTES + cursor * 8)
+        else:
+            remaining: i64 = cursor - fixed_refs
+            # A repeated ordinal exists only when element_refs is positive.
+            element: i64 = remaining // element_refs
+            ref: i64 = remaining % element_refs
+            offset = prefix + element * stride + load_i64(descriptor, _DESC_HEADER_BYTES + (fixed_refs + ref) * 8)
+        call_void_ptr_i64_ptr(visitor, ptr_add(owner, offset), 1, context)
+        cursor = cursor + 1
+        examined = examined + 1
+    if cursor < total:
+        store_i64(state_out, 0, cursor)
+    store_i64(state_out, 8, examined)
+    return 1
