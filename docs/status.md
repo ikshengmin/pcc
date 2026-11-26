@@ -1783,15 +1783,38 @@ in the relevant section or issue and removes the entry.
        `py_err_occurred` checks (3.0%), raise sequences (2.6%). The chains
        exist because each temporary root slot enters and leaves its own
        LIFO frame, so error edges from different sites see different
-       frame stacks and cannot share a landing. Next (J2 (e), redesigned):
-       register a function's temporary slots once at entry (they are
-       already nulled at entry and after use) so every point has one root
-       state, then give each function one error landing that a site
-       enters with its line number. Separately, `_pcc_py_module_init_<mod>`
-       is dead (nothing calls it, see its docstring) and duplicates every
-       class definition: 21% of `pcc.frontends.python.py_ast`'s IR, 0-4%
-       of the larger modules; about ten tests read it as the class-init
-       IR and would move to `_pcc_py_module_top_<mod>`.
+       frame stacks and cannot share a landing.
+       Later the same day, all pushed and replay-measured (five
+       alternating pairs, objects byte-identical unless noted):
+       520501236 direct arena lengths (-4 to -8%), 734b1152f drops the
+       never-called `_pcc_py_module_init_<mod>` (py_ast -26% CPU, object
+       -24%), ffc64f469 three-to-five-root error cleanup helpers (-3% to
+       -6.5%, objects -4.5% and -17%), 188619260 and 8b35b70a5 typed
+       passes share decoded opcodes, labels, branches and tokens across
+       passes (-15% and -2.5%), 06272c490 a Stage1 codegen worker reuses
+       its Darwin object when the captured kernel, emitter sources, target
+       and PCC_ settings are unchanged (a hit: array_core 8.5 -> 1.6 s,
+       py_ast 25.2 -> 3.0 s). Stage1 on 06272c490 (host load 15-20, both
+       passed with smoke): cold 1887 s wall, 6911 s CPU (-21% against the
+       morning's 8795 s); warm, no source change, 607 s wall, 1468 s CPU;
+       `__text` 221.4 MiB. In the warm run the codegen workers take about
+       180 s and the last ~300 s run on 2-5 processes ending in
+       `pcc link`; that tail is the next thing to attribute. The user,
+       2026-11-26: the five-minute target is for a cold Stage1 too.
+       Rewrites per typed pass over array_core, hoist_predicates and
+       pipeline_frontend_parallel (~580k records each pass):
+       thread_trampoline_branches removes 11609 and adds 2921,
+       fold_scratch_def_into_move 3598/1799, the adjacent stack
+       store/load forward 2265/2259; the other sixteen together under 300,
+       ten of them none. Instruction selection already emits what most
+       passes look for, yet each pass still copies and sweeps every
+       record. Next: (1) attribute the warm tail (link); (2) passes that
+       did not rewrite publish nothing and build no output; (3) the
+       allocation model toward LLVM's (the maintainer's answer to P0 (c):
+       at least LLVM parity): values without stack slots unless spilled,
+       live-range splitting, compare/branch and immediate fusion at
+       selection, then remove passes that no longer fire; (4) J2 (e) one
+       error landing per function after registering temporaries once.
    J3. TaskScope (5x CPython), `time.perf_counter` (7x), `str.encode` (5x).
    A1. Darwin thread-local access inline (TSD slot through `tpidrro_el0`,
        startup check, fallback to the call): the resolver is 0.65 us per
@@ -2047,6 +2070,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Stage2 backend pairing/trampoline compile-time attribution and optimization: Codex, Linux, 2026-11-26T09:07Z, area backend
+   - Stage1 compile time on macOS (J2s): Claude, macOS, 2026-11-26T09:45Z, area backend (`self_backend_aarch64_typed_peepholes.py`, `self_backend_aarch64_typed_pass_context.py`, `self_backend_aarch64_fragments.py`, the AArch64 allocator `self_backend_aarch64_darwin_regalloc.py`, the Mach-O link files, `pcc/frontends/python/direct_object_cache.py` and their tests; not `self_backend_aarch64_typed_pair.py` or `self_backend_aarch64_typed_cfg.py`, which the Stage2 pairing/trampoline unit above holds)
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
