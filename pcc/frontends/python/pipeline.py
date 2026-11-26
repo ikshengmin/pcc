@@ -3586,10 +3586,17 @@ def _compile_python_multi_codegen_parallel_uncached(
     )
     worker_prefix = _python_frontend_worker_command_prefix()
     module_dependency_map = None
-    if len(worker_prefix) == 1 and _is_native_worker_executable(worker_prefix[0]):
+    if str(os.environ.get("PCC_HOST_CODEGEN_BATCH", "") or "").strip() != "2":
         # The export workers already own one complete lifted AST each. They
         # populate this shared map from those ASTs inside build_shared_exports;
-        # avoid a second textual import scan in the pcc1 coordinator.
+        # avoid a second textual import scan in the coordinator. The map
+        # selects the indexed export file, from which each single-module
+        # codegen worker, host or pcc1, decodes only its root's dependency
+        # closure. A host worker used to decode the whole graph: 1.5 of the
+        # 2.2 s CPU of a small Stage1 worker, in each of 622 workers, while
+        # the median closure is 6% of the graph. It also gave host and pcc1
+        # workers different views of one exports file. A host batch of two
+        # (PCC_HOST_CODEGEN_BATCH=2) still reads the full graph.
         module_dependency_map = {}
     if coordinator_timing is None:
         return _pipeline_frontend_parallel.compile_parallel_uncached(

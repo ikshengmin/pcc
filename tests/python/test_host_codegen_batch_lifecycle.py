@@ -86,6 +86,9 @@ def batch_worker(tmp_path, monkeypatch):
     class Node:
         def __init__(self, index, kind):
             self.index = index
+            # The worker scans a module's top-level statements for the
+            # freestanding/runtime-port directives; these modules have none.
+            self.body = []
             state.references[index, kind] = weakref.ref(self)
 
         def __str__(self):
