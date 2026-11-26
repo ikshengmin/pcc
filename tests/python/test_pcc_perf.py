@@ -736,5 +736,78 @@ def test_instruction_rows_take_the_difference_of_two_run_lengths():
     })
     assert rows[0]["instructions"] == 1000.0 and "instruction_change" not in rows[0]
     assert rows[0]["instruction_spread"] == pytest.approx(0.4)
+    assert rows[0]["cycle_spread"] == pytest.approx(10.0)
+    assert rows[0]["cycle_runs"] == [2000, 2100, 1900]
     assert rows[1]["instruction_change"] == pytest.approx(-1.0)
     assert rows[1]["cycle_change"] == pytest.approx(-10.0)
+
+
+_WAIT_THEN_SPIN = """
+import os, sys, time
+
+def waiting():
+    time.sleep(0.4)
+
+def spinning():
+    end = time.process_time() + 0.4
+    total = 0
+    while time.process_time() < end:
+        total += 1
+    return total
+
+waiting()
+spinning()
+if sys.argv[1:] == ["hard-exit"]:
+    os._exit(0)
+"""
+
+
+def _profiled_run(tmp_path, *argv):
+    inject = tmp_path / "inject"
+    samples = tmp_path / "samples"
+    inject.mkdir()
+    samples.mkdir()
+    (inject / "sitecustomize.py").write_text(PERF._COMPILE_SAMPLER)
+    env = {"PATH": "/usr/bin:/bin", "PYTHONPATH": str(inject),
+           "PCC_COMPILE_PROFILE_DIR": str(samples), "PCC_COMPILE_PROFILE_HZ": "1000"}
+    subprocess.run([sys.executable, "-c", _WAIT_THEN_SPIN, *argv], env=env,
+                   check=True, timeout=60)
+    return PERF.read_compile_samples(samples)
+
+
+@pytest.mark.parametrize("argv", ((), ("hard-exit",)))
+def test_compile_sampler_counts_processor_time_not_waiting(tmp_path, argv):
+    # A wall-clock sampler charges the sleep to `waiting`; CPU-time samples
+    # land in `spinning` only, and os._exit still writes the samples.
+    processes = _profiled_run(tmp_path, *argv)
+    assert len(processes) == 1 and processes[0]["cpu"] >= 0.3
+    rows = PERF.compile_profile_rows(processes)
+    self_time = dict(rows["self"])
+    spinning = sum(count for frame, count in self_time.items() if frame.startswith("spinning "))
+    waiting = sum(count for frame, count in self_time.items() if frame.startswith("waiting "))
+    assert spinning >= 0.7 * rows["samples"] and spinning > 100
+    assert waiting <= 0.02 * rows["samples"]
+
+
+def test_compile_profile_rows_group_roles_owners_and_inclusive_time():
+    processes = [
+        {"cpu": 2.0, "argv": "/x/pcc_perf.py _compile /arm native_stats /run",
+         "folded": {"main [pcc/driver/cli.py];emit [pcc/backend/self_backend.py]": 30,
+                    "main [pcc/driver/cli.py];_find_and_load [<frozen importlib._bootstrap>]": 10}},
+        {"cpu": 5.0, "argv": "-m pcc --pcc-python-multi-codegen-worker /tmp/w",
+         "folded": {"run [pcc/frontends/python/worker.py];_local_names [pcc/frontends/python/opt/mem2reg.py]": 50,
+                    "run [pcc/frontends/python/worker.py];communicate [python/subprocess.py]": 10}},
+        {"cpu": 1.0, "argv": "-m pcc --pcc-python-multi-codegen-worker /tmp/v", "folded": {}},
+    ]
+    rows = PERF.compile_profile_rows(processes)
+    assert rows["samples"] == 100
+    assert rows["roles"] == [["pcc-python-multi-codegen-worker", 2, 6.0],
+                             ["build coordinator", 1, 2.0]]
+    assert dict(rows["owners"]) == {
+        "pcc/frontends/python": 50, "pcc/backend": 30,
+        "CPython import": 10, "CPython stdlib/other": 10,
+    }
+    assert rows["self"][0] == ("_local_names [pcc/frontends/python/opt/mem2reg.py]", 50)
+    inclusive = dict(rows["inclusive"])
+    assert inclusive["run [pcc/frontends/python/worker.py]"] == 60
+    assert inclusive["main [pcc/driver/cli.py]"] == 40

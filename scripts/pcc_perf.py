@@ -28,6 +28,12 @@
                         --callers F, F's own time split by who called it
     locks NAME          which callers wait for the graph lock
     layout A [B]        cache-line audit (scripts/pcc_hot_layout.py)
+    compile NAME        where one compile of the benchmark program spends its
+                        processor time: the arm's sealed compiler, its own
+                        runtime, empty caches; wall, tree CPU and peak RSS,
+                        CPU by process role, by owner package and by function
+                        (self and inclusive), from CPU-time (SIGPROF) samples
+                        of every Python process of the build
     profile-preflight  test Linux kernel sample transport on this tool's thread
 
 Arms, the object cache and the ledger live outside the repository, under
@@ -456,6 +462,345 @@ def build_child(arm: Path) -> int:
     return 0
 
 
+# ---- compile profile -----------------------------------------------------
+
+# Injected as sitecustomize.py into every Python process of a profiled build
+# (the build child and each worker it starts inherit PYTHONPATH). SIGPROF
+# fires per period of the process's own processor time, so a process that
+# waits in a C call (poll, read, sleep, waitpid) takes no sample: a wall-clock
+# sampler charges that wait to the Python caller, which once ranked a worker
+# pool's polling loop first with 45% of a compile. The handler sees the main
+# thread's stack; the process's CPU total comes from getrusage and is exact.
+_COMPILE_SAMPLER = r'''
+import os
+import signal
+import sys
+
+_DIR = os.environ.get("PCC_COMPILE_PROFILE_DIR", "")
+if _DIR and hasattr(signal, "setitimer"):
+    import atexit
+    import resource
+
+    _counts = {}
+    _period = 1.0 / float(os.environ.get("PCC_COMPILE_PROFILE_HZ", "1000"))
+
+    def _pcc_on_sigprof(signum, frame):
+        codes = []
+        while frame is not None and len(codes) < 256:
+            codes.append(frame.f_code)
+            frame = frame.f_back
+        key = tuple(codes)
+        _counts[key] = _counts.get(key, 0) + 1
+
+    def _pcc_start():
+        signal.signal(signal.SIGPROF, _pcc_on_sigprof)
+        signal.setitimer(signal.ITIMER_PROF, _period, _period)
+
+    _root = os.environ.get("PCC_COMPILE_PROFILE_ROOT", "")
+
+    def _pcc_where(filename):
+        # Relative to the compiler's source root; anything else is CPython's
+        # (stdlib, site-packages) or generated code ("<string>").
+        if _root and filename.startswith(_root + "/"):
+            return filename[len(_root) + 1:]
+        if filename.startswith("<"):
+            return filename
+        return "python/" + os.path.basename(filename)
+
+    def _pcc_flush():
+        signal.setitimer(signal.ITIMER_PROF, 0, 0)
+        usage = resource.getrusage(resource.RUSAGE_SELF)
+        path = os.path.join(_DIR, "cpu-%d.folded" % os.getpid())
+        with open(path, "w", encoding="utf-8") as stream:
+            stream.write("#cpu %.6f\n" % (usage.ru_utime + usage.ru_stime))
+            stream.write("#argv " + " ".join(sys.argv).replace("\n", " ")[:400] + "\n")
+            for codes, count in _counts.items():
+                labels = [code.co_qualname + " [" + _pcc_where(code.co_filename) + "]"
+                          for code in reversed(codes)]
+                stream.write(";".join(labels) + " " + str(count) + "\n")
+        _counts.clear()
+
+    atexit.register(_pcc_flush)
+    _pcc_exit = os._exit
+
+    def _pcc_exit_flushing(code):
+        try:
+            _pcc_flush()
+        finally:
+            _pcc_exit(code)
+
+    os._exit = _pcc_exit_flushing
+    # Interval timers do not survive fork; restart them in a forked child.
+    os.register_at_fork(after_in_child=lambda: (_counts.clear(), _pcc_start()))
+    _pcc_start()
+'''
+
+
+def read_compile_samples(directory: Path) -> list[dict]:
+    """The per-process sample files a profiled build wrote."""
+    processes = []
+    for path in sorted(directory.glob("cpu-*.folded")):
+        entry = {"cpu": 0.0, "argv": "", "folded": {}}
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("#cpu "):
+                entry["cpu"] = float(line[5:])
+            elif line.startswith("#argv "):
+                entry["argv"] = line[6:]
+            elif line:
+                stack, _, count = line.rpartition(" ")
+                entry["folded"][stack] = entry["folded"].get(stack, 0) + int(count)
+        processes.append(entry)
+    return processes
+
+
+def compile_process_role(argv: str) -> str:
+    """A process's part in the build, from its command line: the first
+    pcc worker flag, or the build itself."""
+    for word in argv.split():
+        if word.startswith("--pcc-") and word.endswith("worker"):
+            return word[2:]
+    if " _compile " in f" {argv} ":
+        return "build coordinator"
+    return argv.split(" ", 1)[0].rsplit("/", 1)[-1] or "unknown"
+
+
+def frame_owner(frame: str) -> str:
+    """The package a sampled frame's code belongs to: ``pcc/<dir>/<dir>``,
+    CPython's import system, or the standard library."""
+    where = frame[frame.rfind("[") + 1:-1] if frame.endswith("]") else ""
+    if where.startswith("pcc/"):
+        parts = where.split("/")
+        return "/".join(parts[:3]) if len(parts) > 3 else "/".join(parts[:-1])
+    if "importlib" in where:
+        return "CPython import"
+    if where == "<string>":
+        # exec-generated functions: dataclass __init__/__eq__/__hash__.
+        return "generated code (<string>)"
+    if where.startswith("python/") or where.startswith("<"):
+        return "CPython stdlib/other"
+    return "repository " + where.split("/", 1)[0]
+
+
+def compile_callers(processes: list[dict], needle: str, depth: int) -> list:
+    """The self samples of the frames containing NEEDLE, by their callers:
+    the DEPTH frames above each, nearest first."""
+    chains: collections.Counter = collections.Counter()
+    for process in processes:
+        for stack, count in process["folded"].items():
+            frames = stack.split(";")
+            if needle in frames[-1]:
+                above = frames[-1 - depth:-1]
+                chains[(frames[-1], " <- ".join(reversed(above)))] += count
+    return chains.most_common()
+
+
+def compile_profile_rows(processes: list[dict]) -> dict:
+    """CPU by process role (exact, from getrusage), and samples by owner
+    package and by function, self and inclusive (each function once per
+    stack)."""
+    roles: dict[str, list] = {}
+    owners: collections.Counter = collections.Counter()
+    self_time: collections.Counter = collections.Counter()
+    inclusive: collections.Counter = collections.Counter()
+    total = 0
+    for process in processes:
+        role = compile_process_role(process["argv"])
+        row = roles.setdefault(role, [0, 0.0])
+        row[0] += 1
+        row[1] += process["cpu"]
+        for stack, count in process["folded"].items():
+            frames = stack.split(";")
+            total += count
+            self_time[frames[-1]] += count
+            owners[frame_owner(frames[-1])] += count
+            for frame in set(frames):
+                inclusive[frame] += count
+    return {
+        "samples": total,
+        "roles": sorted(([role, n, cpu] for role, (n, cpu) in roles.items()),
+                        key=lambda item: -item[2]),
+        "owners": owners.most_common(),
+        "self": self_time.most_common(),
+        "inclusive": inclusive.most_common(),
+    }
+
+
+def print_compile_profile(report: dict, rows: dict, limit: int) -> None:
+    settings = " ".join(f"{key}={value}" for key, value in report.get("settings", {}).items())
+    print(f"compile {report['arm']} {report['program']}"
+          f"{' with ' + settings if settings else ''}: "
+          f"smoke {report.get('smoke', 'not run')}, "
+          f"wall {report['wall']:.1f} s, tree CPU {report['cpu']:.1f} s "
+          f"(user {report['user']:.1f} + sys {report['sys']:.1f}), "
+          f"largest process RSS {report['max_rss_mb']:.0f} MB, "
+          f"{sum(row[1] for row in rows['roles'])} sampled processes, "
+          f"{rows['samples']} samples")
+    total = max(rows["samples"], 1)
+    print("\nCPU by process role (getrusage):")
+    for role, count, cpu in rows["roles"]:
+        print(f"  {cpu:8.1f} s  {count:3d} x  {role}")
+    print("\nsamples by owner (self):")
+    for owner, count in rows["owners"][:limit]:
+        print(f"  {100.0 * count / total:5.1f}%  {owner}")
+    for title, key in (("functions by self time", "self"),
+                       ("functions by inclusive time", "inclusive")):
+        print(f"\n{title}:")
+        for frame, count in rows[key][:limit]:
+            print(f"  {100.0 * count / total:5.1f}%  {frame}")
+
+
+def report_compile_run(run: Path, limit: int, callers: str, depth: int,
+                       process_rank: int = 0) -> int:
+    """Print a profiled compile's report from its run directory; with
+    CALLERS, the self time of those frames by caller instead; with
+    PROCESS_RANK, only the process with that CPU rank (1 = the largest)."""
+    report = _read_arm_json(run / "compile.json")
+    if not report.get("complete"):
+        raise SystemExit(f"{run} holds no completed compile")
+    processes = read_compile_samples(run / "samples")
+    ranked = sorted(processes, key=lambda process: -process["cpu"])
+    if process_rank:
+        if not 1 <= process_rank <= len(ranked):
+            raise SystemExit(f"--process must be 1..{len(ranked)}")
+        chosen = ranked[process_rank - 1]
+        print(f"process {process_rank} of {len(ranked)} by CPU: {chosen['cpu']:.1f} s, "
+              f"{compile_process_role(chosen['argv'])}")
+        processes = [chosen]
+    rows = compile_profile_rows(processes)
+    total = max(rows["samples"], 1)
+    if callers:
+        for needle in callers.split(","):
+            print(f"self time of frames containing {needle!r}, by caller:")
+            for (frame, chain), count in compile_callers(processes, needle, depth)[:limit]:
+                print(f"  {100.0 * count / total:5.1f}%  {frame}  <-  {chain}")
+        return 0
+    print_compile_profile(report, rows, limit)
+    if process_rank:
+        return 0
+    # The wall time follows the longest serial process, not the CPU sum.
+    print("\nlargest processes by CPU (--process N reports one):")
+    for rank, process in enumerate(ranked[:6], 1):
+        print(f"  {rank}. {process['cpu']:8.1f} s  {compile_process_role(process['argv'])}")
+    profile = run / "profile.json"
+    if not profile.exists():
+        profile.write_text(json.dumps(
+            {"report": report, "rows": {key: value[:200] if isinstance(value, list) else value
+                                        for key, value in rows.items()}}, indent=1) + "\n")
+    print(f"\nreceipt {profile}")
+    return 0
+
+
+def compile_profile(name: str, program: str, hz: int, limit: int, timeout: int,
+                    max_tree_rss: int, preflight_reserve: int,
+                    settings: list[str] | None = None) -> int:
+    """Profile one cold compile of PROGRAM with arm NAME's sealed compiler;
+    SETTINGS (``KEY=VALUE``) are compiler environment settings under test."""
+    extra: dict[str, str] = {}
+    for setting in settings or []:
+        key, separator, value = setting.partition("=")
+        if not separator or not key.startswith("PCC_"):
+            raise SystemExit(f"--env takes PCC_NAME=VALUE, not {setting!r}")
+        extra[key] = value
+    arm = arm_dir(name)
+    build_report = _read_arm_json(arm / "build.json")
+    if not build_report.get("complete"):
+        raise SystemExit(f"arm {name} is not completely built; run `arm {name}` first")
+    if program not in PROGRAMS:
+        raise SystemExit(f"program must be one of {', '.join(PROGRAMS)}")
+    run = HOME / "compile" / f"{name}-{program}-{time.strftime('%Y%m%d-%H%M%S')}"
+    samples = run / "samples"
+    inject = run / "inject"
+    for directory in (samples, inject, run / "object-cache", run / "ir-cache"):
+        directory.mkdir(parents=True)
+    (inject / "sitecustomize.py").write_text(_COMPILE_SAMPLER, encoding="utf-8")
+    runtime = build_report["runtime"]
+    sys.path.insert(0, str(REPO_ROOT))
+    from scripts import run_process_tree_sample
+
+    environment = dict(
+        UV_PROJECT_ENVIRONMENT=str(REPO_ROOT / ".venv"), UV_NO_SYNC="1",
+        PCC_THREADS="1", PCC_REFCOUNT_KIND="atomic", PCC_NO_AUTO_PCC1="1",
+        PCC_TEST_NO_NATIVE_PROVISIONING="1",
+        PYTHONPATH=str(inject) + os.pathsep + str(arm / "source"),
+        PCC_PERF_HOME=str(HOME), PCC_RUNTIME_ARCHIVE=runtime,
+        PCC_THREADED_RUNTIME_ARCHIVE=runtime,
+        PCC_SELF_BACKEND_OBJECT_CACHE_DIR=str(run / "object-cache"),
+        PCC_PY_FRONTEND_IR_CACHE_DIR=str(run / "ir-cache"),
+        PCC_COMPILE_PROFILE_DIR=str(samples), PCC_COMPILE_PROFILE_HZ=str(hz),
+        PCC_COMPILE_PROFILE_ROOT=str(arm / "source"),
+        PCC_COMPILE_PROFILE_SETTINGS=json.dumps(extra, sort_keys=True),
+    )
+    environment.update(extra)
+    os.environ.update(environment)
+    reserve_flag = ("--linux-physical-preflight-reserve-bytes" if sys.platform.startswith("linux")
+                    else "--darwin-preflight-reserve-bytes")
+    print(f"profiling a cold compile of {program} with arm {name} into {run}", flush=True)
+    with performance_lock():
+        code = run_process_tree_sample.main([
+            "--result", str(run / "guard.json"), "--samples", str(run / "rss.tsv"),
+            "--stdout", str(run / "build.stdout"), "--stderr", str(run / "build.stderr"),
+            "--cwd", str(arm / "source"), "--timeout", str(timeout),
+            "--max-tree-rss-bytes", str(max_tree_rss),
+            reserve_flag, str(preflight_reserve),
+            "--no-performance-lock", "--",
+            "uv", "run", "--no-sync", "python", str(Path(__file__).absolute()),
+            "_compile", str(arm), program, str(run),
+        ])
+    report = _read_arm_json(run / "compile.json")
+    if code != 0 or not report.get("complete"):
+        stderr = run / "build.stderr"
+        print(stderr.read_text()[-2000:] if stderr.is_file() else f"guard exit {code}")
+        return 1
+    # The caches only existed to make the compile cold.
+    shutil.rmtree(run / "object-cache", ignore_errors=True)
+    shutil.rmtree(run / "ir-cache", ignore_errors=True)
+    return report_compile_run(run, limit, "", 0)
+
+
+def compile_child(arm: Path, program: str, run: Path) -> int:
+    """Runs with the arm's sealed source first on sys.path: one compile."""
+    import resource
+
+    import pcc
+    from pcc.frontends.python.pipeline import compile_python
+
+    source = arm / "source"
+    assert Path(pcc.__file__).resolve().parents[1] == source.resolve(), pcc.__file__
+    build_report = json.loads((arm / "build.json").read_text())
+    runtime = Path(build_report["runtime"])
+    assert hashlib.sha256(runtime.read_bytes()).hexdigest() == build_report["runtime_sha256"]
+    started = time.monotonic()
+    compile_python(str(arm / "programs" / (program + ".py")), str(run / program),
+                   backend="self", ir_scaffold_mode="on", runtime_archive=str(runtime))
+    wall = time.monotonic() - started
+    own = resource.getrusage(resource.RUSAGE_SELF)
+    children = resource.getrusage(resource.RUSAGE_CHILDREN)
+    # ru_maxrss is bytes on Darwin and KiB on Linux.
+    scale = 1.0 if sys.platform == "darwin" else 1024.0
+    report = {
+        "complete": True, "arm": arm.name, "revision": build_report["revision"],
+        "program": program, "wall": wall,
+        "user": own.ru_utime + children.ru_utime, "sys": own.ru_stime + children.ru_stime,
+        "max_rss_mb": max(own.ru_maxrss, children.ru_maxrss) * scale / 1048576.0,
+    }
+    report["cpu"] = report["user"] + report["sys"]
+    report["settings"] = json.loads(os.environ.get("PCC_COMPILE_PROFILE_SETTINGS", "{}"))
+    # A setting that changes how the program is compiled is only a result
+    # when the program still computes what CPython computes.
+    failures = []
+    binary = run / program
+    for argv, expected in smoke_cases(program, binary, arm / "programs"):
+        done = subprocess.run(argv, capture_output=True, text=True, timeout=120,
+                              env=dict(_pacer_env(0, None), BENCH_N="31"))
+        if not smoke_passed(done.returncode, done.stdout, done.stderr, expected):
+            failures.append({"argv": argv[1:], "code": done.returncode,
+                             "stdout": done.stdout[-300:], "stderr": done.stderr[-300:]})
+    report["smoke"] = "passed" if not failures else "FAILED"
+    report["smoke_failures"] = failures
+    (run / "compile.json").write_text(json.dumps(report, indent=1) + "\n")
+    return 0 if not failures else 1
+
+
 def _load_module(path: Path):
     import importlib.util
 
@@ -774,8 +1119,13 @@ def instruction_rows(results: dict[str, list]) -> list[dict]:
         instructions = statistics.median(run[0] for run in runs)
         cycles = statistics.median(run[1] for run in runs)
         spread = 100.0 * (max(run[0] for run in runs) - min(run[0] for run in runs)) / instructions
+        # Cycles move with load and with the core a run lands on; their own
+        # spread says whether a cycle change is outside the noise.
+        cycle_spread = 100.0 * (max(run[1] for run in runs) - min(run[1] for run in runs)) / cycles
         row = {"arm": name, "instructions": instructions, "cycles": cycles,
-               "instruction_spread": spread, "runs": [round(run[0]) for run in runs]}
+               "instruction_spread": spread, "cycle_spread": cycle_spread,
+               "runs": [round(run[0]) for run in runs],
+               "cycle_runs": [round(run[1]) for run in runs]}
         if base is None:
             base = row
         else:
@@ -793,7 +1143,8 @@ def print_instructions(rows: list[dict]) -> None:
                       f"  {row['cycle_change']:+.2f}% cycles")
         print(f"{row['arm']:14s} {row['instructions']:10.0f} instructions"
               f" (runs within {row['instruction_spread']:.2f}%)"
-              f" {row['cycles']:10.0f} cycles per request{change}")
+              f" {row['cycles']:10.0f} cycles per request"
+              f" (runs within {row['cycle_spread']:.2f}%){change}")
 
 
 def load_note(load: float) -> str:
@@ -1425,6 +1776,32 @@ def main(argv: list[str] | None = None) -> int:
     child = commands.add_parser("_build")
     child.add_argument("arm", type=Path)
 
+    compile_parser = commands.add_parser(
+        "compile", help="where one cold compile of the benchmark program spends its CPU")
+    compile_parser.add_argument("name", nargs="?", default="")
+    compile_parser.add_argument("--from", dest="from_run", type=Path, default=None,
+                                help="report an earlier run directory instead of compiling")
+    compile_parser.add_argument("--callers", default="",
+                                help="comma-separated frame substrings: their self time by caller")
+    compile_parser.add_argument("--depth", type=int, default=2)
+    compile_parser.add_argument("--process", type=int, default=0, metavar="RANK",
+                                help="report only the process with this CPU rank (1 = largest)")
+    compile_parser.add_argument("--env", dest="settings", action="append", default=[],
+                                metavar="PCC_NAME=VALUE",
+                                help="a compiler setting under test (repeatable)")
+    compile_parser.add_argument("--program", default="native_stats", choices=PROGRAMS)
+    compile_parser.add_argument("--hz", type=int, default=1000,
+                                help="samples per second of each process's own CPU time")
+    compile_parser.add_argument("--limit", type=int, default=25)
+    compile_parser.add_argument("--timeout", type=int, default=900)
+    compile_parser.add_argument("--max-tree-rss", type=int, default=6442450944)
+    compile_parser.add_argument("--preflight-reserve", type=int, default=8589934592)
+
+    compile_child_parser = commands.add_parser("_compile")
+    compile_child_parser.add_argument("arm", type=Path)
+    compile_child_parser.add_argument("program")
+    compile_child_parser.add_argument("run", type=Path)
+
     ab = commands.add_parser("ab")
     ab.add_argument("a")
     ab.add_argument("b")
@@ -1541,6 +1918,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "_build":
         return build_child(args.arm)
+    if args.command == "compile":
+        if args.from_run is not None:
+            return report_compile_run(args.from_run, args.limit, args.callers, args.depth,
+                                      args.process)
+        if not args.name:
+            raise SystemExit("compile needs an arm NAME or --from RUN")
+        return compile_profile(args.name, args.program, args.hz, args.limit, args.timeout,
+                               args.max_tree_rss, args.preflight_reserve, args.settings)
+    if args.command == "_compile":
+        return compile_child(args.arm, args.program, args.run)
     if args.command == "ab":
         with performance_lock():
             flags = {"latency_receipts": True} if args.latency_receipts else {}
