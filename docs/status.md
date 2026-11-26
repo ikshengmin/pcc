@@ -266,8 +266,30 @@ unmet. This status-only non-skip commit queues the new immutable snapshot
 without cancelling or rerunning earlier runs. Verified exact head
 `4efcdda1473df9f234640751ed3d65bc42d1d4fd` queued
 [run 45876460150](https://github.com/ikshengmin/pcc/actions/runs/45876460150),
-observed pending. Do not claim any hosted lane
-green from focused tests. The latest completed
+observed pending. As of 2026-11-26T19:13Z run 45856871699
+(6cbafc4a) is complete and failed; Linux x64/ARM64/Windows complete
+integration partitions report downstream BUDGET_EXHAUSTED UNRUN
+remainder, not independent test regressions. Native Stage2 owner failures
+remain. Run 45862787448 (c20c2c01) is now active; its four worker-prior
+artifacts reproduce the stale scalar-arena expectation already fixed
+in later `bd763672` (not included in c20c2c01), so do not duplicate it.
+Run 45868668374 and 45876460150 remain pending. A new distinct
+integrated source snapshot adds actual x64 sparse frame owner
+`c570f27e` (normalized -13.782% frame owner, 5/5 exact outputs) and
+integer stack-map route `4d9089be` (205755 real routes, owner CPU
+2.274->0.480s, normalized -79.08%; actual full worker normalized
+CPU -5.531%, 5/5, exact ELF, RSS noninferior). Current overlapping
+x64 progress diagnostics preserved and integrated parity tested.
+It also includes production bounded Stage2 x86 owner progress records
+`d3e132d6` (557 host tests, actual strict native fixture, no speed
+claim), actual CPython scratch reference source-path fix `cd6d906c`,
+one-collector sorted ownership model correction `a1dc9332`
+(exact baseline 20 fail/48 pass ->70 pass), strict live single
+collector resource-case receipt cardinality `3014994e` (92 focused
+pass; real native prerequisites remain unrun), and no resource,
+worker-count or deadline relaxation. This non-skip status-only commit
+queues this newly distinct snapshot; existing runs stay intact.
+Do not claim any hosted lane green from focused tests. The latest completed
 [checkpoint comparison](investigations/checkpoint-validation-45427972345.md)
 keeps that baseline: candidate `7ec14d388` has exact test regressions
 [#19](https://github.com/ikshengmin/pcc/issues/19) and
