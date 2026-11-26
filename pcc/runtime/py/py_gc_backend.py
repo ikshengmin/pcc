@@ -835,6 +835,32 @@ def pcc_gc_pointer_register(o) -> int:
     return result
 
 
+@c_abi_export("pcc_gc_pointer_register_raw_into_root")
+def pcc_gc_pointer_register_raw_into_root(o, output) -> int:
+    """Publish an allocator-owned, fully initialized private raw mapping.
+
+    The caller has already established non-cell allocation origin and owns
+    the initial reference plus a registered empty root. Unlike ordinary raw
+    registration, index insertion and root transfer share one graph-lock
+    transaction, before its release can park. A duplicate key (0) is not
+    ownership of this mapping; the fresh-allocation caller must fail-stop.
+    Failure (-1) has published neither key nor root.
+    """
+    if ptr_is_null(o) != 0 or is_tagged_int(o) != 0 or ptr_is_null(output) != 0:
+        return -1
+    pcc_py_gc_minor_graph_lock_for(2)
+    if ptr_is_null(load_ptr(output,0)) == 0:
+        _object_graph_unlock()
+        return -1
+    result: int = pcc_gc_managed_pointer_index_insert(o)
+    if result == 1:
+        store_ptr(output,0,o)
+    _object_graph_unlock()
+    if result == 1:
+        pcc_gc_reclaim_retired_index_tables_if_alone()
+    return result
+
+
 @c_abi_export("pcc_gc_pointer_register_static_literal")
 def pcc_gc_pointer_register_static_literal(o) -> int:
     """Register a compiler-created process-lifetime scalar image object."""

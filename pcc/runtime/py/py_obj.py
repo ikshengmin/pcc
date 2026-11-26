@@ -165,6 +165,7 @@ pcc_gc_pointer_register = extern(
 )
 pcc_gc_fix_backend = extern("pcc_gc_fix_backend", (), c_void)
 pcc_gc_described_extent = extern("pcc_gc_described_extent", (c_ptr,c_int64,c_int64), c_int64)
+pcc_gc_pointer_register_raw_into_root = extern("pcc_gc_pointer_register_raw_into_root", (c_ptr,c_ptr), c_int64)
 pcc_gc_described_slot_count = extern("pcc_gc_described_slot_count", (c_ptr,c_int64,c_int64), c_int64)
 pcc_gc_described_initialize_private = extern("pcc_gc_described_initialize_private", (c_ptr,c_int64,c_ptr,c_int64,c_int64), c_int64)
 pcc_allocator_size_class = extern("pcc_allocator_size_class", (c_int64,), c_int64)
@@ -463,19 +464,20 @@ def pcc_gc_alloc(size: int, type_tag: int, flags: int):
 
 @c_abi_export("pcc_gc_described_alloc_into_root")
 def pcc_gc_described_alloc_into_root(output, descriptor, descriptor_bytes: i64, repeat_count: i64) -> i64:
-    """Initialize RESERVED object geometry and header BEFORE LIVE publication.
+    """Initialize private geometry/header BEFORE exact LIVE publication.
 
-    The caller supplies an empty registered owning root. The first gate is
-    deliberately restricted to the allocator's exact object-family cells:
-    raw mapping registration may acquire/park at a graph transaction and
-    requires a separate publication proof. The normal allocation hot path
-    remains the owner for all existing Python object tags.
+    A small object-family cell transfers its initial count into the caller's
+    empty registered root under the existing no-park boundary. A large raw
+    mapping remains completely private during zero/init, then transfers the
+    same count as part of the exact-index graph-lock transaction. Never hold
+    no-park around a large memset or while waiting for that graph lock.
     """
     if ptr_is_null(output) != 0 or ptr_is_null(load_ptr(output,0)) == 0:
         return 0
     size: int = pcc_gc_described_extent(descriptor, descriptor_bytes, repeat_count)
-    if size < 32 or pcc_allocator_size_class(size) == 0:
+    if size < 32:
         return 0
+    small_class: int = pcc_allocator_size_class(size)
     reference_count: int = pcc_gc_described_slot_count(descriptor, descriptor_bytes, repeat_count)
     if reference_count < 0:
         return 0
@@ -486,27 +488,42 @@ def pcc_gc_described_alloc_into_root(output, descriptor, descriptor_bytes: i64, 
     obj = pcc_allocator_alloc_object(size)
     if ptr_is_null(obj) != 0:
         return 0
-    pcc_thread_no_park_enter()
+    if small_class != 0:
+        pcc_thread_no_park_enter()
     memset(obj,0,size)
     if pcc_gc_described_initialize_private(obj,size,descriptor,descriptor_bytes,repeat_count) == 0:
-        pcc_thread_no_park_exit()
-        free(obj)  # still private RESERVED, no managed root or tag visible
+        if small_class != 0:
+            pcc_thread_no_park_exit()
+        free(obj)  # private, no managed root or tag visible
         return 0
     store_i64(obj,PYOBJECTHEADER_REFCOUNT_OFFSET,1)
     store_i32(obj,PYOBJECTHEADER_TYPE_TAG_OFFSET,PY_TYPE_DESCRIBED_LAYOUT)
     store_i32(obj,PYOBJECTHEADER_FLAGS_OFFSET,0)
     published: int = pcc_allocator_object_publish_fresh(obj)
-    if published != 1:
-        if published == 0:
-            pcc_thread_no_park_exit()
-            free(obj)  # unexpected raw mapping, not registered
+    if small_class != 0:
+        if published != 1:
+            if published == 0:
+                pcc_thread_no_park_exit()
+                free(obj)  # unexpected private raw mapping, not registered
+                return 0
+            pcc_platform_abort()  # corrupt lifecycle, do not free an unknown owner
             return 0
-        pcc_platform_abort()  # corrupt allocator lifecycle, never free an unknown owner
-        return 0
-    # Release-CAS made complete geometry visible. Transfer the initial count
-    # directly into the caller's registered empty root BEFORE a possible poll.
-    store_ptr(output,0,obj)
-    pcc_thread_no_park_exit()
+        # Release-CAS made complete geometry visible. Transfer before poll.
+        store_ptr(output,0,obj)
+        pcc_thread_no_park_exit()
+    else:
+        if published != 0:
+            pcc_platform_abort()  # a large raw mapping must not have a cell state
+            return 0
+        # The raw mapping is still private, zero-filled with complete header.
+        # Graph-lock admission can park here, before the index knows it.
+        registered: int = pcc_gc_pointer_register_raw_into_root(obj,output)
+        if registered < 0:
+            free(obj)  # insertion failed, no exact key or root was published
+            return 0
+        if registered != 1:
+            pcc_platform_abort()  # duplicate fresh address: never free a live key
+            return 0
     if load_i32(global_addr("pcc_debug_runtime_enabled_cache"),0) != 0:
         pcc_debug_note_alloc_size(load_ptr(output,0),size)
     if reference_count > 0:

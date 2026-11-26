@@ -258,3 +258,49 @@ collector-interface stability; no frontend admission until these prerequisites
 and the remaining shared-layout design obligations are reviewed. In particular,
 large backing, dynamic/shared descriptor lifetime, generic typed slice/reference
 lowering and actual unchanged Go/Java project execution remain open.
+
+## Large raw mapping publication owner
+
+The next admission uses the existing allocator raw mapping path for logical
+extents above its cell size classes, not a raw foreign pointer or a new heap.
+A raw mapping is privately allocated and zero/initialized without holding a
+no-park lease across the potentially large memset. It has no object-cell
+LIVE state; the dedicated allocator-origin check returns 0 rather than
+publishing a slab bit. The complete header and descriptor are written before
+any exact index entry is possible. While the raw mapping is still private,
+graph-lock acquisition may park safely. `pcc_gc_pointer_register_raw_into_root`
+inserts the exact managed-pointer index key and transfers the initial count
+into the registered empty output root in the *same* graph-lock transaction,
+before unlock (and index-retirement reclamation) can park. An insertion
+failure transfers no key/root and frees the private mapping. A duplicate
+fresh key is an ownership invariant failure, not permission to free the
+existing identity. Small-cell allocation retains its release-CAS and root
+handoff path; ordinary Python allocation is unchanged.
+
+Generic geometry overflow still rejects before allocation; a geometry which
+fits signed i64 but cannot fit the allocator's mapping overhead is rejected
+by that allocator without publication. Large tracked objects need no new
+collector: the existing young-log validation and complete/bounded full
+materialization already include exact managed-pointer index owners alongside
+slab cells; terminal free removes the exact key before unmapping. A raw
+owner's scalar bytes, rounded mapping span and header metadata are never
+interpreted as reference slots. No new frontend or moving layout admission
+is implied by this path.
+
+Linux native evidence with the same compiler checksum and exact 193-member
+runtime re-admission (two changed members rebuilt by the owned emitter):
+raw scalar backing of 20,032 bytes debited and credited exactly that
+requested extent and one exact index key; fixed backing of 20,000 bytes and
+repeated backing of 24,048 bytes (1,000 elements, 2,001 reference slots)
+visited the final three ordinals in two bounded calls. Rooted mixed raw/raw
+cycles also owned a small-cell child; pointer-shaped scalar bits were never
+counted, and explicit/young/bounded-full handover and terminal release
+retired the exact index keys. A real second registered carrier allocated
+and released 100 large owners across concurrent collection. Both small and
+raw native C witnesses returned 42 with empty stdout/stderr and each passed
+ten repeats; three existing owned collector controls also passed. Test-first
+models exercise raw transaction insertion failure, duplicate fail-stop,
+occupied output, and no no-park lease during large private initialization.
+This qualifies a native Linux internal allocation/lifecycle owner, not
+cross-platform execution, arbitrary allocation success, a pause benchmark,
+or the still-frozen Go/Java frontend admissions.

@@ -46,8 +46,9 @@ int64_t pcc_gc_described_visit_slots_slice(void *owner, int64_t cursor,
 /* Managed first-gate constructor. Output is a registered, initialized empty
  * owning root in the admitted caller; no reference is returned in a register.
  * The compiler-owned immutable descriptor must live at least as long as the
- * resulting object. Only allocator object-family size classes are admitted
- * initially; larger/raw mappings and malformed geometry fail without publication.
+ * resulting object. Object-family cells and raw mappings use their respective
+ * exact provenance/publication owners; malformed/overflowing geometry and
+ * allocation/index failure publish neither root nor new object.
  * Returns 1 on success, 0 on invalid input or allocation failure. */
 int64_t pcc_gc_described_alloc_into_root(void *output,const int64_t *descriptor,
     int64_t descriptor_bytes,int64_t repeat_count);

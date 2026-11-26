@@ -2539,7 +2539,6 @@ in the relevant section or issue and removes the entry.
    on 2026-11-26.
 
    Claims:
-   - #13 described-layout exact raw-mapping publication and large repeated lifecycle: Codex, Linux, 2026-11-26T17:51Z, area runtime-gc-described-layout
    - Closed-world continuation factory immediate result handoff proof and narrow candidate: Codex, Linux, 2026-11-26T17:39Z, area runtime-codegen-factory
    - J2s actual Linux x64 Stage1 indexed worker stack-map planning repeated-work attribution (self_backend_precise_stackmaps x64 only, disjoint from runtime GC and AArch64 selection): Codex, Linux, 2026-11-26T17:35Z, area stage1-codegen
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
@@ -2613,9 +2612,26 @@ in the relevant section or issue and removes the entry.
    domain audit is strengthened against four actual slot-role users.
    This is a bounded Linux internal lifecycle gate, not cross-platform
    native, whole-suite, Python QPS A/B, general backing or stable collector
-   certification. Next: guard-tested raw-mapping publication/extent and
-   broader platform/native + A/B acceptance before generic Go/Java
-   lowering or unchanged upstream acceptance. C++
+   certification. Fourth atomic raw-mapping lifecycle slice now uses
+   allocator raw extent above 16 KiB with private zero/init outside
+   no-park; exact managed index insertion + root transfer share the
+   graph-lock transaction BEFORE unlock/park. Failure frees only an
+   unregistered private mapping; duplicate fresh key fails closed.
+   Small-cell path and ordinary Python allocator remain unchanged.
+   Same compiler checksum; actual py_obj/py_gc_backend modules rebuilt,
+   strict exact 193-member archive readmitted. Native large scalar
+   20,032-byte requested debit/credit and one index key, fixed 20,000
+   bytes, mixed repeated 24,048 bytes/2,001 precise edges and bounded
+   tail cursor; rooted raw/raw cycle with small child, scalar pointer
+   bits ignored, terminal/explicit/young/bounded full free, 100 raw
+   allocations on second registered carrier during collection. Small
+   and raw native each exit42/empty streams +10 repeats, 3 existing
+   native collector controls pass; guard 17.77s/182,132,736 B. Eight
+   source lifecycle models and exact four live graph-lock callsite
+   classification passed. No cross-platform native or pause/QPS claim.
+   Next: broader platform/native + A/B acceptance and collector-interface
+   review before generic Go/Java lowering or unchanged upstream
+   acceptance. C++
    [#14](https://github.com/ikshengmin/pcc/issues/14):
    implicit/explicit destructor exception specifications and the non-throwing
    override rule now select ordinary versus effect-gated D1 destruction.

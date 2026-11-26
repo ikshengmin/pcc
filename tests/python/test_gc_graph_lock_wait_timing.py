@@ -246,13 +246,11 @@ def test_graph_wait_read_and_reset_are_individually_atomic_i64_slots():
 
 def test_classified_callsites_name_the_outer_acquisition_operation():
     expected = {
+        # Exact raw allocation index publication (including the new rooted
+        # described-mapping transaction); the removed collectors' allocation
+        # staging/zpage and generic store paths no longer acquire this lock.
         ("py_gc_backend.py", "pcc_gc_pointer_register"): [2],
-        ("py_gc_backend.py", "pcc_gc_note_object_allocated_sized"): [2] * 5,
-        # A full staging ring registers its batch for the allocation.
-        ("freestanding_gc_alloc_stage.py", "pcc_gc_alloc_stage_note"): [2],
-        ("freestanding_gc_zpage_allocation.py", "pcc_gc_backend4_try_zpage_alloc"): [2],
-        ("py_obj.py", "pcc_gc_publish_initialized"): [2],
-        ("py_obj.py", "pcc_gc_store_ptr"): [3],
+        ("py_gc_backend.py", "pcc_gc_pointer_register_raw_into_root"): [2],
         ("py_obj.py", "pcc_gc_store_field_ptr"): [3],
         ("py_obj.py", "pcc_gc_store_field_ptr_if_empty"): [3],
     }
