@@ -2742,11 +2742,59 @@ in the relevant section or issue and removes the entry.
        978a5e7d045ed7555baaff841499fc5795d4c0caba9def75a2376e0253b14ae4,
        copy893,824 bytes sha256
        543f5edee108d37661c050a68c974a2457075a71b2625f2875808729d6ca4298.
-       Next (latest actual Linux CI codegen priority): (1) the remaining
-       1,546.7 worker-s function-emission owner, particularly x64 packed
-       stack-map emission routes currently recreating stable text hash
-       buckets for every block instead of using the existing integer route
-       spans (AArch64 indexed owner already uses these); (2) J2 (e) one error
+       Direct x64 integer stack-map emission routes (Codex, Linux,
+       2026-11-26, isolated base c570f27e): source trace correction to the
+       previous next-step wording: actual x64 plans are UNPACKED records
+       and textual route tuples; AArch64 owns packed spans. Keep all public
+       plan/record storage and eager rendering order. The exact direct x64
+       block emitter opts into sparse canonical block-ID routes using the
+       already indexed kernel (reuse one ID over contiguous equal identity
+       rows), rather than building and rehashing three textual buckets for
+       every block. Keep original text route for custom plan/kernel/helper,
+       callbacks, packed plans or supplied layouts. Preserve numeric block
+       aliases, repeated row order and eager missing reload-label failure.
+       Exact current 625-source contextual direct capture c_codegen and
+       worker_resource_plan PIDX hashes unchanged from previous unit; zero
+       fallback/no libpython. Actual c_codegen streamed owner capture:
+       1,039 functions, 95,041 blocks, 205,755 records/routes (1,039 entry,
+       158,887 suffix, 45,829 terminator), 26,395,512-byte exact input.
+       Five quiet alternating input replay triples vs same-base control:
+       route construction+consumption CPU2.274 -> 0.480 s (-78.893%,5/5),
+       control2.277, normalized -79.080%5/5 vs control drift1.158%;
+       construction alone normalized -75.712%5/5, wall normalized
+       -78.839%5/5. Replay peak RSS32,532 -> 30,996 KiB, control32,444,
+       normalized -4.575%5/5 vs drift0.259%. All15 route output digests
+       exact (sha256
+       113f329a9a750c3950f565d91dde0d9f1ff20778bdf1be33b4d66c44905b3d76).
+       Actual c_codegen complete streamed ELF exact (13,508,968 bytes,
+       sha256 8b6b5c7627edd2d289dd507d7d6522cabc7aaf26f421bf184c08a962cbba2277).
+       Five quiet actual full streamed worker_resource_plan triples:
+       backend+obj CPU5.693 -> 5.429 s (-4.627%,5/5), control5.656,
+       normalized -6.367%5/5 vs control drift3.252%; full CPU6.181 ->
+       5.881 (-4.852%,5/5), normalized -5.531%5/5 vs drift2.190%;
+       full wall normalized -5.518%5/5; function emit wall3.456 ->
+       3.179 (-8.030%,5/5), normalized -8.627%5/5 vs drift4.499%;
+       peak RSS81,340 -> 81,220 KiB, control81,416, normalized
+       -0.155%5/5 vs drift0.093%. All15 exact ELF objects (1,739,176
+       bytes, sha256 42d60bb810624c8f1b6ac655d6a554ee98a09c32b709acebeb5c974a1b2b58cc).
+       No whole Stage1 or native-compiler speed claim. 148 focused tests,
+       including five new route/alias/failure/compatibility tests. Exact
+       changed source direct contextual capture self_backend_emit
+       17 funcs/4,922 blocks/19,177 instructions and self_backend_x86_64_linux
+       325/63,044/235,561, zero fallback/no libpython; native ELF emitted
+       719,656 bytes sha256 5bc7c5fcb6ab64293476e072133bc6f9b522a471622ac83e00fc9ea3bdc438e5
+       and 8,587,672 bytes sha256
+       c992aa1b0a2fdb964d15cae83cb4ffade718c23e7f3657b60afa4c0fc361a141.
+       Publication integrated with the peer Stage2 progress trace in
+       3fb598ed (disjoint caller hunk, original trace preserved). Re-ran
+       all148 focused tests and exact small streamed ELF on the integrated
+       source with trace opt-in disabled; the five-pair timing above is
+       isolated pretrace source, not a fresh integrated speed run.
+       Next (latest actual Linux CI codegen priority): (1) larger common
+       indexed fact/emission owner (profile 2,643 frozen scalar value
+       constructors and 719 stable text hash samples before route change;
+       distinguish remaining fact generation from eliminated route work);
+       (2) J2 (e) one error
        landing per function after registering temporaries once, measured
        against the actual CI block inventory; (3) the allocation model
        toward LLVM parity, then remove passes that no longer fire;
@@ -2916,7 +2964,6 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Ordinary list iterator consumer attribution and private loop cursor proof: Codex, Linux, 2026-11-26T19:06Z, area runtime-codegen-iterator
-   - Stage1 x64 direct packed integer stack-map emission routes: Codex, Linux, 2026-11-26T18:51Z, area backend-x64-emit-routes
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets

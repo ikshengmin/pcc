@@ -83,6 +83,78 @@ def _block_line_index_get(index: dict, block_name: str):
     return None
 
 
+# A native class-object implementation that does not expose an unbound
+# method identity must keep the legacy route rather than guess equivalence.
+_ORIGINAL_PLAN_LINE_INDEX = getattr(FunctionStackMapPlan, "build_line_index", None)
+_ORIGINAL_KERNEL_BLOCK_ID = getattr(IndexedFunctionKernel, "block_id", None)
+_ORIGINAL_BLOCK_LINE_GET = _block_line_index_get
+
+
+def _x86_block_id_route_indexes(plan: FunctionStackMapPlan, kernel: IndexedFunctionKernel):
+    """Eagerly render the unpacked x64 plan into sparse integer routes.
+
+    The direct kernel has already indexed canonical block names (including
+    dot-numeric aliases). A block's route rows are normally contiguous, so
+    repeated calls in one block reuse its integer ID. Preserve the original
+    entry/record/suffix/terminator render order and duplicate-row append order.
+    An absent block has no consumer, but still render its suffix first so a
+    missing reload label retains the canonical eager failure.
+    """
+    entry: dict[int, list[str]] = {}
+    previous_name = None
+    block_id = -1
+    for block_name, label in plan.block_entry_labels:
+        line = label + ":"
+        if block_name is not previous_name:
+            block_id = kernel.block_id(block_name)
+            previous_name = block_name
+        if block_id >= 0:
+            entry_lines = entry.get(block_id)
+            if entry_lines is None:
+                entry[block_id] = [line]
+            else:
+                entry_lines.append(line)
+
+    reloads_by_label = {record.label: record.reloads for record in plan.records}
+    suffix: dict[int, dict[int, list[str]]] = {}
+    previous_name = None
+    block_id = -1
+    for block_name, instruction_index, label in plan.instruction_suffix_labels:
+        lines = [label + ":"]
+        lines.extend(plan._reload_asm_lines_from(reloads_by_label[label]))
+        if block_name is not previous_name:
+            block_id = kernel.block_id(block_name)
+            previous_name = block_name
+        if block_id >= 0:
+            per_block = suffix.get(block_id)
+            if per_block is None:
+                per_block = {}
+                suffix[block_id] = per_block
+            if instruction_index in per_block:
+                per_block[instruction_index].extend(lines)
+            else:
+                per_block[instruction_index] = lines
+
+    term: dict[int, list[str]] = {}
+    previous_name = None
+    block_id = -1
+    for block_name, label, needs_separator in plan.terminator_prefix_labels:
+        lines = []
+        if needs_separator:
+            lines.append("  nop")
+        lines.append(label + ":")
+        if block_name is not previous_name:
+            block_id = kernel.block_id(block_name)
+            previous_name = block_name
+        if block_id >= 0:
+            term_lines = term.get(block_id)
+            if term_lines is None:
+                term[block_id] = lines
+            else:
+                term_lines.extend(lines)
+    return entry, suffix, term
+
+
 def emit_function_blocks(
     func: ParsedFunction,
     *,
@@ -117,16 +189,41 @@ def emit_function_blocks(
         [ParsedFunction, ParsedBlock, ParsedInstr, int], list[str]
     ] | None = None,
     emit_indexed_error_edge=None,
+    _indexed_x86_routes: bool = False,
 ) -> list[str]:
     lines: list[str] = []
     cold_lines: list[str] = []
     entry_index: dict = {}
     suffix_index: dict = {}
     term_index: dict = {}
+    # Only the direct x64 owner opts in. Keep the text index for public
+    # compatibility callbacks, custom plans/kernels and legacy block layouts.
+    integer_routes = (
+        _indexed_x86_routes
+        and type(func) is ParsedFunction
+        and type(indexed_kernel) is IndexedFunctionKernel
+        and type(stack_map_plan) is FunctionStackMapPlan
+        and stack_map_plan.target == "x86_64-linux"
+        and stack_map_plan.packed_records is None
+        and blocks is None
+        and emit_block_prefix is None
+        and emit_instruction_suffix is None
+        and emit_terminator_prefix is None
+        and _ORIGINAL_PLAN_LINE_INDEX is not None
+        and getattr(FunctionStackMapPlan, "build_line_index", None) is _ORIGINAL_PLAN_LINE_INDEX
+        and _ORIGINAL_KERNEL_BLOCK_ID is not None
+        and getattr(IndexedFunctionKernel, "block_id", None) is _ORIGINAL_KERNEL_BLOCK_ID
+        and _block_line_index_get is _ORIGINAL_BLOCK_LINE_GET
+    )
     if stack_map_plan is not None:
         # Per-call plan lookups scan every label; indexing once keeps huge
         # generated module tops (72k blocks) linear instead of quadratic.
-        entry_index, suffix_index, term_index = stack_map_plan.build_line_index()
+        if integer_routes:
+            entry_index, suffix_index, term_index = _x86_block_id_route_indexes(
+                stack_map_plan, indexed_kernel,
+            )
+        else:
+            entry_index, suffix_index, term_index = stack_map_plan.build_line_index()
     if blocks is None and not func.blocks:
         if indexed_kernel is None:
             indexed_kernel = get_indexed_function_kernel(func)
@@ -142,23 +239,30 @@ def emit_function_blocks(
         else:
             lines.append("")
             lines.append(block_label(func.name, block.name) + ":")
-        if emit_block_prefix is not None:
-            lines.extend(emit_block_prefix(func, block))
-        elif stack_map_plan is not None:
-            block_entry_lines = _block_line_index_get(
-                entry_index, block.name
-            )
+        if integer_routes:
+            block_id = indexed_kernel.block_id(block.name)
+            block_entry_lines = entry_index.get(block_id)
             if block_entry_lines is not None:
                 lines.extend(block_entry_lines)
-        block_suffix_index = (
-            _block_line_index_get(suffix_index, block.name)
-            if stack_map_plan is not None
-            else None
-        )
-        block_id = (
-            indexed_kernel.block_id(block.name)
-            if indexed_kernel is not None else -1
-        )
+            block_suffix_index = suffix_index.get(block_id)
+        else:
+            if emit_block_prefix is not None:
+                lines.extend(emit_block_prefix(func, block))
+            elif stack_map_plan is not None:
+                block_entry_lines = _block_line_index_get(
+                    entry_index, block.name
+                )
+                if block_entry_lines is not None:
+                    lines.extend(block_entry_lines)
+            block_suffix_index = (
+                _block_line_index_get(suffix_index, block.name)
+                if stack_map_plan is not None
+                else None
+            )
+            block_id = (
+                indexed_kernel.block_id(block.name)
+                if indexed_kernel is not None else -1
+            )
         block_instruction_start = -1
         terminator_use_count = 0
         terminator_use_id = -1
@@ -288,7 +392,10 @@ def emit_function_blocks(
             assert term is not None
             lines.extend(emit_terminator_prefix(func, block, term))
         elif stack_map_plan is not None:
-            block_term_lines = _block_line_index_get(term_index, block.name)
+            if integer_routes:
+                block_term_lines = term_index.get(block_id)
+            else:
+                block_term_lines = _block_line_index_get(term_index, block.name)
             if block_term_lines is not None:
                 lines.extend(block_term_lines)
         if block_id >= 0 and emit_indexed_terminator is not None:

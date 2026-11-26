@@ -3534,6 +3534,9 @@ def _emit_function(
                 indexed_kernel=kernel,
                 emit_indexed_instruction=indexed_instruction_emitter,
                 emit_indexed_error_edge=_emit_indexed_error_edge,
+                _indexed_x86_routes=(
+                    indexed_instruction_emitter is _emit_exact_indexed_instruction_parts
+                ),
             )
         )
     finally:
