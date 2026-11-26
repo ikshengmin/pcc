@@ -471,7 +471,19 @@ in the relevant section or issue and removes the entry.
    failure artifact separately emitted all modules for Darwin, including
    consumer and functools (43.90 s, peak 144,818,176 bytes), under 90 s/1 GiB.
    No stack-map bounds check or compiler behavior changed.
-   Next: worker-prior/changed-module and remaining Source; the 216-node
+   #20 worker-prior latest hosted run 45844665220 (b346a48a), x86-64
+   artifact 15130297778: default-xdist stopped on stale static inventory
+   (tuple-root model 14 expected, 11 actual). All six collection witnesses
+   agree on 3773 ordinary nodes: worker priors 106 -> 115, RSS readers
+   24 -> 26, and tuple roots 14 -> 11. The independent Linux host collection
+   of all 87 files at 605ddc2f confirms every per-file count; the three
+   changed files' 152 node identities match exactly. The receipt now
+   rejects the old counts as well as omitted nodes; all original gates,
+   six-worker requirement and strict report evidence remain unchanged.
+   The actual failing assertion reproduced before the fix; 22 focused
+   contract tests pass after it on host Python 3.13. Hosted execution is
+   pending; collection is not a pass of the whole gate.
+   Next: re-run worker-prior/changed-module and remaining Source; the 216-node
    source shared batch still requires a hosted rerun, and the active
    checkpoint's independent wheel evidence is pending.
    #20 source worker admission: in run 45619704293, independent compiler
@@ -582,7 +594,7 @@ in the relevant section or issue and removes the entry.
    under the unchanged 90 s / 1 GiB guard. Hosted verification pending.
 
    Claims:
-   - Latest worker-prior gate failure attribution and focused CI fix: Codex, Linux, 2026-11-26T15:46Z, area checkpoint
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and

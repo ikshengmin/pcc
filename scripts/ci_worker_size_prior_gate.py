@@ -335,22 +335,24 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               'tests/python/test_worker_observation_scope.py',
               'tests/python/test_lambda_rejection_diagnostics.py',
               'tests/python/test_lambda_scaffold_capture_owner.py')
-# Expected default-marker inventory: 87 modules, 3765 ordinary raw nodes.
+# Expected default-marker inventory: 87 modules, 3773 ordinary raw nodes.
 # Single-collector migration replaces 117 retired relocation tests with one
 # live Stage1 input inventory regression. Historical counts below predate it.
 # Source-matched 87b58370 AArch64 CI collected all 3957: 3956 passed and
 # the existing text-index platform-inapplicable node remained explicit UNRUN.
 # 6e7304e adds 11 scalar projection controls (89 -> 100); 4e01251 adds
 # five worker deadline cases (84 -> 89). No prior node or path is removed.
+# 45844665220 x86-64: all six worker witnesses agree on worker priors
+# 106 -> 115, RSS reader 24 -> 26, and one-collector tuple roots 14 -> 11.
 # Keep exact per-file counts, six-worker witnesses and all report checks.
 # Reconcile source hashes and node identities before updating this receipt;
 # collection is not execution evidence and UNRUN is never counted as PASS.
 HOST_COUNTS = (
-    106, 3, 327, 0, 6, 29, 28, 7, 25, 49, 19, 21, 447, 17,
-    4, 5, 61, 67, 24, 13, 100, 55, 16, 136, 19, 117, 23, 55,
+    115, 3, 327, 0, 6, 29, 28, 7, 25, 49, 19, 21, 447, 17,
+    4, 5, 61, 67, 26, 13, 100, 55, 16, 136, 19, 117, 23, 55,
     89, 12, 51, 115, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1,
     116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 18, 6,
-    44, 8, 1, 11, 153, 232, 9, 12, 3, 14, 30, 9, 76, 54,
+    44, 8, 1, 11, 153, 232, 9, 12, 3, 11, 30, 9, 76, 54,
     35, 23, 36, 36, 5, 41, 11, 23, 10, 65, 7, 92, 20, 2,
     13, 33, 27,
 )
