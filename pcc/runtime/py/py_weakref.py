@@ -124,14 +124,11 @@ pcc_gc_free_object_memory = extern("pcc_gc_free_object_memory", (c_ptr,), c_void
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_capi_is_cext_type_tag = extern("pcc_capi_is_cext_type_tag", (c_int64,), c_int64)
-pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
-pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 
 _PENDING_WEAK_NEXT: int = 0
 _PENDING_WEAK_ROOT: int = 8
-_PENDING_WEAK_LEASE: int = 16
-_PENDING_WEAK_BYTES: int = 24
+_PENDING_WEAK_BYTES: int = 16
 _PENDING_WEAK_HEAD: int = 0
 _PENDING_WEAK_TAIL: int = 8
 _TRACING_WEAK_SWEEP_CANDIDATE: int = 1024
@@ -833,49 +830,33 @@ def _weakref_run_callback(wr) -> None:
             pcc_gc_note_frame_leave_local(saved)
 
 
-def _drop_callback_queue(pending, gc0: int) -> None:
+def _drop_callback_queue(pending) -> None:
     """Release every hold of an unrun queue; no callback runs."""
     while ptr_is_null(pending) == 0:
         entry = pending
         pending = load_ptr(entry, _PENDING_WEAK_NEXT)
-        if gc0 != 0:
-            py_decref(load_ptr(entry, _PENDING_WEAK_ROOT))
-        else:
-            pcc_gc_foreign_lease_release(
-                ptr_add(entry, _PENDING_WEAK_ROOT), load_i64(entry, _PENDING_WEAK_LEASE))
+        py_decref(load_ptr(entry, _PENDING_WEAK_ROOT))
         free(entry)
 
 
-def _queue_callback_hold(wr, pending_cell, gc0: int) -> int:
-    """Append a counted (GC0) or leased hold on ``wr`` to a callback queue.
+def _queue_callback_hold(wr, pending_cell) -> int:
+    """Append a counted hold on ``wr`` to a callback queue.
 
     ``pending_cell`` holds the queue's head @0 and tail @8. Returns 0, or -1
-    after aborting on allocation or lease failure. Every earlier hold is
+    after aborting on allocation failure. Every earlier hold is
     released first: a pass that prepares its holds before clearing any target
     then leaves neither a partial invalidation nor a retained owner.
     """
     entry = malloc(_PENDING_WEAK_BYTES)
     if ptr_is_null(entry) != 0:
-        _drop_callback_queue(load_ptr(pending_cell, 0), gc0)
+        _drop_callback_queue(load_ptr(pending_cell, 0))
         store_ptr(pending_cell, 0, null())
         store_ptr(pending_cell, 8, null())
         pcc_platform_abort()
         return -1
     store_ptr(entry, _PENDING_WEAK_NEXT, null())
     store_ptr(entry, _PENDING_WEAK_ROOT, wr)
-    store_i64(entry, _PENDING_WEAK_LEASE, 0)
-    if gc0 != 0:
-        py_incref(wr)
-    else:
-        token: int = pcc_gc_foreign_lease_acquire(ptr_add(entry, _PENDING_WEAK_ROOT))
-        if token < 0:
-            free(entry)
-            _drop_callback_queue(load_ptr(pending_cell, 0), gc0)
-            store_ptr(pending_cell, 0, null())
-            store_ptr(pending_cell, 8, null())
-            pcc_platform_abort()
-            return -1
-        store_i64(entry, _PENDING_WEAK_LEASE, token)
+    py_incref(wr)
     tail = load_ptr(pending_cell, 8)
     if ptr_is_null(tail) != 0:
         store_ptr(pending_cell, 0, entry)
@@ -885,20 +866,14 @@ def _queue_callback_hold(wr, pending_cell, gc0: int) -> int:
     return 0
 
 
-def _run_callback_queue(pending, gc0: int) -> None:
+def _run_callback_queue(pending) -> None:
     """Run each held callback once, then drop its hold."""
     while ptr_is_null(pending) == 0:
         entry = pending
         pending = load_ptr(entry, _PENDING_WEAK_NEXT)
         held = load_ptr(entry, _PENDING_WEAK_ROOT)
         _weakref_run_callback(held)
-        if gc0 != 0:
-            py_decref(held)
-        elif pcc_gc_foreign_lease_release(
-            ptr_add(entry, _PENDING_WEAK_ROOT), load_i64(entry, _PENDING_WEAK_LEASE)
-        ) != 0:
-            pcc_platform_abort()
-            return
+        py_decref(held)
         free(entry)
 
 
@@ -918,13 +893,14 @@ def py_weakref_run_queued_callbacks(pending_cell, gc0: int) -> None:
     """Run and drop a queue a py_weakref_queue_*_candidates pass filled.
 
     The collector calls this with the world running: a callback is user code
-    and may wait for a lock a parked thread holds. Each hold (a count under
-    GC0, an address lease otherwise) keeps its ref alive until it ran.
+    and may wait for a lock a parked thread holds. Each counted hold keeps
+    its ref alive until it ran. ``gc0`` is always 1 now that pcc has one
+    collector; item 2 (d) U13 removes it with the collector selector.
     """
     pending = load_ptr(pending_cell, 0)
     store_ptr(pending_cell, 0, null())
     store_ptr(pending_cell, 8, null())
-    _run_callback_queue(pending, gc0)
+    _run_callback_queue(pending)
 
 
 @c_abi_export("py_weakref_invalidate_gc0_candidates")
@@ -971,7 +947,7 @@ def py_weakref_queue_gc0_candidates(pending_cell) -> int:
             elif (pcc_gc_backend0_is_weak_candidate(wr) == 0
                     and (load_i32(wr, 12) & 524288) == 0
                     and load_i64(wr, 0) > 0):
-                if _queue_callback_hold(wr, pending_cell, 1) != 0:
+                if _queue_callback_hold(wr, pending_cell) != 0:
                     return -1
                 count += 1
         wr = nxt
@@ -1028,7 +1004,7 @@ def py_weakref_queue_gc0_batch(pending_cell, nodes, count: int) -> int:
                 elif (pcc_gc_backend0_is_weak_candidate(wr) == 0
                         and (load_i32(wr, 12) & 524288) == 0
                         and load_i64(wr, 0) > 0):
-                    if _queue_callback_hold(wr, pending_cell, 1) != 0:
+                    if _queue_callback_hold(wr, pending_cell) != 0:
                         return -1
                     queued += 1
             entry = nxt
@@ -1099,7 +1075,7 @@ def _gc0_hold_target_callbacks(wr, target, pending_cell) -> None:
                 and (load_i32(wr, 12) & 524288) == 0
                 and load_i64(wr, 0) > 0
                 and ptr_is_null(load_ptr(wr, _WEAKREF_CALLBACK)) == 0):
-            if _queue_callback_hold(wr, pending_cell, 1) != 0:
+            if _queue_callback_hold(wr, pending_cell) != 0:
                 return
         wr = load_ptr(wr, _WEAKREF_NEXT)
 
@@ -1120,7 +1096,7 @@ def _gc0_hold_entry_callbacks(entry, target, pending_cell) -> None:
                 and (load_i32(wr, 12) & 524288) == 0
                 and load_i64(wr, 0) > 0
                 and ptr_is_null(load_ptr(wr, _WEAKREF_CALLBACK)) == 0):
-            if _queue_callback_hold(wr, pending_cell, 1) != 0:
+            if _queue_callback_hold(wr, pending_cell) != 0:
                 return
         entry = load_ptr(entry, _DIR_NEXT)
 
@@ -1164,7 +1140,7 @@ def _weakref_invalidate_gc0_target(target) -> None:
         _gc0_clear_target(global_load_ptr("py_weakref_head"), target)
         _gc0_clear_target(late, target)
     pcc_py_gc_minor_graph_unlock()
-    _run_callback_queue(load_ptr(pending_cell, 0), 1)
+    _run_callback_queue(load_ptr(pending_cell, 0))
 
 
 @c_abi_export("py_weakref_invalidate")

@@ -1039,11 +1039,8 @@ define_global_i32("pcc_listdir_owned_map", 5)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
-pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
-pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
-pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+pcc_gc_root_copy_borrowed = extern("pcc_gc_root_copy_borrowed", (c_ptr, c_ptr), c_int64)
 pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
-pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
 py_clear_exception = extern("py_clear_exception", (), c_void)
 
@@ -1054,38 +1051,27 @@ def _listdir_error(kind: int, message) -> int:
     return -1
 
 
-def _listdir_drop(slots, tokens, index: int) -> None:
-    slot = ptr_add(slots, index * _LISTDIR_BYTES)
-    token: int = load_i64(tokens, index * _LISTDIR_BYTES)
-    if token >= 0:
-        if pcc_gc_foreign_lease_release(slot, token) < 0:
-            pcc_platform_abort()
-            return
-    store_i64(tokens, index * _LISTDIR_BYTES, -1)
-    pcc_gc_store_root(slot, null())
+def _listdir_drop(slots, index: int) -> None:
+    pcc_gc_store_root(ptr_add(slots, index * _LISTDIR_BYTES), null())
 
 
-def _listdir_adopt(slots, tokens, index: int) -> int:
+def _listdir_adopt(slots, index: int) -> int:
     slot = ptr_add(slots, index * _LISTDIR_BYTES)
     if ptr_is_null(load_ptr(slot, 0)) != 0:
         return _listdir_error(19, cstr("listdir: out of memory"))
-    token: int = pcc_gc_foreign_lease_acquire(slot)
-    store_i64(tokens, index * _LISTDIR_BYTES, token)
-    if token < 0:
-        return _listdir_error(19, cstr("listdir: cannot lease owner"))
     if py_err_occurred() != 0:
         return -1
     return 0
 
 
-def _listdir_read(slots, tokens) -> int:
+def _listdir_read(slots) -> int:
     path = ptr_add(slots, _LISTDIR_PATH * _LISTDIR_BYTES)
     text = ptr_add(slots, _LISTDIR_TEXT * _LISTDIR_BYTES)
     result = ptr_add(slots, _LISTDIR_RESULT * _LISTDIR_BYTES)
     item = ptr_add(slots, _LISTDIR_ITEM * _LISTDIR_BYTES)
     error = ptr_add(slots, _LISTDIR_ERROR * _LISTDIR_BYTES)
     store_ptr(text, 0, py_obj_str(load_ptr(path, 0)))
-    if _listdir_adopt(slots, tokens, _LISTDIR_TEXT) != 0:
+    if _listdir_adopt(slots, _LISTDIR_TEXT) != 0:
         return -1
     raw = py_str_utf8(load_ptr(text, 0))
     if py_err_occurred() != 0:
@@ -1094,7 +1080,7 @@ def _listdir_read(slots, tokens) -> int:
     if ptr_is_null(stream) != 0:
         return _listdir_error(14, cstr("could not open directory"))
     store_ptr(result, 0, py_list_new(0))
-    status: int = _listdir_adopt(slots, tokens, _LISTDIR_RESULT)
+    status: int = _listdir_adopt(slots, _LISTDIR_RESULT)
     while status == 0:
         entry = directory_next(stream)
         if ptr_is_null(entry) != 0:
@@ -1105,13 +1091,13 @@ def _listdir_read(slots, tokens) -> int:
             if load_i8(entry, 1) == 46 and load_i8(entry, 2) == 0:
                 continue
         store_ptr(item, 0, py_str_new(entry, strlen(entry)))
-        status = _listdir_adopt(slots, tokens, _LISTDIR_ITEM)
+        status = _listdir_adopt(slots, _LISTDIR_ITEM)
         if status == 0:
             py_list_append(load_ptr(result, 0), load_ptr(item, 0))
             if py_err_occurred() != 0:
                 status = -1
         if status == 0:
-            _listdir_drop(slots, tokens, _LISTDIR_ITEM)
+            _listdir_drop(slots, _LISTDIR_ITEM)
     if status == 0 and directory_error(stream) < 0:
         status = _listdir_error(14, cstr("could not read directory"))
     # Preserve any primary error and keep the partial list authoritative
@@ -1128,38 +1114,24 @@ def _listdir_owned(path):
     store_ptr(borrowed, 0, path)
     pcc_gc_frame_enter(global_addr("pcc_listdir_borrowed_map"), borrowed)
     slots = stack_alloc(_LISTDIR_COUNT * _LISTDIR_BYTES)
-    tokens = stack_alloc(_LISTDIR_COUNT * _LISTDIR_BYTES)
     memset(slots, 0, _LISTDIR_COUNT * _LISTDIR_BYTES)
-    index: int = 0
-    while index < _LISTDIR_COUNT:
-        store_i64(tokens, index * _LISTDIR_BYTES, -1)
-        index = index + 1
     pcc_gc_frame_enter(global_addr("pcc_listdir_owned_map"), slots)
-    token: int = pcc_gc_root_copy_borrowed_lease(
-        ptr_add(slots, _LISTDIR_PATH * _LISTDIR_BYTES), borrowed,
-    )
-    store_i64(tokens, _LISTDIR_PATH * _LISTDIR_BYTES, token)
     status: int = -1
-    if token < 0:
+    if pcc_gc_root_copy_borrowed(ptr_add(slots, _LISTDIR_PATH * _LISTDIR_BYTES), borrowed) < 0:
         status = _listdir_error(19, cstr("listdir: cannot retain path"))
     else:
-        status = _listdir_read(slots, tokens)
+        status = _listdir_read(slots)
     result = ptr_add(slots, _LISTDIR_RESULT * _LISTDIR_BYTES)
     error = ptr_add(slots, _LISTDIR_ERROR * _LISTDIR_BYTES)
     py_tls_exc_swap_slot(error)
     store_ptr(borrowed, 0, null())
     if status != 0:
-        _listdir_drop(slots, tokens, _LISTDIR_RESULT)
-    _listdir_drop(slots, tokens, _LISTDIR_ITEM)
-    _listdir_drop(slots, tokens, _LISTDIR_TEXT)
-    _listdir_drop(slots, tokens, _LISTDIR_PATH)
+        _listdir_drop(slots, _LISTDIR_RESULT)
+    _listdir_drop(slots, _LISTDIR_ITEM)
+    _listdir_drop(slots, _LISTDIR_TEXT)
+    _listdir_drop(slots, _LISTDIR_PATH)
     py_clear_exception()
     py_tls_exc_swap_slot(error)
-    token = load_i64(tokens, _LISTDIR_RESULT * _LISTDIR_BYTES)
-    if token >= 0:
-        if pcc_gc_foreign_lease_release(result, token) < 0:
-            pcc_platform_abort()
-            return null()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
     return pcc_gc_take_slot(result)

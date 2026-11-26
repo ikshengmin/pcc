@@ -49,17 +49,15 @@ pcc_errno_exception_kind = extern("pcc_errno_exception_kind", (c_int32,), c_int6
 pcc_errno_message_into = extern("pcc_errno_message_into", (c_int32, c_ptr, c_int64), c_int32)
 pcc_gc_scheduler_root_register_handle = extern("pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr)
 pcc_gc_scheduler_root_unregister_handle = extern("pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void)
-pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_root_copy = extern("pcc_gc_root_copy", (c_ptr, c_ptr), c_int64)
 pcc_gc_root_move = extern("pcc_gc_root_move", (c_ptr, c_ptr), c_int64)
-pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
-pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 
-# Each index names one registered owning slot and its counted address lease.
+# Each index names one registered owning slot.
 _WALK_PATH = 0
 _WALK_TOPDOWN = 1
 _WALK_FOLLOWLINKS = 2
@@ -94,9 +92,8 @@ def _walk_fail(kind: int, message) -> int:
     return -1
 
 
-def _walk_open(slots, tokens, handles) -> int:
+def _walk_open(slots, handles) -> int:
     memset(slots, 0, _WALK_SLOT_COUNT * C_POINTER_SIZE)
-    memset(tokens, 0, _WALK_SLOT_COUNT * C_POINTER_SIZE)
     memset(handles, 0, _WALK_SLOT_COUNT * C_POINTER_SIZE)
     count: int = 0
     while count < _WALK_SLOT_COUNT:
@@ -108,42 +105,30 @@ def _walk_open(slots, tokens, handles) -> int:
     return count
 
 
-def _walk_copy(slots, tokens, index: int, source) -> int:
-    token: int = pcc_gc_root_copy_lease(ptr_add(slots, index * C_POINTER_SIZE), source)
-    if token < 0:
+def _walk_copy(slots, index: int, source) -> int:
+    if pcc_gc_root_copy(ptr_add(slots, index * C_POINTER_SIZE), source) < 0:
         return _walk_fail(7, cstr("walk could not copy an authoritative owner"))
-    store_i64(tokens, index * C_POINTER_SIZE, token)
     return 0
 
 
-def _walk_adopt(slots, tokens, index: int) -> int:
+def _walk_adopt(slots, index: int) -> int:
     slot = ptr_add(slots, index * C_POINTER_SIZE)
     if ptr_is_null(load_ptr(slot, 0)):
         return _walk_fail(19, cstr("walk allocation returned no owner"))
-    token: int = pcc_gc_foreign_lease_acquire(slot)
-    if token < 0:
-        return _walk_fail(7, cstr("walk could not lease a produced owner"))
-    store_i64(tokens, index * C_POINTER_SIZE, token)
     return -1 if py_err_occurred() else 0
 
 
-def _walk_drop(slots, tokens, index: int) -> None:
-    slot = ptr_add(slots, index * C_POINTER_SIZE)
-    token: int = load_i64(tokens, index * C_POINTER_SIZE)
-    if pcc_gc_foreign_lease_release(slot, token) != 0:
-        pcc_platform_abort()
-        return
-    store_i64(tokens, index * C_POINTER_SIZE, 0)
-    pcc_gc_store_root(slot, null())
+def _walk_drop(slots, index: int) -> None:
+    pcc_gc_store_root(ptr_add(slots, index * C_POINTER_SIZE), null())
 
 
-def _walk_close(slots, tokens, handles, count: int, suspended: int, keep_result: int = 0) -> None:
+def _walk_close(slots, handles, count: int, suspended: int, keep_result: int = 0) -> None:
     if suspended:
         py_tls_exc_swap_slot(ptr_add(slots, _WALK_EXIT_EXCEPTION * C_POINTER_SIZE))
         index: int = _WALK_ERROR_ARGS
         while index >= _WALK_PATH:
             if not keep_result or index != _WALK_RESULT:
-                _walk_drop(slots, tokens, index)
+                _walk_drop(slots, index)
             index = index - 1
         py_clear_exception()
         if not ptr_is_null(load_ptr(slots, _WALK_EXIT_EXCEPTION * C_POINTER_SIZE)):
@@ -163,15 +148,10 @@ def _walk_unregister(handles, count: int) -> None:
         index = index + 1
 
 
-def _walk_publish(slots, tokens, output) -> int:
+def _walk_publish(slots, output) -> int:
     result = ptr_add(slots, _WALK_RESULT * C_POINTER_SIZE)
     if pcc_gc_root_move(output, result) != 0:
         return _walk_fail(7, cstr("walk could not publish its result owner"))
-    token: int = load_i64(tokens, _WALK_RESULT * C_POINTER_SIZE)
-    store_i64(tokens, _WALK_RESULT * C_POINTER_SIZE, 0)
-    if pcc_gc_foreign_lease_release(output, token) != 0:
-        pcc_platform_abort()
-        return -1
     return 0
 
 
@@ -182,11 +162,11 @@ def _walk_bytes_path(slots) -> int:
     return load_i32(path, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_BYTES
 
 
-def _walk_prepare_path(slots, tokens) -> int:
+def _walk_prepare_path(slots) -> int:
     if py_os_fsencode_slots(ptr_add(slots, _WALK_PATH * C_POINTER_SIZE),
                             ptr_add(slots, _WALK_PATH_BYTES * C_POINTER_SIZE)) != 0:
         return -1
-    if _walk_adopt(slots, tokens, _WALK_PATH_BYTES) != 0:
+    if _walk_adopt(slots, _WALK_PATH_BYTES) != 0:
         return -1
     raw_owner = load_ptr(slots, _WALK_PATH_BYTES * C_POINTER_SIZE)
     length: int = load_i64(raw_owner, PYBYTESOBJECT_BYTE_LEN_OFFSET)
@@ -200,13 +180,13 @@ def _walk_prepare_path(slots, tokens) -> int:
     # name round trip is UTF-8/surrogateescape; bytes results remain bytes.
     store_ptr(slots, _WALK_PATH_TEXT * C_POINTER_SIZE,
               py_bytes_decode_utf8_surrogateescape(load_ptr(slots, _WALK_PATH_BYTES * C_POINTER_SIZE)))
-    if _walk_adopt(slots, tokens, _WALK_PATH_TEXT) != 0:
+    if _walk_adopt(slots, _WALK_PATH_TEXT) != 0:
         return -1
     store_ptr(slots, _WALK_EMPTY * C_POINTER_SIZE, py_str_new(cstr(""), 0))
-    if _walk_adopt(slots, tokens, _WALK_EMPTY) != 0:
+    if _walk_adopt(slots, _WALK_EMPTY) != 0:
         return -1
     store_ptr(slots, _WALK_JOIN_ARGS * C_POINTER_SIZE, py_tuple_new(2))
-    if _walk_adopt(slots, tokens, _WALK_JOIN_ARGS) != 0:
+    if _walk_adopt(slots, _WALK_JOIN_ARGS) != 0:
         return -1
     py_tuple_set_item(load_ptr(slots, _WALK_JOIN_ARGS * C_POINTER_SIZE), 0,
                       load_ptr(slots, _WALK_PATH_TEXT * C_POINTER_SIZE))
@@ -216,28 +196,28 @@ def _walk_prepare_path(slots, tokens) -> int:
         return -1
     store_ptr(slots, _WALK_PREFIX_TEXT * C_POINTER_SIZE,
               py_os_path_join(load_ptr(slots, _WALK_JOIN_ARGS * C_POINTER_SIZE)))
-    if _walk_adopt(slots, tokens, _WALK_PREFIX_TEXT) != 0:
+    if _walk_adopt(slots, _WALK_PREFIX_TEXT) != 0:
         return -1
     store_ptr(slots, _WALK_PREFIX_BYTES * C_POINTER_SIZE,
               py_text_encode_ids(load_ptr(slots, _WALK_PREFIX_TEXT * C_POINTER_SIZE), 0, 3))
-    return _walk_adopt(slots, tokens, _WALK_PREFIX_BYTES)
+    return _walk_adopt(slots, _WALK_PREFIX_BYTES)
 
 
-def _walk_os_error(slots, tokens, number: int) -> int:
+def _walk_os_error(slots, number: int) -> int:
     kind: int = pcc_errno_exception_kind(number)
     message = stack_alloc(256)
     pcc_errno_message_into(number, message, 256)
     store_ptr(slots, _WALK_ERROR_OBJECT * C_POINTER_SIZE, py_exc_new(kind, message))
-    if _walk_adopt(slots, tokens, _WALK_ERROR_OBJECT) != 0:
+    if _walk_adopt(slots, _WALK_ERROR_OBJECT) != 0:
         return -1
     store_ptr(slots, _WALK_ERROR_NUMBER * C_POINTER_SIZE, py_int_from_i64(number))
-    if _walk_adopt(slots, tokens, _WALK_ERROR_NUMBER) != 0:
+    if _walk_adopt(slots, _WALK_ERROR_NUMBER) != 0:
         return -1
     store_ptr(slots, _WALK_ERROR_TEXT * C_POINTER_SIZE, py_str_new(message, strlen(message)))
-    if _walk_adopt(slots, tokens, _WALK_ERROR_TEXT) != 0:
+    if _walk_adopt(slots, _WALK_ERROR_TEXT) != 0:
         return -1
     store_ptr(slots, _WALK_ERROR_ARGS * C_POINTER_SIZE, py_tuple_new(2))
-    if _walk_adopt(slots, tokens, _WALK_ERROR_ARGS) != 0:
+    if _walk_adopt(slots, _WALK_ERROR_ARGS) != 0:
         return -1
     py_tuple_set_item(load_ptr(slots, _WALK_ERROR_ARGS * C_POINTER_SIZE), 0,
                       load_ptr(slots, _WALK_ERROR_NUMBER * C_POINTER_SIZE))
@@ -262,22 +242,22 @@ def _walk_os_error(slots, tokens, number: int) -> int:
     return -1
 
 
-def _walk_entry(slots, tokens, entry, bytes_path: int, entry_type: int) -> int:
+def _walk_entry(slots, entry, bytes_path: int, entry_type: int) -> int:
     store_ptr(slots, _WALK_ENTRY_BYTES * C_POINTER_SIZE, py_bytes_new(entry, strlen(entry)))
-    if _walk_adopt(slots, tokens, _WALK_ENTRY_BYTES) != 0:
+    if _walk_adopt(slots, _WALK_ENTRY_BYTES) != 0:
         return -1
     if bytes_path:
-        if _walk_copy(slots, tokens, _WALK_ENTRY_NAME, ptr_add(slots, _WALK_ENTRY_BYTES * C_POINTER_SIZE)) != 0:
+        if _walk_copy(slots, _WALK_ENTRY_NAME, ptr_add(slots, _WALK_ENTRY_BYTES * C_POINTER_SIZE)) != 0:
             return -1
     else:
         store_ptr(slots, _WALK_ENTRY_NAME * C_POINTER_SIZE,
                   py_bytes_decode_utf8_surrogateescape(load_ptr(slots, _WALK_ENTRY_BYTES * C_POINTER_SIZE)))
-        if _walk_adopt(slots, tokens, _WALK_ENTRY_NAME) != 0:
+        if _walk_adopt(slots, _WALK_ENTRY_NAME) != 0:
             return -1
     store_ptr(slots, _WALK_CHILD_BYTES * C_POINTER_SIZE,
               py_bytes_concat(load_ptr(slots, _WALK_PREFIX_BYTES * C_POINTER_SIZE),
                               load_ptr(slots, _WALK_ENTRY_BYTES * C_POINTER_SIZE)))
-    if _walk_adopt(slots, tokens, _WALK_CHILD_BYTES) != 0:
+    if _walk_adopt(slots, _WALK_CHILD_BYTES) != 0:
         return -1
     child = ptr_add(load_ptr(slots, _WALK_CHILD_BYTES * C_POINTER_SIZE), PYBYTESOBJECT_DATA_OFFSET)
     # scandir carries a snapshot of d_type. Do not re-stat known ordinary
@@ -304,25 +284,25 @@ def _walk_entry(slots, tokens, entry, bytes_path: int, entry_type: int) -> int:
         symlink: int = entry_type == 3
         if follow or not symlink:
             if bytes_path:
-                if _walk_copy(slots, tokens, _WALK_CHILD_NAME, ptr_add(slots, _WALK_CHILD_BYTES * C_POINTER_SIZE)) != 0:
+                if _walk_copy(slots, _WALK_CHILD_NAME, ptr_add(slots, _WALK_CHILD_BYTES * C_POINTER_SIZE)) != 0:
                     return -1
             else:
                 store_ptr(slots, _WALK_CHILD_NAME * C_POINTER_SIZE,
                           py_bytes_decode_utf8_surrogateescape(load_ptr(slots, _WALK_CHILD_BYTES * C_POINTER_SIZE)))
-                if _walk_adopt(slots, tokens, _WALK_CHILD_NAME) != 0:
+                if _walk_adopt(slots, _WALK_CHILD_NAME) != 0:
                     return -1
             py_list_append(load_ptr(slots, _WALK_CHILDREN * C_POINTER_SIZE),
                            load_ptr(slots, _WALK_CHILD_NAME * C_POINTER_SIZE))
     return -1 if py_err_occurred() else 0
 
 
-def _walk_scan(slots, tokens) -> int:
-    if _walk_prepare_path(slots, tokens) != 0:
+def _walk_scan(slots) -> int:
+    if _walk_prepare_path(slots) != 0:
         return -1
     index: int = _WALK_DIRECTORIES
     while index <= _WALK_CHILDREN:
         store_ptr(slots, index * C_POINTER_SIZE, py_list_new(0))
-        if _walk_adopt(slots, tokens, index) != 0:
+        if _walk_adopt(slots, index) != 0:
             return -1
         index = index + 1
     raw = ptr_add(load_ptr(slots, _WALK_PATH_BYTES * C_POINTER_SIZE), PYBYTESOBJECT_DATA_OFFSET)
@@ -331,7 +311,7 @@ def _walk_scan(slots, tokens) -> int:
         number: int = pcc_errno_get()
         if number <= 0:
             return _walk_fail(11, cstr("directory provider did not preserve open errno"))
-        return _walk_os_error(slots, tokens, number)
+        return _walk_os_error(slots, number)
     status: int = 0
     filesystem_error: int = 0
     bytes_path: int = _walk_bytes_path(slots)
@@ -343,11 +323,11 @@ def _walk_scan(slots, tokens) -> int:
         if load_i8(entry, 0) == 46:
             if load_i8(entry, 1) == 0 or (load_i8(entry, 1) == 46 and load_i8(entry, 2) == 0):
                 continue
-        status = _walk_entry(slots, tokens, entry, bytes_path, directory_entry_type(stream, entry))
+        status = _walk_entry(slots, entry, bytes_path, directory_entry_type(stream, entry))
         if status == 0:
             index = _WALK_CHILD_NAME
             while index >= _WALK_ENTRY_BYTES:
-                _walk_drop(slots, tokens, index)
+                _walk_drop(slots, index)
                 index = index - 1
             if py_err_occurred():
                 status = -1
@@ -360,9 +340,9 @@ def _walk_scan(slots, tokens) -> int:
     if status != 0:
         return -1
     if filesystem_error < 0:
-        return _walk_os_error(slots, tokens, 0 - filesystem_error)
+        return _walk_os_error(slots, 0 - filesystem_error)
     store_ptr(slots, _WALK_RESULT * C_POINTER_SIZE, py_tuple_new(3))
-    if _walk_adopt(slots, tokens, _WALK_RESULT) != 0:
+    if _walk_adopt(slots, _WALK_RESULT) != 0:
         return -1
     index = _WALK_DIRECTORIES
     while index <= _WALK_CHILDREN:
@@ -378,9 +358,8 @@ def _walk_transaction(path_slot, topdown_slot, followlinks_slot, output_slot, sc
     if ptr_is_null(path_slot) or ptr_is_null(output_slot):
         return _walk_fail(7, cstr("walk requires authoritative input and output slots"))
     slots = stack_alloc(_WALK_SLOT_COUNT * C_POINTER_SIZE)
-    tokens = stack_alloc(_WALK_SLOT_COUNT * C_POINTER_SIZE)
     handles = stack_alloc(_WALK_SLOT_COUNT * C_POINTER_SIZE)
-    count: int = _walk_open(slots, tokens, handles)
+    count: int = _walk_open(slots, handles)
     status: int = -1
     suspended: int = 0
     if count == _WALK_SLOT_COUNT:
@@ -389,26 +368,26 @@ def _walk_transaction(path_slot, topdown_slot, followlinks_slot, output_slot, sc
         if not ptr_is_null(load_ptr(output_slot, 0)):
             status = _walk_fail(7, cstr("walk output slot must be empty"))
         else:
-            status = _walk_copy(slots, tokens, _WALK_PATH, path_slot)
+            status = _walk_copy(slots, _WALK_PATH, path_slot)
             if status == 0 and scan:
                 if ptr_is_null(topdown_slot) or ptr_is_null(followlinks_slot):
                     status = _walk_fail(7, cstr("walk scan options require owning slots"))
                 else:
-                    status = _walk_copy(slots, tokens, _WALK_TOPDOWN, topdown_slot)
+                    status = _walk_copy(slots, _WALK_TOPDOWN, topdown_slot)
                     if status == 0:
-                        status = _walk_copy(slots, tokens, _WALK_FOLLOWLINKS, followlinks_slot)
+                        status = _walk_copy(slots, _WALK_FOLLOWLINKS, followlinks_slot)
             if status == 0:
                 if scan:
-                    status = _walk_scan(slots, tokens)
+                    status = _walk_scan(slots)
                 else:
-                    status = _walk_prepare_path(slots, tokens)
+                    status = _walk_prepare_path(slots)
                     if status == 0:
                         prefix_index: int = _WALK_PREFIX_BYTES if _walk_bytes_path(slots) else _WALK_PREFIX_TEXT
-                        status = _walk_copy(slots, tokens, _WALK_RESULT,
+                        status = _walk_copy(slots, _WALK_RESULT,
                                             ptr_add(slots, prefix_index * C_POINTER_SIZE))
             if status == 0:
-                status = _walk_publish(slots, tokens, output_slot)
-    _walk_close(slots, tokens, handles, count, suspended)
+                status = _walk_publish(slots, output_slot)
+    _walk_close(slots, handles, count, suspended)
     if count != _WALK_SLOT_COUNT:
         return _walk_fail(19, cstr("walk root registration failed"))
     return status
@@ -425,31 +404,29 @@ def py_os_walk_prefix_slots(path_slot, output_slot) -> int:
 
 
 def _walk_c_object(path, topdown, followlinks, scan: int):
-    # This raw ABI is entered only by c_obj extern calls. Their counted
-    # address leases keep the borrowed arguments stable until return. Retain
-    # each value in a registered owning slot before any managed work.
+    # This raw ABI is entered only by c_obj extern calls, whose caller keeps
+    # the borrowed arguments alive until return. Retain each value in a
+    # registered owning slot before any managed work.
     slots = stack_alloc(_WALK_SLOT_COUNT * C_POINTER_SIZE)
-    tokens = stack_alloc(_WALK_SLOT_COUNT * C_POINTER_SIZE)
     memset(slots, 0, _WALK_SLOT_COUNT * C_POINTER_SIZE)
-    memset(tokens, 0, _WALK_SLOT_COUNT * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_walk_ffi_frame_map"), slots)
     py_tls_exc_swap_slot(ptr_add(slots, _WALK_ENTRY_EXCEPTION * C_POINTER_SIZE))
     pcc_gc_store_root(ptr_add(slots, _WALK_PATH * C_POINTER_SIZE), path)
-    status: int = _walk_adopt(slots, tokens, _WALK_PATH)
+    status: int = _walk_adopt(slots, _WALK_PATH)
     if status == 0 and scan:
         pcc_gc_store_root(ptr_add(slots, _WALK_TOPDOWN * C_POINTER_SIZE), topdown)
-        status = _walk_adopt(slots, tokens, _WALK_TOPDOWN)
+        status = _walk_adopt(slots, _WALK_TOPDOWN)
         if status == 0:
             pcc_gc_store_root(ptr_add(slots, _WALK_FOLLOWLINKS * C_POINTER_SIZE), followlinks)
-            status = _walk_adopt(slots, tokens, _WALK_FOLLOWLINKS)
+            status = _walk_adopt(slots, _WALK_FOLLOWLINKS)
     if status == 0:
         if scan:
-            status = _walk_scan(slots, tokens)
+            status = _walk_scan(slots)
         else:
-            status = _walk_prepare_path(slots, tokens)
+            status = _walk_prepare_path(slots)
             if status == 0:
                 prefix_index: int = _WALK_PREFIX_BYTES if _walk_bytes_path(slots) else _WALK_PREFIX_TEXT
-                status = _walk_copy(slots, tokens, _WALK_RESULT,
+                status = _walk_copy(slots, _WALK_RESULT,
                                     ptr_add(slots, prefix_index * C_POINTER_SIZE))
     if status != 0:
         # Foreign calls do not implicitly raise TLS errors. Return the
@@ -459,19 +436,15 @@ def _walk_c_object(path, topdown, followlinks, scan: int):
             _walk_fail(7, cstr("walk failed without an exception"))
         pending = ptr_add(slots, _WALK_EXIT_EXCEPTION * C_POINTER_SIZE)
         py_tls_exc_swap_slot(pending)
-        _walk_drop(slots, tokens, _WALK_RESULT)
+        _walk_drop(slots, _WALK_RESULT)
         py_clear_exception()
         if pcc_gc_root_move(ptr_add(slots, _WALK_RESULT * C_POINTER_SIZE), pending) != 0:
             pcc_platform_abort()
             return null()
-    _walk_close(slots, tokens, null(), 0, 1, 1)
+    _walk_close(slots, null(), 0, 1, 1)
     output = ptr_add(slots, _WALK_RESULT * C_POINTER_SIZE)
-    # Leases protect the produced tuple/string until the no-safepoint return
-    # handoff.
-    token: int = load_i64(tokens, _WALK_RESULT * C_POINTER_SIZE)
-    if pcc_gc_foreign_lease_release(output, token) != 0:
-        pcc_platform_abort()
-        return null()
+    # The output slot owns the produced tuple/string until the no-safepoint
+    # return handoff.
     pcc_gc_frame_leave(slots)
     return pcc_gc_take_slot(output)
 

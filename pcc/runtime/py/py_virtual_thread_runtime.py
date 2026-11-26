@@ -176,10 +176,6 @@ pcc_gc_scheduler_root_register_handle = extern(
 pcc_gc_scheduler_root_unregister_handle = extern(
     "pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void
 )
-pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
-pcc_gc_foreign_lease_release = extern(
-    "pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64
-)
 py_gc_track = extern("py_gc_track", (c_ptr,), c_void)
 py_incref = extern("py_incref", (c_ptr,), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
@@ -3457,29 +3453,17 @@ def _run_ready_step() -> int:
     ready = py_virtual_thread_poll_ready()
     if ptr_is_null(ready):
         return 0
-    # The resume runs compiled code, whose application gates may relocate
-    # objects. This frame and _resume_generator_owned keep the thread and
-    # its continuation as raw pointers after the resume returns: reading the
-    # moved thread's old copy found it still RUNNING and completed it with
-    # None. A counted lease keeps each where it is until the step is done.
-    ready_cell = stack_alloc(8)
-    store_ptr(ready_cell, 0, ready)
-    ready_lease = pcc_gc_foreign_lease_acquire(ready_cell)
-    continuation_cell = stack_alloc(8)
+    # This frame and _resume_generator_owned keep the thread and its
+    # continuation as raw pointers after the resume returns; the one
+    # collector never moves either, so no address lease is needed.
     continuation_slot = ptr_add(ready, 16)
-    store_ptr(continuation_cell, 0, pcc_gc_load_ptr(ready, continuation_slot))
-    continuation_lease = pcc_gc_foreign_lease_acquire(continuation_cell)
-    result = _run_ready_thread(ready, load_ptr(continuation_cell, 0))
-    if continuation_lease > 0:
-        pcc_gc_foreign_lease_release(continuation_cell, continuation_lease)
+    result = _run_ready_thread(ready, pcc_gc_load_ptr(ready, continuation_slot))
     if result == 2:
         # This step finished the task, and its resume no longer borrows the
         # continuation. Drop captures here, outside scheduler locks, instead
         # of retaining them until a later batch retires the task handles.
         pcc_gc_store_ptr(ready, continuation_slot, null())
         result = 1
-    if ready_lease > 0:
-        pcc_gc_foreign_lease_release(ready_cell, ready_lease)
     py_decref(ready)
     return result
 

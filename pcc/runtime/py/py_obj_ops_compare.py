@@ -1467,10 +1467,8 @@ define_global_i32("pcc_sorted_owned_map", 11)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
-pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_root_copy = extern("pcc_gc_root_copy", (c_ptr, c_ptr), c_int64)
 pcc_gc_root_move = extern("pcc_gc_root_move", (c_ptr, c_ptr), c_int64)
-pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
-pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
 py_list_extend = extern("py_list_extend", (c_ptr, c_ptr), c_void)
@@ -1493,47 +1491,34 @@ def _sorted_error(message) -> int:
     return -1
 
 
-def _sorted_drop(slots, tokens, index: int) -> None:
-    slot = ptr_add(slots, index * _SORT_BYTES)
-    token: int = load_i64(tokens, index * _SORT_BYTES)
-    if token >= 0:
-        if pcc_gc_foreign_lease_release(slot, token) < 0:
-            pcc_platform_abort()
-            return
-    store_i64(tokens, index * _SORT_BYTES, -1)
-    pcc_gc_store_root(slot, null())
+def _sorted_drop(slots, index: int) -> None:
+    pcc_gc_store_root(ptr_add(slots, index * _SORT_BYTES), null())
 
 
-def _sorted_adopt(slots, tokens, index: int) -> int:
+def _sorted_adopt(slots, index: int) -> int:
     slot = ptr_add(slots, index * _SORT_BYTES)
     if ptr_is_null(load_ptr(slot, 0)) != 0:
         return _sorted_error(cstr("sorted: missing owned value"))
-    token: int = pcc_gc_foreign_lease_acquire(slot)
-    store_i64(tokens, index * _SORT_BYTES, token)
-    if token < 0:
-        return _sorted_error(cstr("sorted: cannot lease owned value"))
     if py_err_occurred() != 0:
         return -1
     return 0
 
 
-def _sorted_copy(slots, tokens, index: int, source) -> int:
+def _sorted_copy(slots, index: int, source) -> int:
     if ptr_is_null(source) != 0:
         return 0
-    token: int = pcc_gc_root_copy_lease(ptr_add(slots, index * _SORT_BYTES), source)
-    store_i64(tokens, index * _SORT_BYTES, token)
-    if token < 0:
+    if pcc_gc_root_copy(ptr_add(slots, index * _SORT_BYTES), source) < 0:
         return _sorted_error(cstr("sorted: cannot retain input"))
     return 0
 
 
-def _sorted_arguments(slots, tokens, first, second) -> int:
+def _sorted_arguments(slots, first, second) -> int:
     count: int = 1
     if ptr_is_null(second) == 0:
         count = 2
     arguments = ptr_add(slots, _SORT_ARGS * _SORT_BYTES)
     store_ptr(arguments, 0, py_tuple_new(count))
-    if _sorted_adopt(slots, tokens, _SORT_ARGS) != 0:
+    if _sorted_adopt(slots, _SORT_ARGS) != 0:
         return -1
     py_tuple_set_item(load_ptr(arguments, 0), 0, load_ptr(first, 0))
     if py_err_occurred() != 0:
@@ -1545,7 +1530,7 @@ def _sorted_arguments(slots, tokens, first, second) -> int:
     return 0
 
 
-def _sorted_prepare_keys(slots, tokens) -> int:
+def _sorted_prepare_keys(slots) -> int:
     values = ptr_add(slots, _SORT_VALUES * _SORT_BYTES)
     keys = ptr_add(slots, _SORT_KEYS * _SORT_BYTES)
     key = ptr_add(slots, _SORT_KEY * _SORT_BYTES)
@@ -1556,61 +1541,61 @@ def _sorted_prepare_keys(slots, tokens) -> int:
         if _type_of(load_ptr(key, 0)) != PY_TYPE_NONE:
             callable_key = 1
     if callable_key == 0:
-        return _sorted_copy(slots, tokens, _SORT_KEYS, values)
+        return _sorted_copy(slots, _SORT_KEYS, values)
     n: int = py_list_len(load_ptr(values, 0))
     store_ptr(keys, 0, py_list_new(n))
-    if _sorted_adopt(slots, tokens, _SORT_KEYS) != 0:
+    if _sorted_adopt(slots, _SORT_KEYS) != 0:
         return -1
     index: int = 0
     while index < n:
         store_ptr(item, 0, py_list_get(load_ptr(values, 0), index))
-        if _sorted_adopt(slots, tokens, _SORT_ITEM) != 0:
+        if _sorted_adopt(slots, _SORT_ITEM) != 0:
             return -1
-        if _sorted_arguments(slots, tokens, item, null()) != 0:
+        if _sorted_arguments(slots, item, null()) != 0:
             return -1
         if py_obj_call_slots(key, ptr_add(slots, _SORT_ARGS * _SORT_BYTES), null(), result) != 0:
             return -1
-        if _sorted_adopt(slots, tokens, _SORT_LEFT) != 0:
+        if _sorted_adopt(slots, _SORT_LEFT) != 0:
             return -1
         py_list_append(load_ptr(keys, 0), load_ptr(result, 0))
         if py_err_occurred() != 0:
             return -1
-        _sorted_drop(slots, tokens, _SORT_LEFT)
-        _sorted_drop(slots, tokens, _SORT_ARGS)
-        _sorted_drop(slots, tokens, _SORT_ITEM)
+        _sorted_drop(slots, _SORT_LEFT)
+        _sorted_drop(slots, _SORT_ARGS)
+        _sorted_drop(slots, _SORT_ITEM)
         index = index + 1
     return 0
 
 
-def _sorted_less(slots, tokens, first: int, second: int) -> int:
+def _sorted_less(slots, first: int, second: int) -> int:
     keys = ptr_add(slots, _SORT_KEYS * _SORT_BYTES)
     left = ptr_add(slots, _SORT_LEFT * _SORT_BYTES)
     right = ptr_add(slots, _SORT_RIGHT * _SORT_BYTES)
     compare = ptr_add(slots, _SORT_COMPARE * _SORT_BYTES)
     item = ptr_add(slots, _SORT_ITEM * _SORT_BYTES)
     store_ptr(left, 0, py_list_get(load_ptr(keys, 0), first))
-    if _sorted_adopt(slots, tokens, _SORT_LEFT) != 0:
+    if _sorted_adopt(slots, _SORT_LEFT) != 0:
         return -1
     store_ptr(right, 0, py_list_get(load_ptr(keys, 0), second))
-    if _sorted_adopt(slots, tokens, _SORT_RIGHT) != 0:
+    if _sorted_adopt(slots, _SORT_RIGHT) != 0:
         return -1
     verdict: int = 0
     if ptr_is_null(load_ptr(compare, 0)) == 0:
-        if _sorted_arguments(slots, tokens, left, right) != 0:
+        if _sorted_arguments(slots, left, right) != 0:
             return -1
         if py_obj_call_slots(compare, ptr_add(slots, _SORT_ARGS * _SORT_BYTES), null(), item) != 0:
             return -1
-        if _sorted_adopt(slots, tokens, _SORT_ITEM) != 0:
+        if _sorted_adopt(slots, _SORT_ITEM) != 0:
             return -1
         verdict = py_obj_truthy(load_ptr(item, 0))
     else:
         verdict = py_obj_lt(load_ptr(left, 0), load_ptr(right, 0))
     if py_err_occurred() != 0:
         return -1
-    _sorted_drop(slots, tokens, _SORT_ITEM)
-    _sorted_drop(slots, tokens, _SORT_ARGS)
-    _sorted_drop(slots, tokens, _SORT_RIGHT)
-    _sorted_drop(slots, tokens, _SORT_LEFT)
+    _sorted_drop(slots, _SORT_ITEM)
+    _sorted_drop(slots, _SORT_ARGS)
+    _sorted_drop(slots, _SORT_RIGHT)
+    _sorted_drop(slots, _SORT_LEFT)
     return verdict
 
 
@@ -1631,16 +1616,16 @@ _TIM_RUN_POWERS = 1072
 _TIM_STATE_BYTES = 1584
 
 
-def _tim_less(slots, tokens, first: int, second: int) -> int:
+def _tim_less(slots, keyed: int, first: int, second: int) -> int:
     # ``first`` < ``second`` by key index: 1/0, or -1 with an exception set.
-    # Without tokens, ``slots`` is py_obj_sorted's private work list
-    # and the indices name its own elements.
-    if ptr_is_null(tokens) != 0:
+    # Unkeyed (0), ``slots`` is py_obj_sorted's private work list and the
+    # indices name its own elements; keyed (1), it is sorted()'s root frame.
+    if keyed == 0:
         items = load_ptr(slots, PYLISTOBJECT_ITEMS_OFFSET)
         left = pcc_gc_load_ptr(slots, ptr_add(items, first * 8))
         right = pcc_gc_load_ptr(slots, ptr_add(items, second * 8))
         return _sort_before(left, right)
-    return _sorted_less(slots, tokens, first, second)
+    return _sorted_less(slots, first, second)
 
 
 def _tim_reverse(order, start: int, count: int) -> None:
@@ -1654,7 +1639,7 @@ def _tim_reverse(order, start: int, count: int) -> None:
         high = high - 1
 
 
-def _tim_binarysort(slots, tokens, order, start: int, count: int, ok: int) -> int:
+def _tim_binarysort(slots, keyed: int, order, start: int, count: int, ok: int) -> int:
     # Stable binary insertion of order[start + ok:start + count].
     if ok == 0:
         ok = 1
@@ -1664,7 +1649,7 @@ def _tim_binarysort(slots, tokens, order, start: int, count: int, ok: int) -> in
         high: int = ok
         while low < high:
             middle: int = (low + high) >> 1
-            less: int = _tim_less(slots, tokens, pivot, load_i64(order, (start + middle) * 8))
+            less: int = _tim_less(slots, keyed, pivot, load_i64(order, (start + middle) * 8))
             if less < 0:
                 return -1
             if less != 0:
@@ -1680,12 +1665,12 @@ def _tim_binarysort(slots, tokens, order, start: int, count: int, ok: int) -> in
     return 0
 
 
-def _tim_count_run(slots, tokens, order, start: int, remaining: int) -> int:
+def _tim_count_run(slots, keyed: int, order, start: int, remaining: int) -> int:
     # The run at start, made ascending in place; -1 with an exception set.
     n: int = 1
     scanning: int = 1
     while scanning != 0 and n < remaining:
-        smaller: int = _tim_less(slots, tokens, load_i64(order, (start + n) * 8),
+        smaller: int = _tim_less(slots, keyed, load_i64(order, (start + n) * 8),
                                     load_i64(order, (start + n - 1) * 8))
         if smaller < 0:
             return -1
@@ -1696,7 +1681,7 @@ def _tim_count_run(slots, tokens, order, start: int, remaining: int) -> int:
     if n == remaining:
         return n
     if n > 1:
-        rising: int = _tim_less(slots, tokens, load_i64(order, start * 8),
+        rising: int = _tim_less(slots, keyed, load_i64(order, start * 8),
                                    load_i64(order, (start + n - 1) * 8))
         if rising < 0:
             return -1
@@ -1710,7 +1695,7 @@ def _tim_count_run(slots, tokens, order, start: int, remaining: int) -> int:
     equal: int = 0
     descending: int = 1
     while descending != 0 and n < remaining:
-        smaller = _tim_less(slots, tokens, load_i64(order, (start + n) * 8),
+        smaller = _tim_less(slots, keyed, load_i64(order, (start + n) * 8),
                                load_i64(order, (start + n - 1) * 8))
         if smaller < 0:
             return -1
@@ -1721,7 +1706,7 @@ def _tim_count_run(slots, tokens, order, start: int, remaining: int) -> int:
                 equal = 0
             n = n + 1
         else:
-            larger: int = _tim_less(slots, tokens, load_i64(order, (start + n - 1) * 8),
+            larger: int = _tim_less(slots, keyed, load_i64(order, (start + n - 1) * 8),
                                        load_i64(order, (start + n) * 8))
             if larger < 0:
                 return -1
@@ -1737,7 +1722,7 @@ def _tim_count_run(slots, tokens, order, start: int, remaining: int) -> int:
     # The reversed run may continue with a naturally ascending suffix.
     extending: int = 1
     while extending != 0 and n < remaining:
-        smaller = _tim_less(slots, tokens, load_i64(order, (start + n) * 8),
+        smaller = _tim_less(slots, keyed, load_i64(order, (start + n) * 8),
                                load_i64(order, (start + n - 1) * 8))
         if smaller < 0:
             return -1
@@ -1748,18 +1733,18 @@ def _tim_count_run(slots, tokens, order, start: int, remaining: int) -> int:
     return n
 
 
-def _tim_gallop_left(slots, tokens, key: int, array, start: int, n: int, hint: int) -> int:
+def _tim_gallop_left(slots, keyed: int, key: int, array, start: int, n: int, hint: int) -> int:
     # k in 0..n with array[k-1] < key <= array[k] over array[start:start+n].
     last: int = 0
     ofs: int = 1
-    less: int = _tim_less(slots, tokens, load_i64(array, (start + hint) * 8), key)
+    less: int = _tim_less(slots, keyed, load_i64(array, (start + hint) * 8), key)
     if less < 0:
         return -1
     if less != 0:
         maximum: int = n - hint
         going: int = 1
         while going != 0 and ofs < maximum:
-            less = _tim_less(slots, tokens, load_i64(array, (start + hint + ofs) * 8), key)
+            less = _tim_less(slots, keyed, load_i64(array, (start + hint + ofs) * 8), key)
             if less < 0:
                 return -1
             if less != 0:
@@ -1775,7 +1760,7 @@ def _tim_gallop_left(slots, tokens, key: int, array, start: int, n: int, hint: i
         maximum = hint + 1
         going = 1
         while going != 0 and ofs < maximum:
-            less = _tim_less(slots, tokens, load_i64(array, (start + hint - ofs) * 8), key)
+            less = _tim_less(slots, keyed, load_i64(array, (start + hint - ofs) * 8), key)
             if less < 0:
                 return -1
             if less != 0:
@@ -1791,7 +1776,7 @@ def _tim_gallop_left(slots, tokens, key: int, array, start: int, n: int, hint: i
     last = last + 1
     while last < ofs:
         middle: int = last + ((ofs - last) >> 1)
-        less = _tim_less(slots, tokens, load_i64(array, (start + middle) * 8), key)
+        less = _tim_less(slots, keyed, load_i64(array, (start + middle) * 8), key)
         if less < 0:
             return -1
         if less != 0:
@@ -1801,18 +1786,18 @@ def _tim_gallop_left(slots, tokens, key: int, array, start: int, n: int, hint: i
     return ofs
 
 
-def _tim_gallop_right(slots, tokens, key: int, array, start: int, n: int, hint: int) -> int:
+def _tim_gallop_right(slots, keyed: int, key: int, array, start: int, n: int, hint: int) -> int:
     # k in 0..n with array[k-1] <= key < array[k] over array[start:start+n].
     last: int = 0
     ofs: int = 1
-    less: int = _tim_less(slots, tokens, key, load_i64(array, (start + hint) * 8))
+    less: int = _tim_less(slots, keyed, key, load_i64(array, (start + hint) * 8))
     if less < 0:
         return -1
     if less != 0:
         maximum: int = hint + 1
         going: int = 1
         while going != 0 and ofs < maximum:
-            less = _tim_less(slots, tokens, key, load_i64(array, (start + hint - ofs) * 8))
+            less = _tim_less(slots, keyed, key, load_i64(array, (start + hint - ofs) * 8))
             if less < 0:
                 return -1
             if less != 0:
@@ -1829,7 +1814,7 @@ def _tim_gallop_right(slots, tokens, key: int, array, start: int, n: int, hint: 
         maximum = n - hint
         going = 1
         while going != 0 and ofs < maximum:
-            less = _tim_less(slots, tokens, key, load_i64(array, (start + hint + ofs) * 8))
+            less = _tim_less(slots, keyed, key, load_i64(array, (start + hint + ofs) * 8))
             if less < 0:
                 return -1
             if less != 0:
@@ -1844,7 +1829,7 @@ def _tim_gallop_right(slots, tokens, key: int, array, start: int, n: int, hint: 
     last = last + 1
     while last < ofs:
         middle: int = last + ((ofs - last) >> 1)
-        less = _tim_less(slots, tokens, key, load_i64(array, (start + middle) * 8))
+        less = _tim_less(slots, keyed, key, load_i64(array, (start + middle) * 8))
         if less < 0:
             return -1
         if less != 0:
@@ -1854,7 +1839,7 @@ def _tim_gallop_right(slots, tokens, key: int, array, start: int, n: int, hint: 
     return ofs
 
 
-def _tim_merge_lo(slots, tokens, order, scratch, state, a_start: int, na: int, b_start: int, nb: int) -> int:
+def _tim_merge_lo(slots, keyed: int, order, scratch, state, a_start: int, na: int, b_start: int, nb: int) -> int:
     # Merge with run A (na <= nb) copied to scratch; fill from the left.
     memmove(scratch, ptr_add(order, a_start * 8), na * 8)
     dest: int = a_start
@@ -1876,7 +1861,7 @@ def _tim_merge_lo(slots, tokens, order, scratch, state, a_start: int, na: int, b
         bcount: int = 0
         straight: int = 1
         while outcome == 0 and straight != 0:
-            less: int = _tim_less(slots, tokens, load_i64(order, pb * 8), load_i64(scratch, pa * 8))
+            less: int = _tim_less(slots, keyed, load_i64(order, pb * 8), load_i64(scratch, pa * 8))
             if less < 0:
                 outcome = 3
             elif less != 0:
@@ -1908,7 +1893,7 @@ def _tim_merge_lo(slots, tokens, order, scratch, state, a_start: int, na: int, b
                 if min_gallop > 1:
                     min_gallop = min_gallop - 1
                 store_i64(state, _TIM_MIN_GALLOP, min_gallop)
-                k: int = _tim_gallop_right(slots, tokens, load_i64(order, pb * 8), scratch, pa, na, 0)
+                k: int = _tim_gallop_right(slots, keyed, load_i64(order, pb * 8), scratch, pa, na, 0)
                 acount = k
                 if k < 0:
                     outcome = 3
@@ -1929,7 +1914,7 @@ def _tim_merge_lo(slots, tokens, order, scratch, state, a_start: int, na: int, b
                     if nb == 0:
                         outcome = 1
                 if outcome == 0:
-                    k = _tim_gallop_left(slots, tokens, load_i64(scratch, pa * 8), order, pb, nb, 0)
+                    k = _tim_gallop_left(slots, keyed, load_i64(scratch, pa * 8), order, pb, nb, 0)
                     bcount = k
                     if k < 0:
                         outcome = 3
@@ -1963,7 +1948,7 @@ def _tim_merge_lo(slots, tokens, order, scratch, state, a_start: int, na: int, b
     return 0 if outcome == 1 else -1
 
 
-def _tim_merge_hi(slots, tokens, order, scratch, state, a_start: int, na: int, b_start: int, nb: int) -> int:
+def _tim_merge_hi(slots, keyed: int, order, scratch, state, a_start: int, na: int, b_start: int, nb: int) -> int:
     # Merge with run B (na >= nb) copied to scratch; fill from the right.
     memmove(scratch, ptr_add(order, b_start * 8), nb * 8)
     dest: int = b_start + nb - 1
@@ -1985,7 +1970,7 @@ def _tim_merge_hi(slots, tokens, order, scratch, state, a_start: int, na: int, b
         bcount: int = 0
         straight: int = 1
         while outcome == 0 and straight != 0:
-            less: int = _tim_less(slots, tokens, load_i64(scratch, pb * 8), load_i64(order, pa * 8))
+            less: int = _tim_less(slots, keyed, load_i64(scratch, pb * 8), load_i64(order, pa * 8))
             if less < 0:
                 outcome = 3
             elif less != 0:
@@ -2017,7 +2002,7 @@ def _tim_merge_hi(slots, tokens, order, scratch, state, a_start: int, na: int, b
                 if min_gallop > 1:
                     min_gallop = min_gallop - 1
                 store_i64(state, _TIM_MIN_GALLOP, min_gallop)
-                k: int = _tim_gallop_right(slots, tokens, load_i64(scratch, pb * 8), order, a_start, na, na - 1)
+                k: int = _tim_gallop_right(slots, keyed, load_i64(scratch, pb * 8), order, a_start, na, na - 1)
                 if k < 0:
                     outcome = 3
                 if outcome == 0:
@@ -2038,7 +2023,7 @@ def _tim_merge_hi(slots, tokens, order, scratch, state, a_start: int, na: int, b
                     if nb == 1:
                         outcome = 2
                 if outcome == 0:
-                    k = _tim_gallop_left(slots, tokens, load_i64(order, pa * 8), scratch, 0, nb, nb - 1)
+                    k = _tim_gallop_left(slots, keyed, load_i64(order, pa * 8), scratch, 0, nb, nb - 1)
                     if k < 0:
                         outcome = 3
                 if outcome == 0:
@@ -2076,7 +2061,7 @@ def _tim_merge_hi(slots, tokens, order, scratch, state, a_start: int, na: int, b
     return 0 if outcome == 1 else -1
 
 
-def _tim_merge_at(slots, tokens, order, scratch, state, i: int) -> int:
+def _tim_merge_at(slots, keyed: int, order, scratch, state, i: int) -> int:
     # Merge pending runs i and i + 1 (i is the second- or third-to-last).
     bases = ptr_add(state, _TIM_RUN_BASES)
     lengths = ptr_add(state, _TIM_RUN_LENGTHS)
@@ -2093,7 +2078,7 @@ def _tim_merge_at(slots, tokens, order, scratch, state, i: int) -> int:
         store_i64(powers, (i + 1) * 8, load_i64(powers, (i + 2) * 8))
     store_i64(state, _TIM_PENDING, pending - 1)
     # Elements of A before B's first are already in place.
-    k: int = _tim_gallop_right(slots, tokens, load_i64(order, b_start * 8), order, a_start, na, 0)
+    k: int = _tim_gallop_right(slots, keyed, load_i64(order, b_start * 8), order, a_start, na, 0)
     if k < 0:
         return -1
     a_start = a_start + k
@@ -2101,12 +2086,12 @@ def _tim_merge_at(slots, tokens, order, scratch, state, i: int) -> int:
     if na == 0:
         return 0
     # Elements of B after A's last are already in place.
-    nb = _tim_gallop_left(slots, tokens, load_i64(order, (a_start + na - 1) * 8), order, b_start, nb, nb - 1)
+    nb = _tim_gallop_left(slots, keyed, load_i64(order, (a_start + na - 1) * 8), order, b_start, nb, nb - 1)
     if nb <= 0:
         return nb
     if na <= nb:
-        return _tim_merge_lo(slots, tokens, order, scratch, state, a_start, na, b_start, nb)
-    return _tim_merge_hi(slots, tokens, order, scratch, state, a_start, na, b_start, nb)
+        return _tim_merge_lo(slots, keyed, order, scratch, state, a_start, na, b_start, nb)
+    return _tim_merge_hi(slots, keyed, order, scratch, state, a_start, na, b_start, nb)
 
 
 def _tim_power(s1: int, n1: int, n2: int, n: int) -> int:
@@ -2128,7 +2113,7 @@ def _tim_power(s1: int, n1: int, n2: int, n: int) -> int:
     return result
 
 
-def _tim_found_new_run(slots, tokens, order, scratch, state, n2: int) -> int:
+def _tim_found_new_run(slots, keyed: int, order, scratch, state, n2: int) -> int:
     pending: int = load_i64(state, _TIM_PENDING)
     if pending == 0:
         return 0
@@ -2138,14 +2123,14 @@ def _tim_found_new_run(slots, tokens, order, scratch, state, n2: int) -> int:
     power: int = _tim_power(load_i64(bases, (pending - 1) * 8), load_i64(lengths, (pending - 1) * 8),
                             n2, load_i64(state, _TIM_LISTLEN))
     while pending > 1 and load_i64(powers, (pending - 2) * 8) > power:
-        if _tim_merge_at(slots, tokens, order, scratch, state, pending - 2) < 0:
+        if _tim_merge_at(slots, keyed, order, scratch, state, pending - 2) < 0:
             return -1
         pending = load_i64(state, _TIM_PENDING)
     store_i64(powers, (pending - 1) * 8, power)
     return 0
 
 
-def _sorted_merge_indices(slots, tokens, order, scratch, count: int, reverse: int) -> int:
+def _sorted_merge_indices(slots, keyed: int, order, scratch, count: int, reverse: int) -> int:
     # Leaves the permutation in order and in scratch (_sorted_reorder_values).
     if reverse != 0:
         # Stable reverse sort: sort the reversed list, then reverse it back.
@@ -2163,7 +2148,7 @@ def _sorted_merge_indices(slots, tokens, order, scratch, count: int, reverse: in
     low: int = 0
     remaining: int = count
     while remaining > 0:
-        n: int = _tim_count_run(slots, tokens, order, low, remaining)
+        n: int = _tim_count_run(slots, keyed, order, low, remaining)
         if n < 0:
             return -1
         current: int = load_i64(state, _TIM_MR_CURRENT) + count
@@ -2173,10 +2158,10 @@ def _sorted_merge_indices(slots, tokens, order, scratch, count: int, reverse: in
             force: int = minrun
             if remaining <= minrun:
                 force = remaining
-            if _tim_binarysort(slots, tokens, order, low, force, n) < 0:
+            if _tim_binarysort(slots, keyed, order, low, force, n) < 0:
                 return -1
             n = force
-        if _tim_found_new_run(slots, tokens, order, scratch, state, n) < 0:
+        if _tim_found_new_run(slots, keyed, order, scratch, state, n) < 0:
             return -1
         pending: int = load_i64(state, _TIM_PENDING)
         store_i64(state, _TIM_RUN_BASES + pending * 8, low)
@@ -2189,7 +2174,7 @@ def _sorted_merge_indices(slots, tokens, order, scratch, count: int, reverse: in
         at: int = pending - 2
         if at > 0 and load_i64(state, _TIM_RUN_LENGTHS + (at - 1) * 8) < load_i64(state, _TIM_RUN_LENGTHS + (at + 1) * 8):
             at = at - 1
-        if _tim_merge_at(slots, tokens, order, scratch, state, at) < 0:
+        if _tim_merge_at(slots, keyed, order, scratch, state, at) < 0:
             return -1
         pending = load_i64(state, _TIM_PENDING)
     if reverse != 0:
@@ -2498,26 +2483,21 @@ def _sorted_slots_body(source_slot, key_slot, compare_slot, reverse: int, revers
     if ptr_is_null(load_ptr(result_slot, 0)) == 0:
         return _sorted_error(cstr("sorted: result root must be empty"))
     slots = stack_alloc(_SORT_COUNT * _SORT_BYTES)
-    tokens = stack_alloc(_SORT_COUNT * _SORT_BYTES)
     memset(slots, 0, _SORT_COUNT * _SORT_BYTES)
-    index: int = 0
-    while index < _SORT_COUNT:
-        store_i64(tokens, index * _SORT_BYTES, -1)
-        index = index + 1
     pcc_gc_frame_enter(global_addr("pcc_sorted_owned_map"), slots)
-    status: int = _sorted_copy(slots, tokens, _SORT_SOURCE, source_slot)
+    status: int = _sorted_copy(slots, _SORT_SOURCE, source_slot)
     if status == 0:
-        status = _sorted_copy(slots, tokens, _SORT_KEY, key_slot)
+        status = _sorted_copy(slots, _SORT_KEY, key_slot)
     if status == 0:
-        status = _sorted_copy(slots, tokens, _SORT_COMPARE, compare_slot)
+        status = _sorted_copy(slots, _SORT_COMPARE, compare_slot)
     if status == 0:
-        status = _sorted_copy(slots, tokens, _SORT_REVERSE, reverse_slot)
+        status = _sorted_copy(slots, _SORT_REVERSE, reverse_slot)
     source = ptr_add(slots, _SORT_SOURCE * _SORT_BYTES)
     values = ptr_add(slots, _SORT_VALUES * _SORT_BYTES)
     error = ptr_add(slots, _SORT_ERROR * _SORT_BYTES)
     if status == 0:
         store_ptr(values, 0, py_list_new(0))
-        status = _sorted_adopt(slots, tokens, _SORT_VALUES)
+        status = _sorted_adopt(slots, _SORT_VALUES)
     if status == 0:
         py_list_extend(load_ptr(values, 0), load_ptr(source, 0))
         if py_err_occurred() != 0:
@@ -2530,7 +2510,7 @@ def _sorted_slots_body(source_slot, key_slot, compare_slot, reverse: int, revers
         if py_err_occurred() != 0:
             status = -1
     if status == 0:
-        status = _sorted_prepare_keys(slots, tokens)
+        status = _sorted_prepare_keys(slots)
     count: int = 0
     capacity: int = 0
     order = null()
@@ -2556,27 +2536,21 @@ def _sorted_slots_body(source_slot, key_slot, compare_slot, reverse: int, revers
         while index < count:
             store_i64(order, index * _SORT_BYTES, index)
             index = index + 1
-        status = _sorted_merge_indices(slots, tokens, order, scratch, count, reverse)
+        status = _sorted_merge_indices(slots, 1, order, scratch, count, reverse)
         if status == 0:
             status = _sorted_reorder_values(values, order, scratch, count, capacity)
             if status == 0:
                 scratch = null()  # The values list now owns this allocation.
     if status == 0:
         status = pcc_gc_root_move(result_slot, values)
-        if status == 0:
-            token: int = load_i64(tokens, _SORT_VALUES * _SORT_BYTES)
-            store_i64(tokens, _SORT_VALUES * _SORT_BYTES, -1)
-            if pcc_gc_foreign_lease_release(result_slot, token) < 0:
-                pcc_platform_abort()
-                return -1
-        else:
+        if status != 0:
             _sorted_error(cstr("sorted: cannot transfer result owner"))
     py_tls_exc_swap_slot(error)
     free(scratch)
     free(order)
     index = _SORT_ERROR - 1
     while index >= 0:
-        _sorted_drop(slots, tokens, index)
+        _sorted_drop(slots, index)
         index = index - 1
     py_clear_exception()
     py_tls_exc_swap_slot(error)
@@ -2714,7 +2688,7 @@ def py_obj_sorted(x):
             while oi < m:
                 store_i64(order, oi * 8, oi)
                 oi = oi + 1
-            status: int = _sorted_merge_indices(out, null(), order, positions, m, 0)
+            status: int = _sorted_merge_indices(out, 0, order, positions, m, 0)
             if status == 0:
                 _sorted_permute_work_list(out, order, positions, m)
             free(positions)

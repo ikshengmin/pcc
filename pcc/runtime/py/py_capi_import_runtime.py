@@ -122,7 +122,7 @@ PyMem_Free = extern("PyMem_Free", (c_ptr,), c_void)
 
 
 # Borrowed inputs are registered before owner-copy operations may park. Each
-# owned slot carries an independent counted lease, including NEW import results.
+# owned slot owns its value, including NEW import results.
 _IMPORT_NAME = 0
 _IMPORT_FROMLIST = 1
 _IMPORT_MODULE = 2
@@ -134,57 +134,33 @@ define_global_i32("pcc_capi_import_borrowed_map", -2)
 define_global_i32("pcc_capi_import_owned_map", _IMPORT_COUNT)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
-pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
-pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
-pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+pcc_gc_root_copy_borrowed = extern("pcc_gc_root_copy_borrowed", (c_ptr, c_ptr), c_int64)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
 py_clear_exception = extern("py_clear_exception", (), c_void)
 py_runtime_error_if_unset = extern("py_runtime_error_if_unset", (c_ptr, c_ptr), c_ptr)
-pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 
 
-def _import_adopt(slots, tokens, index: int) -> int:
-    # NEW must already be stored before lease acquisition can park.
-    offset: int = index * C_POINTER_SIZE
-    slot = ptr_add(slots, offset)
-    token: int = pcc_gc_foreign_lease_acquire(slot)
-    if token < 0:
-        py_runtime_error_if_unset(cstr("import"), cstr("result owner lease failed"))
-        return -1
-    store_i64(tokens, offset, token)
-    return 0
-
-
-def _import_copy_inputs(slots, tokens, borrowed) -> int:
+def _import_copy_inputs(slots, borrowed) -> int:
     index: int = 0
     while index < 2:
         offset: int = index * C_POINTER_SIZE
-        token: int = pcc_gc_root_copy_borrowed_lease(
-            ptr_add(slots, offset), ptr_add(borrowed, offset),
-        )
-        if token < 0:
+        if pcc_gc_root_copy_borrowed(ptr_add(slots, offset), ptr_add(borrowed, offset)) < 0:
             py_runtime_error_if_unset(cstr("import"), cstr("argument owner copy failed"))
             return -1
-        store_i64(tokens, offset, token)
         index = index + 1
     return 0
 
 
-def _import_finish(slots, tokens, borrowed, keep: int) -> c_ptr:
+def _import_finish(slots, borrowed, keep: int) -> c_ptr:
     py_tls_exc_swap_slot(ptr_add(slots, _IMPORT_ERROR * C_POINTER_SIZE))
     store_ptr(borrowed, 0, null())
     store_ptr(borrowed, C_POINTER_SIZE, null())
     index: int = 0
     while index < _IMPORT_ERROR:
         if index != keep:
-            offset: int = index * C_POINTER_SIZE
-            slot = ptr_add(slots, offset)
-            if pcc_gc_foreign_lease_release(slot, load_i64(tokens, offset)) != 0:
-                pcc_platform_abort()
-                return null()
-            pcc_gc_store_root(slot, null())
+            pcc_gc_store_root(ptr_add(slots, index * C_POINTER_SIZE), null())
         index = index + 1
     py_clear_exception()
     py_tls_exc_swap_slot(ptr_add(slots, _IMPORT_ERROR * C_POINTER_SIZE))
@@ -193,15 +169,12 @@ def _import_finish(slots, tokens, borrowed, keep: int) -> c_ptr:
         pcc_gc_frame_leave(borrowed)
         return null()
     result_slot = ptr_add(slots, keep * C_POINTER_SIZE)
-    if pcc_gc_foreign_lease_release(result_slot, load_i64(tokens, keep * C_POINTER_SIZE)) != 0:
-        pcc_platform_abort()
-        return null()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
     return pcc_gc_take_slot(result_slot)
 
 
-def _builtin_import_body(slots, tokens) -> int:
+def _builtin_import_body(slots) -> int:
     name = load_ptr(slots, _IMPORT_NAME * C_POINTER_SIZE)
     if ptr_is_null(name) or is_tagged_int(name) or py_type_of(name) != PY_TYPE_STR:
         py_raise_owned(py_exc_new(3, cstr("module name must be a string")))
@@ -215,15 +188,11 @@ def _builtin_import_body(slots, tokens) -> int:
     if strlen(cname) != py_str_byte_len(name):
         py_raise_owned(py_exc_new(2, cstr("module name contains a null character")))
         return -1
-    # The string lease also protects its borrowed UTF-8 buffer through loaders.
+    # The name's owning slot also keeps its borrowed UTF-8 buffer alive.
     # Python-level __import__ retains its ModuleNotFoundError diagnostic.
     store_ptr(slots, _IMPORT_MODULE * C_POINTER_SIZE, py_native_extension_import_by_name(cname))
-    if _import_adopt(slots, tokens, _IMPORT_MODULE) != 0:
-        return -1
     if ptr_is_null(load_ptr(slots, _IMPORT_MODULE * C_POINTER_SIZE)) and py_err_occurred() == 0:
         store_ptr(slots, _IMPORT_MODULE * C_POINTER_SIZE, py_compiled_module_import_by_name(cname))
-        if _import_adopt(slots, tokens, _IMPORT_MODULE) != 0:
-            return -1
     if ptr_is_null(load_ptr(slots, _IMPORT_MODULE * C_POINTER_SIZE)):
         if py_err_occurred() == 0:
             message = _python_not_found_message(cname)
@@ -253,9 +222,8 @@ def _builtin_import_body(slots, tokens) -> int:
     memcpy(top_name, cname, top_len)
     store_i8(top_name, top_len, 0)
     store_ptr(slots, _IMPORT_TOP * C_POINTER_SIZE, PyImport_ImportModule(top_name))
-    status: int = _import_adopt(slots, tokens, _IMPORT_TOP)
     PyMem_Free(top_name)
-    if status != 0 or ptr_is_null(load_ptr(slots, _IMPORT_TOP * C_POINTER_SIZE)):
+    if ptr_is_null(load_ptr(slots, _IMPORT_TOP * C_POINTER_SIZE)):
         return -1
     return _IMPORT_TOP
 
@@ -266,14 +234,12 @@ def _import_with_roots(name, fromlist, builtin: int) -> c_ptr:
     store_ptr(borrowed, C_POINTER_SIZE, fromlist)
     pcc_gc_frame_enter(global_addr("pcc_capi_import_borrowed_map"), borrowed)
     slots = stack_alloc(_IMPORT_COUNT * C_POINTER_SIZE)
-    tokens = stack_alloc(_IMPORT_COUNT * C_POINTER_SIZE)
     memset(slots, 0, _IMPORT_COUNT * C_POINTER_SIZE)
-    memset(tokens, 0, _IMPORT_COUNT * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_capi_import_owned_map"), slots)
     keep: int = -1
-    if _import_copy_inputs(slots, tokens, borrowed) == 0:
+    if _import_copy_inputs(slots, borrowed) == 0:
         if builtin != 0:
-            keep = _builtin_import_body(slots, tokens)
+            keep = _builtin_import_body(slots)
         else:
             name = load_ptr(slots, _IMPORT_NAME * C_POINTER_SIZE)
             if ptr_is_null(name):
@@ -282,9 +248,8 @@ def _import_with_roots(name, fromlist, builtin: int) -> c_ptr:
                 cname = PyUnicode_AsUTF8(name)
                 if not ptr_is_null(cname):
                     store_ptr(slots, _IMPORT_MODULE * C_POINTER_SIZE, PyImport_ImportModule(cname))
-                    if _import_adopt(slots, tokens, _IMPORT_MODULE) == 0:
-                        keep = _IMPORT_MODULE
-    return _import_finish(slots, tokens, borrowed, keep)
+                    keep = _IMPORT_MODULE
+    return _import_finish(slots, borrowed, keep)
 
 
 @c_abi_typed_export("PyImport_Import", "ptr", ("ptr",))

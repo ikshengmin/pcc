@@ -90,40 +90,26 @@ pcc_refcount_incref = extern("pcc_refcount_incref", (c_ptr,), c_int64)
 pcc_refcount_decref = extern("pcc_refcount_decref", (c_ptr,), c_int64)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
-pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
-pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
-pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 
 # One temporary owner keeps self alive if the finalizer drops every ordinary
-# reference. Counted address leases are also collector roots: the production
-# pcc_gc_gray_current_roots walk seeds pinned object-index entries. Keep this
-# lease across the whole callback and its cleanup, independently of legacy
-# pin-bit changes in nested calls. No frame retirement transfers this owner.
+# reference, across the whole callback and its cleanup. The one collector
+# needs no address lease beside it. No frame retirement transfers this owner.
 
 
-def _finalizer_owner_enter(slot: c_ptr) -> int:
+def _finalizer_owner_enter(slot: c_ptr) -> None:
     pcc_py_gc_minor_graph_lock()
     value = load_ptr(slot, 0)
     pcc_refcount_incref(value)
     flags: int = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET)
     # Match py_gen_finalize_from_dealloc: a real temporary owner revives the
-    # terminal object for its callback. Ordinary terminal leases still fail.
+    # terminal object for its callback.
     store_i32(value, PYOBJECTHEADER_FLAGS_OFFSET, flags & ~524288)
-    token: int = pcc_gc_foreign_lease_acquire(slot)
     pcc_py_gc_minor_graph_unlock()
-    if token < 0:
-        pcc_platform_abort()
-    return token
 
 
-def _finalizer_owner_leave(slot: c_ptr, token: int, was_deallocating: int) -> None:
+def _finalizer_owner_leave(slot: c_ptr, was_deallocating: int) -> None:
     pcc_py_gc_minor_graph_lock()
     value = load_ptr(slot, 0)
-    status: int = pcc_gc_foreign_lease_release(slot, token)
-    if status != 0:
-        pcc_py_gc_minor_graph_unlock()
-        pcc_platform_abort()
-        return
     # Avoid recursive deallocation. Zero resumes the enclosing deallocator;
     # a positive count belongs to a real resurrection owner.
     remaining: int = pcc_refcount_decref(value)
@@ -662,7 +648,7 @@ def py_user_del_dispatch(o) -> None:
     store_i32(o, PYOBJECTHEADER_FLAGS_OFFSET, flags | 4)
     finalizer_owner = stack_alloc(C_POINTER_SIZE)
     store_ptr(finalizer_owner, 0, o)
-    finalizer_lease: int = _finalizer_owner_enter(finalizer_owner)
+    _finalizer_owner_enter(finalizer_owner)
     saved_exc = py_current_exception()
     if ptr_is_null(saved_exc) == 0:
         # TLS stops owning this exception during the user finalizer; this
@@ -678,4 +664,4 @@ def py_user_del_dispatch(o) -> None:
     if ptr_is_null(saved_exc) == 0:
         py_tls_exc_set(saved_exc)
         py_decref(saved_exc)
-    _finalizer_owner_leave(finalizer_owner, finalizer_lease, flags & 524288)
+    _finalizer_owner_leave(finalizer_owner, flags & 524288)

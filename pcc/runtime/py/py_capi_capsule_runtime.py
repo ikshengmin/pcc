@@ -427,40 +427,18 @@ _CAPSULE_IMPORT_COUNT = 3
 define_global_i32("pcc_capsule_import_owned_map", _CAPSULE_IMPORT_COUNT)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
-pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
-pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
 py_clear_exception = extern("py_clear_exception", (), c_void)
-py_runtime_error_if_unset = extern("py_runtime_error_if_unset", (c_ptr, c_ptr), c_ptr)
-pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 
 
-def _capsule_import_adopt(slots, tokens, index: int) -> int:
-    # The caller publishes NEW in its registered slot before this may park.
-    offset: int = index * C_POINTER_SIZE
-    slot = ptr_add(slots, offset)
-    token: int = pcc_gc_foreign_lease_acquire(slot)
-    if token < 0:
-        py_runtime_error_if_unset(cstr("capsule import"), cstr("result owner lease failed"))
-        return -1
-    store_i64(tokens, offset, token)
-    return 0
+def _capsule_import_drop(slots, index: int) -> None:
+    pcc_gc_store_root(ptr_add(slots, index * C_POINTER_SIZE), null())
 
 
-
-def _capsule_import_drop(slots, tokens, index: int) -> None:
-    offset: int = index * C_POINTER_SIZE
-    slot = ptr_add(slots, offset)
-    if pcc_gc_foreign_lease_release(slot, load_i64(tokens, offset)) != 0:
-        pcc_platform_abort()
-        return
-    store_i64(tokens, offset, 0)
-    pcc_gc_store_root(slot, null())
-
-def _capsule_import_body(name, slots, tokens) -> c_ptr:
+def _capsule_import_body(name, slots) -> c_ptr:
     if ptr_is_null(name) or load_i8(name, 0) == 0:
         _value_error(cstr("empty capsule import name"))
         return null()
@@ -477,10 +455,8 @@ def _capsule_import_body(name, slots, tokens) -> c_ptr:
     store_i8(module_name, module_len, 0)
     store_ptr(slots, _CAPSULE_IMPORT_MODULE * C_POINTER_SIZE,
               py_native_extension_import_by_name(module_name))
-    status: int = _capsule_import_adopt(slots, tokens, _CAPSULE_IMPORT_MODULE)
+    # Each result is published in its registered slot, which owns it.
     free_c(module_name)
-    if status != 0:
-        return null()
     if ptr_is_null(load_ptr(slots, _CAPSULE_IMPORT_MODULE * C_POINTER_SIZE)):
         if py_err_occurred() == 0:
             _runtime_error(cstr("capsule import module not found"))
@@ -488,10 +464,8 @@ def _capsule_import_body(name, slots, tokens) -> c_ptr:
     store_ptr(slots, _CAPSULE_IMPORT_VALUE * C_POINTER_SIZE, py_obj_getattr(
         load_ptr(slots, _CAPSULE_IMPORT_MODULE * C_POINTER_SIZE), ptr_add(name, dot + 1),
     ))
-    if _capsule_import_adopt(slots, tokens, _CAPSULE_IMPORT_VALUE) != 0:
-        return null()
     py_tls_exc_swap_slot(ptr_add(slots, _CAPSULE_IMPORT_ERROR * C_POINTER_SIZE))
-    _capsule_import_drop(slots, tokens, _CAPSULE_IMPORT_MODULE)
+    _capsule_import_drop(slots, _CAPSULE_IMPORT_MODULE)
     py_clear_exception()
     py_tls_exc_swap_slot(ptr_add(slots, _CAPSULE_IMPORT_ERROR * C_POINTER_SIZE))
     if ptr_is_null(load_ptr(slots, _CAPSULE_IMPORT_VALUE * C_POINTER_SIZE)):
@@ -504,18 +478,16 @@ def _capsule_import_body(name, slots, tokens) -> c_ptr:
 @c_abi_typed_export("PyCapsule_Import", "ptr", ("ptr", "i32"))
 def PyCapsule_Import(name, no_block: int) -> c_ptr:
     slots = stack_alloc(_CAPSULE_IMPORT_COUNT * C_POINTER_SIZE)
-    tokens = stack_alloc(_CAPSULE_IMPORT_COUNT * C_POINTER_SIZE)
     memset(slots, 0, _CAPSULE_IMPORT_COUNT * C_POINTER_SIZE)
-    memset(tokens, 0, _CAPSULE_IMPORT_COUNT * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_capsule_import_owned_map"), slots)
-    pointer = _capsule_import_body(name, slots, tokens)
+    pointer = _capsule_import_body(name, slots)
     # The returned pointer is foreign data, not a managed object. Keep the
     # capsule owner until all accesses finish, and preserve the exact error
     # while either imported object can run a finalizer during disposal.
     py_tls_exc_swap_slot(ptr_add(slots, _CAPSULE_IMPORT_ERROR * C_POINTER_SIZE))
     index: int = 0
     while index < _CAPSULE_IMPORT_ERROR:
-        _capsule_import_drop(slots, tokens, index)
+        _capsule_import_drop(slots, index)
         index = index + 1
     py_clear_exception()
     py_tls_exc_swap_slot(ptr_add(slots, _CAPSULE_IMPORT_ERROR * C_POINTER_SIZE))

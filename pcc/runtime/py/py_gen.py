@@ -117,10 +117,7 @@ _GEN_FRAME_FACTORY_VALUE = 0
 _GEN_FRAME_FACTORY_ERROR = 1
 _GEN_FRAME_FACTORY_SLOT_COUNT = 2
 define_global_i32("pcc_gen_frame_factory_map", _GEN_FRAME_FACTORY_SLOT_COUNT)
-pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
-pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
-pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 define_global_i32("pcc_gen_inline_borrowed_map", -2)
 define_global_i32("pcc_gen_inline_result_map", 1)
 _GEN_INLINE_OWNER = 0
@@ -270,34 +267,27 @@ def _require_result(result, helper_name, message):
     return result
 
 
-def _gen_frame_factory_finish(slots, token: i64, success: i64):
+def _gen_frame_factory_finish(slots, success: i64):
     value_slot = ptr_add(slots, _GEN_FRAME_FACTORY_VALUE * C_POINTER_SIZE)
     error_slot = ptr_add(slots, _GEN_FRAME_FACTORY_ERROR * C_POINTER_SIZE)
     if success == 0:
         py_tls_exc_swap_slot(error_slot)
-        if token >= 0:
-            if pcc_gc_foreign_lease_release(value_slot, token) != 0:
-                pcc_platform_abort()
-                return null()
         pcc_gc_store_root(value_slot, null())
         py_clear_exception()
         py_tls_exc_swap_slot(error_slot)
         pcc_gc_frame_leave_local(slots)
         return null()
     # Bridge the terminal raw ABI with the slot transfer of ordinary list
-    # construction. The counted lease remains live through every
+    # construction. The owning slot keeps the frame through every
     # allocation, poll and initialization operation above this point.
-    if pcc_gc_foreign_lease_release(value_slot, token) != 0:
-        pcc_platform_abort()
-        return null()
     pcc_gc_frame_leave_local(slots)
     return pcc_gc_take_slot(value_slot)
 
 
-def _gen_frame_factory_oom(slots, token: i64, message):
+def _gen_frame_factory_oom(slots, message):
     if ptr_is_null(py_current_exception()):
         py_raise_owned(py_exc_new(19, message))
-    return _gen_frame_factory_finish(slots, token, 0)
+    return _gen_frame_factory_finish(slots, 0)
 
 
 @c_abi_export("py_gen_frame_new")
@@ -314,7 +304,7 @@ def py_gen_frame_new(slot_count: i64):
     value_slot = ptr_add(slots, _GEN_FRAME_FACTORY_VALUE * C_POINTER_SIZE)
     store_ptr(value_slot, 0, pcc_gc_alloc(PYLISTOBJECT_SIZE, PY_TYPE_LIST, 0))
     if ptr_is_null(load_ptr(value_slot, 0)):
-        return _gen_frame_factory_oom(slots, -1, cstr("generator frame allocation failed"))
+        return _gen_frame_factory_oom(slots, cstr("generator frame allocation failed"))
     frame = load_ptr(value_slot, 0)
     capacity: i64 = slot_count
     if capacity < 4:
@@ -322,15 +312,10 @@ def py_gen_frame_new(slot_count: i64):
     store_i64(frame, PYLISTOBJECT_LENGTH_OFFSET, 0)
     store_i64(frame, PYLISTOBJECT_CAPACITY_OFFSET, capacity)
     store_ptr(frame, PYLISTOBJECT_ITEMS_OFFSET, null())
-    token: i64 = i64(pcc_gc_foreign_lease_acquire(value_slot))
-    if token < 0:
-        _require_result(null(), cstr("py_gen_frame_new"), cstr("generator frame address lease failed"))
-        return _gen_frame_factory_finish(slots, token, 0)
-    frame = load_ptr(value_slot, 0)
     slot_bytes: i64 = i64(C_POINTER_SIZE)
     items = malloc(capacity * slot_bytes)
     if ptr_is_null(items):
-        return _gen_frame_factory_oom(slots, token, cstr("generator frame slots allocation failed"))
+        return _gen_frame_factory_oom(slots, cstr("generator frame slots allocation failed"))
     frame = load_ptr(value_slot, 0)
     store_ptr(frame, PYLISTOBJECT_ITEMS_OFFSET, items)
     none = global_load_ptr("py_None")
@@ -343,7 +328,7 @@ def py_gen_frame_new(slot_count: i64):
         index += 1
     store_i64(frame, PYLISTOBJECT_LENGTH_OFFSET, slot_count)
     py_gc_track(frame)
-    return _gen_frame_factory_finish(slots, token, 1)
+    return _gen_frame_factory_finish(slots, 1)
 
 
 @c_abi_export("py_gen_inline_frame_new")
@@ -353,7 +338,7 @@ def py_gen_inline_frame_new(slot_count: i64):
     The frame view is the generator itself, never an interior pointer or an
     owning self edge. Other collectors retain their established list layout.
     py_gen_from_inline_frame installs the resume function and acquires the caller's
-    result owner, preserving the existing factory construction lease.
+    result owner.
     """
     if slot_count < 0 or slot_count > 134217728:
         return _require_result(null(), cstr("py_gen_inline_frame_new"), cstr("invalid generator frame size"))
@@ -366,7 +351,7 @@ def py_gen_inline_frame_new(slot_count: i64):
     size: i64 = items_offset + slot_count * slot_stride
     store_ptr(value_slot, 0, pcc_gc_alloc(size, PY_TYPE_GEN, PY_FLAG_GEN_INLINE_FRAME))
     if ptr_is_null(load_ptr(value_slot, 0)):
-        return _gen_frame_factory_oom(slots, -1, cstr("inline generator allocation failed"))
+        return _gen_frame_factory_oom(slots, cstr("inline generator allocation failed"))
     gen = load_ptr(value_slot, 0)
     store_ptr(gen, 16, null())
     store_ptr(gen, 24, null())
@@ -374,11 +359,6 @@ def py_gen_inline_frame_new(slot_count: i64):
     store_i64(gen, 40, 0)
     store_ptr(gen, 48, global_load_ptr("py_None"))
     store_i64(gen, PYINLINEGENOBJECT_LENGTH_OFFSET, 0)
-    token: i64 = i64(pcc_gc_foreign_lease_acquire(value_slot))
-    if token < 0:
-        _require_result(null(), cstr("py_gen_inline_frame_new"), cstr("generator frame address lease failed"))
-        return _gen_frame_factory_finish(slots, token, 0)
-    gen = load_ptr(value_slot, 0)
     none = global_load_ptr("py_None")
     index: i64 = 0
     while index < slot_count:
@@ -386,7 +366,7 @@ def py_gen_inline_frame_new(slot_count: i64):
         index += 1
     store_i64(gen, PYINLINEGENOBJECT_LENGTH_OFFSET, slot_count)
     py_gc_track(gen)
-    return _gen_frame_factory_finish(slots, token, 1)
+    return _gen_frame_factory_finish(slots, 1)
 
 @c_abi_export("py_gen_frame_save")
 def py_gen_frame_save(frame, slot_addresses, slot_count: int) -> int:
@@ -416,7 +396,7 @@ def py_gen_frame_save(frame, slot_addresses, slot_count: int) -> int:
 
 @c_abi_export("py_gen_from_inline_frame")
 def py_gen_from_inline_frame(resume, frame):
-    """Finish the compiler's private construction lease, never arbitrary data."""
+    """Finish the compiler's private inline-frame construction, never arbitrary data."""
     if ptr_is_null(resume) == 0 and ptr_is_null(frame) == 0 and is_tagged_int(frame) == 0:
         if load_i32(frame, 8) == PY_TYPE_GEN and (load_i32(frame, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GEN_INLINE_FRAME) != 0:
             if ptr_is_null(load_ptr(frame, 16)) != 0:

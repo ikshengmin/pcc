@@ -321,7 +321,7 @@ _GEN_SEND_OFFSET = 48
 _GEN_INITIAL_STATE = 0
 
 
-def _coroutine_resume(coro, value, error, slots, pins):
+def _coroutine_resume(coro, value, error, slots, scratch):
     state: int = load_i32(coro, _CORO_STATE_OFFSET)
     if state == _CORO_DONE_STATE or load_i32(coro, _CORO_CLOSED_OFFSET) != 0:
         _raise_runtimeerror(cstr("cannot reuse already awaited coroutine"))
@@ -356,16 +356,13 @@ def _coroutine_resume(coro, value, error, slots, pins):
             return null()
         entry = load_ptr(coro, _CORO_ENTRY_OFFSET)
         store_ptr(slots, _CORO_TEMP, call_ptr2(entry, pcc_gc_load_ptr(coro, ptr_add(coro, _CORO_CAPTURES_OFFSET)), pcc_gc_load_ptr(coro, ptr_add(coro, _CORO_ARGUMENTS_OFFSET))))
-        if _coroutine_slot_adopt(slots, pins, _CORO_TEMP) < 0:
-            store_i32(coro, _CORO_STATE_OFFSET, _CORO_DONE_STATE)
-            return null()
         iterator = load_ptr(slots, _CORO_TEMP)
         if ptr_is_null(iterator):
             store_i32(coro, _CORO_STATE_OFFSET, _CORO_DONE_STATE)
             return _coroutine_require_result(null(), cstr("coroutine factory"), cstr("coroutine factory returned NULL"))
         pcc_gc_store_ptr(coro, ptr_add(coro, _CORO_SUSPENDED_OFFSET), iterator)
         store_i32(coro, _CORO_STATE_OFFSET, _CORO_SUSPENDED_STATE)
-    if _coroutine_slot_borrow(slots, pins, _CORO_ARGS, ptr_add(coro, _CORO_SUSPENDED_OFFSET)) < 0:
+    if _coroutine_slot_borrow(slots, scratch, _CORO_ARGS, ptr_add(coro, _CORO_SUSPENDED_OFFSET)) < 0:
         return null()
     iterator = load_ptr(slots, _CORO_ARGS)
     store_i32(coro, _CORO_STATE_OFFSET, _CORO_EXECUTING_STATE)
@@ -385,9 +382,7 @@ def _coroutine_resume(coro, value, error, slots, pins):
 # receiver/inputs/operand slots own the public call inputs. AUX and TEMP own
 # extracted delegates, callable/argument temporaries, or completion values.
 # RESULT and ERROR preserve the outcome across callbacks and owner release.
-# Each owner has a parallel counted-lease token; the legacy-pin words
-# before them are unused since item 2 (d) and go with the leases (4c). The
-# final nonmanaged pins word remembers the borrowed-input frame to retire.
+# The nonmanaged scratch word remembers the borrowed-input frame to retire.
 _CORO_RECEIVER = 0
 _CORO_ARGS = 8
 _CORO_OPERAND = 16
@@ -396,9 +391,8 @@ _CORO_TEMP = 32
 _CORO_RESULT = 40
 _CORO_ERROR = 48
 _CORO_FRAME_SIZE = 56
-_CORO_LEASES_BASE = 56  # one legacy-pin word for each owner slot
-_CORO_BORROWED_FRAME = 112  # after seven pins and seven lease tokens
-_CORO_PINS_SIZE = 120  # two scalar lanes plus one borrowed-frame pointer
+_CORO_BORROWED_FRAME = 0  # the scratch block: one borrowed-frame pointer
+_CORO_SCRATCH_SIZE = 8
 define_global_i32("pcc_coroutine_protocol_frame_map", 7)
 define_global_i32("pcc_coroutine_borrowed_one_map", -1)
 define_global_i32("pcc_coroutine_borrowed_two_map", -2)
@@ -406,82 +400,53 @@ define_global_i32("pcc_coroutine_borrowed_three_map", -3)
 
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
-pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
-pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
-pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
-pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+pcc_gc_root_copy_borrowed = extern("pcc_gc_root_copy_borrowed", (c_ptr, c_ptr), c_int64)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
 py_tuple_len = extern("py_tuple_len", (c_ptr,), c_int64)
 py_tuple_get = extern("py_tuple_get", (c_ptr, c_int64), c_ptr)
 py_func_new_bound = extern("py_func_new_bound", (c_ptr, c_ptr, c_ptr, c_ptr), c_ptr)
 
 
-def _coroutine_slot_adopt(slots, pins, offset: int) -> int:
-    # A producer stores its NEW owner directly into the registered slot,
-    # before calling this helper (whose entry can safepoint).
-    token: int = pcc_gc_foreign_lease_acquire(ptr_add(slots, offset))
-    if token < 0:
-        pcc_gc_store_root(ptr_add(slots, offset), null())
-        _raise_runtimeerror(cstr("coroutine result owner lease failed"))
+def _coroutine_slot_borrow(slots, scratch, offset: int, source) -> int:
+    if pcc_gc_root_copy_borrowed(ptr_add(slots, offset), source) < 0:
+        _raise_runtimeerror(cstr("coroutine argument owner copy failed"))
         return -1
-    store_i64(pins, _CORO_LEASES_BASE + offset, token)
     return 0
 
 
-def _coroutine_slot_borrow(slots, pins, offset: int, source) -> int:
-    token: int = pcc_gc_root_copy_borrowed_lease(ptr_add(slots, offset), source)
-    if token < 0:
-        _raise_runtimeerror(cstr("coroutine argument owner lease failed"))
-        return -1
-    store_i64(pins, _CORO_LEASES_BASE + offset, token)
-    return 0
+def _coroutine_slot_drop(slots, scratch, offset: int) -> None:
+    pcc_gc_store_root(ptr_add(slots, offset), null())
 
 
-def _coroutine_slot_drop(slots, pins, offset: int) -> None:
-    slot = ptr_add(slots, offset)
-    if pcc_gc_foreign_lease_release(slot, load_i64(pins, _CORO_LEASES_BASE + offset)) != 0:
-        pcc_platform_abort()
-        return
-    store_i64(pins, _CORO_LEASES_BASE + offset, 0)
-    pcc_gc_store_root(slot, null())
-
-
-def _coroutine_keep_error(slots, pins) -> None:
+def _coroutine_keep_error(slots, scratch) -> None:
     if ptr_is_null(load_ptr(slots, _CORO_ERROR)):
         py_tls_exc_swap_slot(ptr_add(slots, _CORO_ERROR))
-        if ptr_is_null(load_ptr(slots, _CORO_ERROR)) == 0:
-            _coroutine_slot_adopt(slots, pins, _CORO_ERROR)
 
 
-def _coroutine_finish(slots, pins):
+def _coroutine_finish(slots, scratch):
     if ptr_is_null(load_ptr(slots, _CORO_RESULT)):
-        _coroutine_keep_error(slots, pins)
+        _coroutine_keep_error(slots, scratch)
     offset: int = _CORO_RESULT
     while offset > 0:
         offset = offset - 8
-        _coroutine_slot_drop(slots, pins, offset)
+        _coroutine_slot_drop(slots, scratch, offset)
     if ptr_is_null(load_ptr(slots, _CORO_ERROR)) == 0:
         py_clear_exception()
-        if pcc_gc_foreign_lease_release(ptr_add(slots, _CORO_ERROR), load_i64(pins, _CORO_LEASES_BASE + _CORO_ERROR)) != 0:
-            pcc_platform_abort()
         py_tls_exc_swap_slot(ptr_add(slots, _CORO_ERROR))
     pcc_gc_frame_leave(slots)
-    pcc_gc_frame_leave(load_ptr(pins, _CORO_BORROWED_FRAME))
-    if pcc_gc_foreign_lease_release(ptr_add(slots, _CORO_RESULT), load_i64(pins, _CORO_LEASES_BASE + _CORO_RESULT)) != 0:
-        pcc_platform_abort()
-        return null()
+    pcc_gc_frame_leave(load_ptr(scratch, _CORO_BORROWED_FRAME))
     return pcc_gc_take_slot(ptr_add(slots, _CORO_RESULT))
 
 
-def _coroutine_release_completed(slots, pins, keep_result: int) -> None:
+def _coroutine_release_completed(slots, scratch, keep_result: int) -> None:
     # Save the original outcome before frame destruction can invoke finalizers.
-    _coroutine_keep_error(slots, pins)
-    _coroutine_slot_drop(slots, pins, _CORO_TEMP)
+    _coroutine_keep_error(slots, scratch)
+    _coroutine_slot_drop(slots, scratch, _CORO_TEMP)
     if keep_result != 0:
         error = load_ptr(slots, _CORO_ERROR)
         if py_exc_matches(error, py_exc_builtin_class(8)) != 0:
             if _type_of(load_ptr(slots, _CORO_ERROR)) == PY_TYPE_EXC:
-                _coroutine_slot_borrow(slots, pins, _CORO_TEMP, ptr_add(load_ptr(slots, _CORO_ERROR), _CORO_EXCEPTION_VALUE_OFFSET))
+                _coroutine_slot_borrow(slots, scratch, _CORO_TEMP, ptr_add(load_ptr(slots, _CORO_ERROR), _CORO_EXCEPTION_VALUE_OFFSET))
     completed = load_ptr(slots, _CORO_TEMP)
     if ptr_is_null(completed):
         completed = global_load_ptr("py_None")
@@ -499,24 +464,22 @@ def py_coroutine_send(coro, value, error):
     store_ptr(borrowed, 16, error)
     pcc_gc_frame_enter(global_addr("pcc_coroutine_borrowed_three_map"), borrowed)
     slots = stack_alloc(_CORO_FRAME_SIZE)
-    pins = stack_alloc(_CORO_PINS_SIZE)
+    scratch = stack_alloc(_CORO_SCRATCH_SIZE)
     memset(slots, 0, _CORO_FRAME_SIZE)
-    memset(pins, 0, _CORO_BORROWED_FRAME)
-    store_ptr(pins, _CORO_BORROWED_FRAME, borrowed)
+    store_ptr(scratch, _CORO_BORROWED_FRAME, borrowed)
     pcc_gc_frame_enter(global_addr("pcc_coroutine_protocol_frame_map"), slots)
-    if _coroutine_slot_borrow(slots, pins, _CORO_RECEIVER, borrowed) < 0:
-        return _coroutine_finish(slots, pins)
-    if _coroutine_slot_borrow(slots, pins, _CORO_OPERAND, ptr_add(borrowed, 8)) < 0:
-        return _coroutine_finish(slots, pins)
-    if _coroutine_slot_borrow(slots, pins, _CORO_AUX, ptr_add(borrowed, 16)) < 0:
-        return _coroutine_finish(slots, pins)
+    if _coroutine_slot_borrow(slots, scratch, _CORO_RECEIVER, borrowed) < 0:
+        return _coroutine_finish(slots, scratch)
+    if _coroutine_slot_borrow(slots, scratch, _CORO_OPERAND, ptr_add(borrowed, 8)) < 0:
+        return _coroutine_finish(slots, scratch)
+    if _coroutine_slot_borrow(slots, scratch, _CORO_AUX, ptr_add(borrowed, 16)) < 0:
+        return _coroutine_finish(slots, scratch)
     if ptr_is_null(_checked_coroutine(load_ptr(slots, _CORO_RECEIVER))):
-        return _coroutine_finish(slots, pins)
-    store_ptr(slots, _CORO_RESULT, _coroutine_resume(load_ptr(slots, _CORO_RECEIVER), load_ptr(slots, _CORO_OPERAND), load_ptr(slots, _CORO_AUX), slots, pins))
-    _coroutine_slot_adopt(slots, pins, _CORO_RESULT)
+        return _coroutine_finish(slots, scratch)
+    store_ptr(slots, _CORO_RESULT, _coroutine_resume(load_ptr(slots, _CORO_RECEIVER), load_ptr(slots, _CORO_OPERAND), load_ptr(slots, _CORO_AUX), slots, scratch))
     if load_i32(load_ptr(slots, _CORO_RECEIVER), _CORO_STATE_OFFSET) == _CORO_DONE_STATE:
-        _coroutine_release_completed(slots, pins, 1)
-    return _coroutine_finish(slots, pins)
+        _coroutine_release_completed(slots, scratch, 1)
+    return _coroutine_finish(slots, scratch)
 
 
 @c_abi_export("py_coroutine_close")
@@ -525,67 +488,58 @@ def py_coroutine_close(coro):
     store_ptr(borrowed, 0, coro)
     pcc_gc_frame_enter(global_addr("pcc_coroutine_borrowed_one_map"), borrowed)
     slots = stack_alloc(_CORO_FRAME_SIZE)
-    pins = stack_alloc(_CORO_PINS_SIZE)
+    scratch = stack_alloc(_CORO_SCRATCH_SIZE)
     memset(slots, 0, _CORO_FRAME_SIZE)
-    memset(pins, 0, _CORO_BORROWED_FRAME)
-    store_ptr(pins, _CORO_BORROWED_FRAME, borrowed)
+    store_ptr(scratch, _CORO_BORROWED_FRAME, borrowed)
     pcc_gc_frame_enter(global_addr("pcc_coroutine_protocol_frame_map"), slots)
-    if _coroutine_slot_borrow(slots, pins, _CORO_RECEIVER, borrowed) < 0:
-        return _coroutine_finish(slots, pins)
+    if _coroutine_slot_borrow(slots, scratch, _CORO_RECEIVER, borrowed) < 0:
+        return _coroutine_finish(slots, scratch)
     coro = _checked_coroutine(load_ptr(slots, _CORO_RECEIVER))
     if ptr_is_null(coro):
-        return _coroutine_finish(slots, pins)
+        return _coroutine_finish(slots, scratch)
     state: int = load_i32(coro, _CORO_STATE_OFFSET)
     if state == _CORO_EXECUTING_STATE:
         py_raise_owned(py_exc_new(2, cstr("coroutine already executing")))
-        return _coroutine_finish(slots, pins)
+        return _coroutine_finish(slots, scratch)
     if state == _CORO_SUSPENDED_STATE:
-        if _coroutine_slot_borrow(slots, pins, _CORO_ARGS, ptr_add(coro, _CORO_SUSPENDED_OFFSET)) < 0:
-            return _coroutine_finish(slots, pins)
+        if _coroutine_slot_borrow(slots, scratch, _CORO_ARGS, ptr_add(coro, _CORO_SUSPENDED_OFFSET)) < 0:
+            return _coroutine_finish(slots, scratch)
         store_i32(coro, _CORO_STATE_OFFSET, _CORO_EXECUTING_STATE)
         store_ptr(slots, _CORO_AUX, py_gen_close(load_ptr(slots, _CORO_ARGS)))
-        _coroutine_slot_adopt(slots, pins, _CORO_AUX)
         coro = load_ptr(slots, _CORO_RECEIVER)
         iterator = pcc_gc_load_ptr(coro, ptr_add(coro, _CORO_SUSPENDED_OFFSET))
         if ptr_is_null(load_ptr(slots, _CORO_AUX)) and load_i64(iterator, _GEN_DONE_OFFSET) == 0:
             # A body that yields during GeneratorExit is still suspended.
             store_i32(coro, _CORO_STATE_OFFSET, _CORO_SUSPENDED_STATE)
-            return _coroutine_finish(slots, pins)
+            return _coroutine_finish(slots, scratch)
     store_i32(coro, _CORO_CLOSED_OFFSET, 1)
     store_i32(coro, _CORO_STATE_OFFSET, _CORO_DONE_STATE)
-    _coroutine_release_completed(slots, pins, 0)
+    _coroutine_release_completed(slots, scratch, 0)
     if ptr_is_null(load_ptr(slots, _CORO_ERROR)):
         if state == _CORO_SUSPENDED_STATE:
-            _coroutine_slot_borrow(slots, pins, _CORO_RESULT, ptr_add(slots, _CORO_AUX))
+            _coroutine_slot_borrow(slots, scratch, _CORO_RESULT, ptr_add(slots, _CORO_AUX))
         else:
             pcc_gc_store_root(ptr_add(slots, _CORO_RESULT), global_load_ptr("py_None"))
-            _coroutine_slot_adopt(slots, pins, _CORO_RESULT)
-    return _coroutine_finish(slots, pins)
+    return _coroutine_finish(slots, scratch)
 
 
-def _coroutine_normalize_throw(slots, pins, count: int) -> int:
+def _coroutine_normalize_throw(slots, scratch, count: int) -> int:
     # Validate completely before resuming or closing the target coroutine.
     if count < 1 or count > 3:
         _raise_typeerror(cstr("throw() takes one to three arguments"))
         return -1
     store_ptr(slots, _CORO_OPERAND, py_tuple_get(load_ptr(slots, _CORO_ARGS), 0))
-    if _coroutine_slot_adopt(slots, pins, _CORO_OPERAND) < 0:
-        return -1
     if count == 3:
         store_ptr(slots, _CORO_AUX, py_tuple_get(load_ptr(slots, _CORO_ARGS), 2))
-        if _coroutine_slot_adopt(slots, pins, _CORO_AUX) < 0:
-            return -1
         if ptr_eq(load_ptr(slots, _CORO_AUX), global_load_ptr("py_None")) == 0:
             _raise_typeerror(cstr("throw() third argument must be a traceback object"))
             return -1
-        _coroutine_slot_drop(slots, pins, _CORO_AUX)
+        _coroutine_slot_drop(slots, scratch, _CORO_AUX)
     if py_exc_matches(load_ptr(slots, _CORO_OPERAND), py_exc_builtin_class(0)) == 0:
         _raise_typeerror(cstr("exceptions must be classes or instances deriving from BaseException"))
         return -1
     if count >= 2:
         store_ptr(slots, _CORO_AUX, py_tuple_get(load_ptr(slots, _CORO_ARGS), 1))
-        if _coroutine_slot_adopt(slots, pins, _CORO_AUX) < 0:
-            return -1
     value = load_ptr(slots, _CORO_AUX)
     if _type_of(load_ptr(slots, _CORO_OPERAND)) != PY_TYPE_CLASS:
         if ptr_is_null(value) == 0 and ptr_eq(value, global_load_ptr("py_None")) == 0:
@@ -593,32 +547,30 @@ def _coroutine_normalize_throw(slots, pins, count: int) -> int:
             return -1
         return 0
     if ptr_is_null(value) == 0 and py_exc_matches(value, load_ptr(slots, _CORO_OPERAND)) != 0 and _type_of(value) != PY_TYPE_CLASS:
-        _coroutine_slot_drop(slots, pins, _CORO_OPERAND)
-        return _coroutine_slot_borrow(slots, pins, _CORO_OPERAND, ptr_add(slots, _CORO_AUX))
+        _coroutine_slot_drop(slots, scratch, _CORO_OPERAND)
+        return _coroutine_slot_borrow(slots, scratch, _CORO_OPERAND, ptr_add(slots, _CORO_AUX))
     arity: int = 0
     if ptr_is_null(value) == 0 and ptr_eq(value, global_load_ptr("py_None")) == 0:
         arity = 1
         if _type_of(value) == PY_TYPE_TUPLE:
-            if _coroutine_slot_borrow(slots, pins, _CORO_TEMP, ptr_add(slots, _CORO_AUX)) < 0:
+            if _coroutine_slot_borrow(slots, scratch, _CORO_TEMP, ptr_add(slots, _CORO_AUX)) < 0:
                 return -1
     if ptr_is_null(load_ptr(slots, _CORO_TEMP)):
         store_ptr(slots, _CORO_TEMP, py_tuple_new(arity))
-        if _coroutine_slot_adopt(slots, pins, _CORO_TEMP) < 0:
-            return -1
         if arity == 1:
             py_tuple_set_item(load_ptr(slots, _CORO_TEMP), 0, load_ptr(slots, _CORO_AUX))
-    _coroutine_slot_drop(slots, pins, _CORO_AUX)
+    _coroutine_slot_drop(slots, scratch, _CORO_AUX)
     store_ptr(slots, _CORO_AUX, py_obj_call(load_ptr(slots, _CORO_OPERAND), load_ptr(slots, _CORO_TEMP), null()))
-    if _coroutine_slot_adopt(slots, pins, _CORO_AUX) < 0 or ptr_is_null(load_ptr(slots, _CORO_AUX)):
+    if ptr_is_null(load_ptr(slots, _CORO_AUX)):
         return -1
     if _type_of(load_ptr(slots, _CORO_AUX)) == PY_TYPE_CLASS or py_exc_matches(load_ptr(slots, _CORO_AUX), py_exc_builtin_class(0)) == 0:
         _raise_typeerror(cstr("calling exception class did not return a BaseException instance"))
         return -1
-    _coroutine_slot_drop(slots, pins, _CORO_OPERAND)
-    return _coroutine_slot_borrow(slots, pins, _CORO_OPERAND, ptr_add(slots, _CORO_AUX))
+    _coroutine_slot_drop(slots, scratch, _CORO_OPERAND)
+    return _coroutine_slot_borrow(slots, scratch, _CORO_OPERAND, ptr_add(slots, _CORO_AUX))
 
 
-def _coroutine_throw_call(slots, pins) -> None:
+def _coroutine_throw_call(slots, scratch) -> None:
     count: int = py_tuple_len(load_ptr(slots, _CORO_ARGS))
     if count < 1 or count > 3:
         _raise_typeerror(cstr("throw() takes one to three arguments"))
@@ -636,7 +588,7 @@ def _coroutine_throw_call(slots, pins) -> None:
         # the original throw-argument tuple. No synthetic exception enters
         # TLS: generated await resume code consumes this slot before restoring
         # handled exceptions or running any user callback.
-        if _coroutine_slot_borrow(slots, pins, _CORO_AUX, ptr_add(coro, _CORO_SUSPENDED_OFFSET)) < 0:
+        if _coroutine_slot_borrow(slots, scratch, _CORO_AUX, ptr_add(coro, _CORO_SUSPENDED_OFFSET)) < 0:
             return
         gen = load_ptr(slots, _CORO_AUX)
         resume_state: int = load_i64(gen, _GEN_STATE_OFFSET)
@@ -646,31 +598,29 @@ def _coroutine_throw_call(slots, pins) -> None:
         frame_source = ptr_add(gen, _GEN_FRAME_OFFSET)
         if (load_i32(gen, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GEN_INLINE_FRAME) != 0:
             frame_source = ptr_add(slots, _CORO_AUX)
-        if _coroutine_slot_borrow(slots, pins, _CORO_TEMP, frame_source) < 0:
+        if _coroutine_slot_borrow(slots, scratch, _CORO_TEMP, frame_source) < 0:
             return
         store_i32(coro, _CORO_STATE_OFFSET, _CORO_EXECUTING_STATE)
         pcc_gc_store_ptr(gen, ptr_add(gen, _GEN_SEND_OFFSET), load_ptr(slots, _CORO_ARGS))
         store_i64(gen, _GEN_STATE_OFFSET, -resume_state)
         store_ptr(slots, _CORO_RESULT, call_ptr2(load_ptr(gen, _GEN_ENTRY_OFFSET), gen, load_ptr(slots, _CORO_TEMP)))
-        # Capture the NEW owner before a state helper can safepoint.
-        _coroutine_slot_adopt(slots, pins, _CORO_RESULT)
         coro = load_ptr(slots, _CORO_RECEIVER)
         if ptr_is_null(load_ptr(slots, _CORO_RESULT)):
             py_runtime_error_if_unset(cstr("coroutine throw"), cstr("coroutine throw returned NULL without setting an exception"))
             store_i32(coro, _CORO_STATE_OFFSET, _CORO_DONE_STATE)
-            _coroutine_release_completed(slots, pins, 1)
+            _coroutine_release_completed(slots, scratch, 1)
         else:
             store_i32(coro, _CORO_STATE_OFFSET, _CORO_SUSPENDED_STATE)
         return
     # Exception construction can run user code. Match CPython's executing
     # guard while it runs, restoring a fresh coroutine after validation fails.
     store_i32(coro, _CORO_STATE_OFFSET, _CORO_EXECUTING_STATE)
-    if _coroutine_normalize_throw(slots, pins, count) < 0:
+    if _coroutine_normalize_throw(slots, scratch, count) < 0:
         store_i32(load_ptr(slots, _CORO_RECEIVER), _CORO_STATE_OFFSET, state)
         return
     store_i32(load_ptr(slots, _CORO_RECEIVER), _CORO_STATE_OFFSET, _CORO_DONE_STATE)
     py_raise(load_ptr(slots, _CORO_OPERAND))
-    _coroutine_release_completed(slots, pins, 1)
+    _coroutine_release_completed(slots, scratch, 1)
 
 
 @c_abi_export("py_coroutine_has_throw_arguments")
@@ -684,26 +634,25 @@ def py_coroutine_take_throw_arguments(gen):
     store_ptr(borrowed, 0, gen)
     pcc_gc_frame_enter(global_addr("pcc_coroutine_borrowed_one_map"), borrowed)
     slots = stack_alloc(_CORO_FRAME_SIZE)
-    pins = stack_alloc(_CORO_PINS_SIZE)
+    scratch = stack_alloc(_CORO_SCRATCH_SIZE)
     memset(slots, 0, _CORO_FRAME_SIZE)
-    memset(pins, 0, _CORO_BORROWED_FRAME)
-    store_ptr(pins, _CORO_BORROWED_FRAME, borrowed)
+    store_ptr(scratch, _CORO_BORROWED_FRAME, borrowed)
     pcc_gc_frame_enter(global_addr("pcc_coroutine_protocol_frame_map"), slots)
-    if _coroutine_slot_borrow(slots, pins, _CORO_RECEIVER, borrowed) < 0:
-        return _coroutine_finish(slots, pins)
+    if _coroutine_slot_borrow(slots, scratch, _CORO_RECEIVER, borrowed) < 0:
+        return _coroutine_finish(slots, scratch)
     gen = load_ptr(slots, _CORO_RECEIVER)
     state: int = load_i64(gen, _GEN_STATE_OFFSET)
     if state >= _GEN_INITIAL_STATE:
         _raise_runtimeerror(cstr("coroutine has no pending throw arguments"))
-        return _coroutine_finish(slots, pins)
-    if _coroutine_slot_borrow(slots, pins, _CORO_RESULT, ptr_add(gen, _GEN_SEND_OFFSET)) < 0:
-        return _coroutine_finish(slots, pins)
+        return _coroutine_finish(slots, scratch)
+    if _coroutine_slot_borrow(slots, scratch, _CORO_RESULT, ptr_add(gen, _GEN_SEND_OFFSET)) < 0:
+        return _coroutine_finish(slots, scratch)
     store_i64(gen, _GEN_STATE_OFFSET, -state)
     pcc_gc_store_ptr(gen, ptr_add(gen, _GEN_SEND_OFFSET), global_load_ptr("py_None"))
-    return _coroutine_finish(slots, pins)
+    return _coroutine_finish(slots, scratch)
 
 
-def _await_close_iterator(slots, pins) -> int:
+def _await_close_iterator(slots, scratch) -> int:
     tag: int = _type_of(load_ptr(slots, _CORO_RECEIVER))
     if tag == PY_TYPE_COROUTINE:
         store_ptr(slots, _CORO_RESULT, py_coroutine_close(load_ptr(slots, _CORO_RECEIVER)))
@@ -711,24 +660,22 @@ def _await_close_iterator(slots, pins) -> int:
         store_ptr(slots, _CORO_RESULT, py_gen_close(load_ptr(slots, _CORO_RECEIVER)))
     else:
         store_ptr(slots, _CORO_TEMP, py_obj_getattr(load_ptr(slots, _CORO_RECEIVER), cstr("close")))
-        _coroutine_slot_adopt(slots, pins, _CORO_TEMP)
         if ptr_is_null(load_ptr(slots, _CORO_TEMP)):
             if py_exc_matches(py_current_exception(), py_exc_builtin_class(6)) == 0:
                 return -1
             py_clear_exception()
             return 0
         store_ptr(slots, _CORO_AUX, py_tuple_new(0))
-        if _coroutine_slot_adopt(slots, pins, _CORO_AUX) < 0 or ptr_is_null(load_ptr(slots, _CORO_AUX)):
+        if ptr_is_null(load_ptr(slots, _CORO_AUX)):
             return -1
         store_ptr(slots, _CORO_RESULT, py_obj_call(load_ptr(slots, _CORO_TEMP), load_ptr(slots, _CORO_AUX), null()))
-    _coroutine_slot_adopt(slots, pins, _CORO_RESULT)
     if ptr_is_null(load_ptr(slots, _CORO_RESULT)):
         return -1
     # A delegate close return value is discarded; only the outer coroutine's
     # own return value belongs to the public close() result.
-    _coroutine_slot_drop(slots, pins, _CORO_RESULT)
-    _coroutine_slot_drop(slots, pins, _CORO_TEMP)
-    _coroutine_slot_drop(slots, pins, _CORO_AUX)
+    _coroutine_slot_drop(slots, scratch, _CORO_RESULT)
+    _coroutine_slot_drop(slots, scratch, _CORO_TEMP)
+    _coroutine_slot_drop(slots, scratch, _CORO_AUX)
     return 0
 
 
@@ -738,18 +685,17 @@ def _await_close_and_raise(iterator, error):
     store_ptr(borrowed, 8, error)
     pcc_gc_frame_enter(global_addr("pcc_coroutine_borrowed_two_map"), borrowed)
     slots = stack_alloc(_CORO_FRAME_SIZE)
-    pins = stack_alloc(_CORO_PINS_SIZE)
+    scratch = stack_alloc(_CORO_SCRATCH_SIZE)
     memset(slots, 0, _CORO_FRAME_SIZE)
-    memset(pins, 0, _CORO_BORROWED_FRAME)
-    store_ptr(pins, _CORO_BORROWED_FRAME, borrowed)
+    store_ptr(scratch, _CORO_BORROWED_FRAME, borrowed)
     pcc_gc_frame_enter(global_addr("pcc_coroutine_protocol_frame_map"), slots)
-    if _coroutine_slot_borrow(slots, pins, _CORO_RECEIVER, borrowed) < 0:
-        return _coroutine_finish(slots, pins)
-    if _coroutine_slot_borrow(slots, pins, _CORO_OPERAND, ptr_add(borrowed, 8)) < 0:
-        return _coroutine_finish(slots, pins)
-    if _await_close_iterator(slots, pins) == 0:
+    if _coroutine_slot_borrow(slots, scratch, _CORO_RECEIVER, borrowed) < 0:
+        return _coroutine_finish(slots, scratch)
+    if _coroutine_slot_borrow(slots, scratch, _CORO_OPERAND, ptr_add(borrowed, 8)) < 0:
+        return _coroutine_finish(slots, scratch)
+    if _await_close_iterator(slots, scratch) == 0:
         py_raise(load_ptr(slots, _CORO_OPERAND))
-    return _coroutine_finish(slots, pins)
+    return _coroutine_finish(slots, scratch)
 
 
 @c_abi_export("py_await_throw_arguments")
@@ -759,47 +705,43 @@ def py_await_throw_arguments(iterator, args):
     store_ptr(borrowed, 8, args)
     pcc_gc_frame_enter(global_addr("pcc_coroutine_borrowed_two_map"), borrowed)
     slots = stack_alloc(_CORO_FRAME_SIZE)
-    pins = stack_alloc(_CORO_PINS_SIZE)
+    scratch = stack_alloc(_CORO_SCRATCH_SIZE)
     memset(slots, 0, _CORO_FRAME_SIZE)
-    memset(pins, 0, _CORO_BORROWED_FRAME)
-    store_ptr(pins, _CORO_BORROWED_FRAME, borrowed)
+    store_ptr(scratch, _CORO_BORROWED_FRAME, borrowed)
     pcc_gc_frame_enter(global_addr("pcc_coroutine_protocol_frame_map"), slots)
-    if _coroutine_slot_borrow(slots, pins, _CORO_RECEIVER, borrowed) < 0:
-        return _coroutine_finish(slots, pins)
-    if _coroutine_slot_borrow(slots, pins, _CORO_ARGS, ptr_add(borrowed, 8)) < 0:
-        return _coroutine_finish(slots, pins)
+    if _coroutine_slot_borrow(slots, scratch, _CORO_RECEIVER, borrowed) < 0:
+        return _coroutine_finish(slots, scratch)
+    if _coroutine_slot_borrow(slots, scratch, _CORO_ARGS, ptr_add(borrowed, 8)) < 0:
+        return _coroutine_finish(slots, scratch)
     store_ptr(slots, _CORO_OPERAND, py_tuple_get(load_ptr(slots, _CORO_ARGS), 0))
-    _coroutine_slot_adopt(slots, pins, _CORO_OPERAND)
     closing: int = py_exc_matches(load_ptr(slots, _CORO_OPERAND), py_exc_builtin_class(55))
-    _coroutine_slot_drop(slots, pins, _CORO_OPERAND)
+    _coroutine_slot_drop(slots, scratch, _CORO_OPERAND)
     if closing != 0:
-        if _await_close_iterator(slots, pins) < 0:
-            return _coroutine_finish(slots, pins)
-        if _coroutine_normalize_throw(slots, pins, py_tuple_len(load_ptr(slots, _CORO_ARGS))) == 0:
+        if _await_close_iterator(slots, scratch) < 0:
+            return _coroutine_finish(slots, scratch)
+        if _coroutine_normalize_throw(slots, scratch, py_tuple_len(load_ptr(slots, _CORO_ARGS))) == 0:
             py_raise(load_ptr(slots, _CORO_OPERAND))
-        return _coroutine_finish(slots, pins)
+        return _coroutine_finish(slots, scratch)
     tag: int = _type_of(load_ptr(slots, _CORO_RECEIVER))
     if tag == PY_TYPE_COROUTINE:
-        _coroutine_throw_call(slots, pins)
-        return _coroutine_finish(slots, pins)
+        _coroutine_throw_call(slots, scratch)
+        return _coroutine_finish(slots, scratch)
     elif tag == PY_TYPE_GEN:
-        if _coroutine_normalize_throw(slots, pins, py_tuple_len(load_ptr(slots, _CORO_ARGS))) < 0:
-            return _coroutine_finish(slots, pins)
+        if _coroutine_normalize_throw(slots, scratch, py_tuple_len(load_ptr(slots, _CORO_ARGS))) < 0:
+            return _coroutine_finish(slots, scratch)
         store_ptr(slots, _CORO_RESULT, py_gen_throw(load_ptr(slots, _CORO_RECEIVER), load_ptr(slots, _CORO_OPERAND)))
     else:
         store_ptr(slots, _CORO_TEMP, py_obj_getattr(load_ptr(slots, _CORO_RECEIVER), cstr("throw")))
-        _coroutine_slot_adopt(slots, pins, _CORO_TEMP)
         if ptr_is_null(load_ptr(slots, _CORO_TEMP)):
             if py_exc_matches(py_current_exception(), py_exc_builtin_class(6)) == 0:
-                return _coroutine_finish(slots, pins)
+                return _coroutine_finish(slots, scratch)
             py_clear_exception()
-            if _coroutine_normalize_throw(slots, pins, py_tuple_len(load_ptr(slots, _CORO_ARGS))) < 0:
-                return _coroutine_finish(slots, pins)
+            if _coroutine_normalize_throw(slots, scratch, py_tuple_len(load_ptr(slots, _CORO_ARGS))) < 0:
+                return _coroutine_finish(slots, scratch)
             py_raise(load_ptr(slots, _CORO_OPERAND))
-            return _coroutine_finish(slots, pins)
+            return _coroutine_finish(slots, scratch)
         store_ptr(slots, _CORO_RESULT, py_obj_call(load_ptr(slots, _CORO_TEMP), load_ptr(slots, _CORO_ARGS), null()))
-    _coroutine_slot_adopt(slots, pins, _CORO_RESULT)
-    return _coroutine_finish(slots, pins)
+    return _coroutine_finish(slots, scratch)
 
 
 def _coroutine_method_entry(captures, args, operation: int):
@@ -808,47 +750,43 @@ def _coroutine_method_entry(captures, args, operation: int):
     store_ptr(borrowed, 8, args)
     pcc_gc_frame_enter(global_addr("pcc_coroutine_borrowed_two_map"), borrowed)
     slots = stack_alloc(_CORO_FRAME_SIZE)
-    pins = stack_alloc(_CORO_PINS_SIZE)
+    scratch = stack_alloc(_CORO_SCRATCH_SIZE)
     memset(slots, 0, _CORO_FRAME_SIZE)
-    memset(pins, 0, _CORO_BORROWED_FRAME)
-    store_ptr(pins, _CORO_BORROWED_FRAME, borrowed)
+    store_ptr(scratch, _CORO_BORROWED_FRAME, borrowed)
     pcc_gc_frame_enter(global_addr("pcc_coroutine_protocol_frame_map"), slots)
-    if _coroutine_slot_borrow(slots, pins, _CORO_TEMP, borrowed) < 0:
-        return _coroutine_finish(slots, pins)
-    if _coroutine_slot_borrow(slots, pins, _CORO_ARGS, ptr_add(borrowed, 8)) < 0:
-        return _coroutine_finish(slots, pins)
+    if _coroutine_slot_borrow(slots, scratch, _CORO_TEMP, borrowed) < 0:
+        return _coroutine_finish(slots, scratch)
+    if _coroutine_slot_borrow(slots, scratch, _CORO_ARGS, ptr_add(borrowed, 8)) < 0:
+        return _coroutine_finish(slots, scratch)
     count: int = py_tuple_len(load_ptr(slots, _CORO_ARGS))
     if operation == 0 and count != 1:
         _raise_typeerror(cstr("send() takes exactly one argument"))
-        return _coroutine_finish(slots, pins)
+        return _coroutine_finish(slots, scratch)
     if operation == 2 and count != 0:
         _raise_typeerror(cstr("close() takes no arguments"))
-        return _coroutine_finish(slots, pins)
+        return _coroutine_finish(slots, scratch)
     store_ptr(slots, _CORO_RECEIVER, py_tuple_get(load_ptr(slots, _CORO_TEMP), 0))
-    _coroutine_slot_adopt(slots, pins, _CORO_RECEIVER)
-    _coroutine_slot_drop(slots, pins, _CORO_TEMP)
+    _coroutine_slot_drop(slots, scratch, _CORO_TEMP)
     generator: int = 1 if _type_of(load_ptr(slots, _CORO_RECEIVER)) == PY_TYPE_GEN else 0
     if operation == 0:
         store_ptr(slots, _CORO_OPERAND, py_tuple_get(load_ptr(slots, _CORO_ARGS), 0))
-        _coroutine_slot_adopt(slots, pins, _CORO_OPERAND)
         if generator != 0:
             store_ptr(slots, _CORO_RESULT, py_gen_send(load_ptr(slots, _CORO_RECEIVER), load_ptr(slots, _CORO_OPERAND)))
         else:
             store_ptr(slots, _CORO_RESULT, py_coroutine_send(load_ptr(slots, _CORO_RECEIVER), load_ptr(slots, _CORO_OPERAND), null()))
     elif operation == 1:
         if generator != 0:
-            if _coroutine_normalize_throw(slots, pins, count) < 0:
-                return _coroutine_finish(slots, pins)
+            if _coroutine_normalize_throw(slots, scratch, count) < 0:
+                return _coroutine_finish(slots, scratch)
             store_ptr(slots, _CORO_RESULT, py_gen_throw(load_ptr(slots, _CORO_RECEIVER), load_ptr(slots, _CORO_OPERAND)))
         else:
-            _coroutine_throw_call(slots, pins)
-            return _coroutine_finish(slots, pins)
+            _coroutine_throw_call(slots, scratch)
+            return _coroutine_finish(slots, scratch)
     elif generator != 0:
         store_ptr(slots, _CORO_RESULT, py_gen_close(load_ptr(slots, _CORO_RECEIVER)))
     else:
         store_ptr(slots, _CORO_RESULT, py_coroutine_close(load_ptr(slots, _CORO_RECEIVER)))
-    _coroutine_slot_adopt(slots, pins, _CORO_RESULT)
-    return _coroutine_finish(slots, pins)
+    return _coroutine_finish(slots, scratch)
 
 
 def _coroutine_send_entry(captures, args):
@@ -870,16 +808,15 @@ def py_coroutine_bound_method(coro, operation: int):
     store_ptr(borrowed, 0, coro)
     pcc_gc_frame_enter(global_addr("pcc_coroutine_borrowed_one_map"), borrowed)
     slots = stack_alloc(_CORO_FRAME_SIZE)
-    pins = stack_alloc(_CORO_PINS_SIZE)
+    scratch = stack_alloc(_CORO_SCRATCH_SIZE)
     memset(slots, 0, _CORO_FRAME_SIZE)
-    memset(pins, 0, _CORO_BORROWED_FRAME)
-    store_ptr(pins, _CORO_BORROWED_FRAME, borrowed)
+    store_ptr(scratch, _CORO_BORROWED_FRAME, borrowed)
     pcc_gc_frame_enter(global_addr("pcc_coroutine_protocol_frame_map"), slots)
-    if _coroutine_slot_borrow(slots, pins, _CORO_RECEIVER, borrowed) < 0:
-        return _coroutine_finish(slots, pins)
+    if _coroutine_slot_borrow(slots, scratch, _CORO_RECEIVER, borrowed) < 0:
+        return _coroutine_finish(slots, scratch)
     store_ptr(slots, _CORO_ARGS, py_tuple_new(1))
-    if _coroutine_slot_adopt(slots, pins, _CORO_ARGS) < 0 or ptr_is_null(load_ptr(slots, _CORO_ARGS)):
-        return _coroutine_finish(slots, pins)
+    if ptr_is_null(load_ptr(slots, _CORO_ARGS)):
+        return _coroutine_finish(slots, scratch)
     py_tuple_set_item(load_ptr(slots, _CORO_ARGS), 0, load_ptr(slots, _CORO_RECEIVER))
     if operation == 0:
         store_ptr(slots, _CORO_RESULT, py_func_new_bound(_coroutine_send_entry, load_ptr(slots, _CORO_ARGS), cstr("send"), load_ptr(slots, _CORO_RECEIVER)))
@@ -887,8 +824,7 @@ def py_coroutine_bound_method(coro, operation: int):
         store_ptr(slots, _CORO_RESULT, py_func_new_bound(_coroutine_throw_entry, load_ptr(slots, _CORO_ARGS), cstr("throw"), load_ptr(slots, _CORO_RECEIVER)))
     else:
         store_ptr(slots, _CORO_RESULT, py_func_new_bound(_coroutine_close_entry, load_ptr(slots, _CORO_ARGS), cstr("close"), load_ptr(slots, _CORO_RECEIVER)))
-    _coroutine_slot_adopt(slots, pins, _CORO_RESULT)
-    return _coroutine_finish(slots, pins)
+    return _coroutine_finish(slots, scratch)
 
 
 def _await_iterator(it):

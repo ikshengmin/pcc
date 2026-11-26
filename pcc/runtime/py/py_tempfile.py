@@ -93,8 +93,7 @@ pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_gc_scheduler_root_register_handle = extern("pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr)
 pcc_gc_scheduler_root_unregister_handle = extern("pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void)
-pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
-pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
+pcc_gc_root_copy = extern("pcc_gc_root_copy", (c_ptr, c_ptr), c_int64)
 pcc_mutex_new = extern("pcc_mutex_new", (), c_ptr)
 pcc_mutex_free = extern("pcc_mutex_free", (c_ptr,), c_void)
 pcc_mutex_lock = extern("pcc_mutex_lock", (c_ptr,), c_int64)
@@ -700,14 +699,13 @@ def _td_shutdown() -> None:
     while not ptr_is_null(mutex):
         pcc_mutex_lock(mutex)
         record = global_load_ptr("pcc_tempdir_records")
-        token: int = -1
+        status: int = -1
         if not ptr_is_null(record):
-            token = pcc_gc_root_copy_lease(slots, ptr_add(record, _TD_STATE))
+            status = pcc_gc_root_copy(slots, ptr_add(record, _TD_STATE))
         pcc_mutex_unlock(mutex)
-        if ptr_is_null(record) or token < 0:
+        if ptr_is_null(record) or status < 0:
             break
         _td_finalize_state(load_ptr(slots, 0))
-        pcc_gc_foreign_lease_release(slots, token)
         pcc_gc_store_root(slots, null())
         py_clear_exception()
     _td_finish(slots)
@@ -1020,15 +1018,11 @@ def py_tempfile_mkdtemp_function():
 
 def _td_copy_cached_owner(slots, source) -> None:
     output = ptr_add(slots, _TD_OUTPUT * C_POINTER_SIZE)
-    token: int = pcc_gc_root_copy_lease(output, source)
-    if token < 0:
+    if pcc_gc_root_copy(output, source) < 0:
         _td_error(7, cstr("cached owner copy failed"))
         return
-    # The counted address lease protects this load until the output slot
-    # holds the owner.
+    # The output slot owns the copy.
     _td_hold(slots, _TD_OUTPUT, load_ptr(output, 0))
-    if pcc_gc_foreign_lease_release(output, token) < 0:
-        _td_error(7, cstr("cached owner lease release failed"))
 
 
 def _fdopen_signature(slots, temporary: int = 0):
@@ -1414,7 +1408,7 @@ def _os_close_entry(captures, args):
 def _os_pwrite_entry(captures, args):
     """Write immutable bytes; mutable/view exports remain an explicit gap.
 
-    A raw address lease prevents GC relocation, but does not implement
+    The one collector never relocates the payload, but that does not implement
     CPython's exported-buffer resize prohibition during offset.__index__.
     Reject those buffer forms before that callback rather than silently
     applying snapshot semantics to a different observable contract.
@@ -1857,7 +1851,7 @@ def _temporary_type(named_file: int):
         _td_error(19, cstr("TemporaryDirectory could not register shutdown cleanup"))
     if not py_err_occurred():
         # Reload through the authoritative root after registration/relocation.
-        # Losing local candidate roots retire after the winner has its own lease.
+        # Losing local candidate roots retire after the winner has its own owner.
         _td_copy_cached_owner(slots, source)
     return _nt_finish(slots)
 

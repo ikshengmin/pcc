@@ -73,8 +73,6 @@ pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_gc_scheduler_root_register_handle = extern("pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr)
 pcc_gc_scheduler_root_unregister_handle = extern("pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void)
 pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
-pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
-pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 pcc_gc_retain_plan_prepare_locked = extern("pcc_gc_retain_plan_prepare_locked", (c_ptr, c_ptr), c_ptr)
 pcc_gc_retain_plan_finish = extern("pcc_gc_retain_plan_finish", (c_ptr,), c_void)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
@@ -453,7 +451,7 @@ def _int_to_bytes(v, length: int, byteorder, is_signed: int):
 
 
 def _int_bytes_snapshot_root(base_slot: c_ptr, snapshot_slot: c_ptr) -> c_ptr:
-    # The registered base slot still owns and leases the actual mutable leaf.
+    # The registered base slot still owns the actual mutable leaf.
     # Publish the NEW immutable result straight into its own empty root.
     store_ptr(snapshot_slot, 0, null())
     handle = pcc_gc_scheduler_root_register_handle(snapshot_slot)
@@ -465,18 +463,6 @@ def _int_bytes_snapshot_root(base_slot: c_ptr, snapshot_slot: c_ptr) -> c_ptr:
         pcc_gc_scheduler_root_unregister_handle(handle)
         return null()
     return handle
-
-
-def _int_bytes_buffer_lease_error(status: int) -> None:
-    if status == -2:
-        _raise_int_bytes(15, cstr("integer byte conversion buffer lease overflow"))
-    else:
-        _raise_int_bytes(7, cstr("integer byte conversion requires a stable buffer owner"))
-
-
-def _int_bytes_buffer_cleanup_error() -> None:
-    if py_err_occurred() == 0:
-        _raise_int_bytes(7, cstr("integer byte conversion buffer lease cleanup failed"))
 
 
 @c_abi_export("py_int_from_bytes")
@@ -509,46 +495,33 @@ def py_int_from_bytes_signed(bytes_obj, byteorder, is_signed: int):
         return null()
     retain_plan = stack_alloc(56)
     pcc_py_gc_minor_graph_lock()
-    # A memoryview's address lease does not protect its child buffer. Resolve
+    # A memoryview's owner does not own its child buffer's bytes. Resolve
     # and retain that actual owner under the graph lock into a traced slot.
     base = _int_bytes_like_base(bytes_obj)
     base = pcc_gc_retain_plan_prepare_locked(retain_plan, base)
     store_ptr(base_slot, 0, base)
     pcc_py_gc_minor_graph_unlock()
     pcc_gc_retain_plan_finish(retain_plan)
-    acquired: int = pcc_gc_foreign_lease_acquire(base_slot)
     snapshot_slot = null()
     snapshot_handle = null()
-    snapshot_lease: int = -1
     result = null()
-    if acquired < 0:
-        _int_bytes_buffer_lease_error(acquired)
+    current = pcc_gc_load_ptr(null(), base_slot)
+    if (ptr_is_null(current) == 0
+            and load_i32(current, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_BYTEARRAY):
+        # The owning slot is not a payload snapshot. The factory copies
+        # once under the mutable owner's lock, outside our graph transaction.
+        snapshot_slot = stack_alloc(8)
+        snapshot_handle = _int_bytes_snapshot_root(base_slot, snapshot_slot)
+        if ptr_is_null(snapshot_handle) == 0:
+            result = _int_from_bytes_leased_base(
+                pcc_gc_load_ptr(null(), snapshot_slot), big, is_signed,
+            )
     else:
-        current = pcc_gc_load_ptr(null(), base_slot)
-        if (ptr_is_null(current) == 0
-                and load_i32(current, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_BYTEARRAY):
-            # An address lease is not a payload snapshot. The factory copies
-            # once under the mutable owner's lock, outside our graph transaction.
-            snapshot_slot = stack_alloc(8)
-            snapshot_handle = _int_bytes_snapshot_root(base_slot, snapshot_slot)
-            if ptr_is_null(snapshot_handle) == 0:
-                snapshot_lease = pcc_gc_foreign_lease_acquire(snapshot_slot)
-                if snapshot_lease < 0:
-                    _int_bytes_buffer_lease_error(snapshot_lease)
-                else:
-                    result = _int_from_bytes_leased_base(
-                        pcc_gc_load_ptr(null(), snapshot_slot), big, is_signed,
-                    )
-        else:
-            result = _int_from_bytes_leased_base(current, big, is_signed)
+        result = _int_from_bytes_leased_base(current, big, is_signed)
     result_state = stack_alloc(16)
     result_handle = _int_bytes_save_result(result_state, result)
     if ptr_is_null(snapshot_handle) == 0:
-        if snapshot_lease >= 0 and pcc_gc_foreign_lease_release(snapshot_slot, snapshot_lease) < 0:
-            _int_bytes_buffer_cleanup_error()
         _int_bytes_close_root(snapshot_slot, snapshot_handle)
-    if acquired >= 0 and pcc_gc_foreign_lease_release(base_slot, acquired) < 0:
-        _int_bytes_buffer_cleanup_error()
     _int_bytes_close_root(base_slot, base_handle)
     return _int_bytes_take_result(result_state, result_handle)
 

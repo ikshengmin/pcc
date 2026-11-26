@@ -108,11 +108,8 @@ pcc_errno_message_into = extern("pcc_errno_message_into", (c_int32, c_ptr, c_int
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
-pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
-pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
-pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 
 _ERRNO_EXCEPTION = 0
 _ERRNO_NUMBER = 1
@@ -123,36 +120,30 @@ _ERRNO_SLOT_COUNT = 5
 define_global_i32("pcc_errno_error_frame_map", _ERRNO_SLOT_COUNT)
 
 
-def _errno_adopt(slots, tokens, index: int) -> int:
+def _errno_adopt(slots, index: int) -> int:
     slot = ptr_add(slots, index * C_POINTER_SIZE)
     if ptr_is_null(load_ptr(slot, 0)):
         if not py_err_occurred():
             py_raise_owned(py_exc_new(19, cstr("OSError allocation failed")))
         return -1
-    token: int = pcc_gc_foreign_lease_acquire(slot)
-    if token < 0:
-        if not py_err_occurred():
-            py_raise_owned(py_exc_new(7, cstr("OSError ownership lease failed")))
-        return -1
-    store_i64(tokens, index * C_POINTER_SIZE, token)
     return -1 if py_err_occurred() else 0
 
 
-def _errno_error_body(slots, tokens, number: int, message) -> None:
-    # The existing walk/file error builders use the same owning-slot and
-    # counted-lease protocol while constructing errno, strerror and args.
+def _errno_error_body(slots, number: int, message) -> None:
+    # The existing walk/file error builders use the same owning-slot
+    # protocol while constructing errno, strerror and args.
     kind: int = pcc_errno_exception_kind(number)
     store_ptr(slots, _ERRNO_EXCEPTION * C_POINTER_SIZE, py_exc_new(kind, message))
-    if _errno_adopt(slots, tokens, _ERRNO_EXCEPTION) != 0:
+    if _errno_adopt(slots, _ERRNO_EXCEPTION) != 0:
         return
     store_ptr(slots, _ERRNO_NUMBER * C_POINTER_SIZE, py_int_from_i64(number))
-    if _errno_adopt(slots, tokens, _ERRNO_NUMBER) != 0:
+    if _errno_adopt(slots, _ERRNO_NUMBER) != 0:
         return
     store_ptr(slots, _ERRNO_MESSAGE * C_POINTER_SIZE, py_str_new(message, strlen(message)))
-    if _errno_adopt(slots, tokens, _ERRNO_MESSAGE) != 0:
+    if _errno_adopt(slots, _ERRNO_MESSAGE) != 0:
         return
     store_ptr(slots, _ERRNO_ARGS * C_POINTER_SIZE, py_tuple_new(2))
-    if _errno_adopt(slots, tokens, _ERRNO_ARGS) != 0:
+    if _errno_adopt(slots, _ERRNO_ARGS) != 0:
         return
     py_tuple_set_item(load_ptr(slots, _ERRNO_ARGS * C_POINTER_SIZE), 0,
                       load_ptr(slots, _ERRNO_NUMBER * C_POINTER_SIZE))
@@ -179,23 +170,16 @@ def _errno_os_error(number: int) -> None:
         py_raise_owned(py_exc_new(7, cstr("platform failure did not publish errno")))
         return
     slots = stack_alloc(_ERRNO_SLOT_COUNT * C_POINTER_SIZE)
-    tokens = stack_alloc(_ERRNO_SLOT_COUNT * C_POINTER_SIZE)
     memset(slots, 0, _ERRNO_SLOT_COUNT * C_POINTER_SIZE)
-    memset(tokens, 0, _ERRNO_SLOT_COUNT * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_errno_error_frame_map"), slots)
     message = stack_alloc(256)
     pcc_errno_message_into(number, message, 256)
-    _errno_error_body(slots, tokens, number, message)
+    _errno_error_body(slots, number, message)
     pending = ptr_add(slots, _ERRNO_PENDING * C_POINTER_SIZE)
     py_tls_exc_swap_slot(pending)
     index: int = _ERRNO_ARGS
     while index >= _ERRNO_EXCEPTION:
-        slot = ptr_add(slots, index * C_POINTER_SIZE)
-        token: int = load_i64(tokens, index * C_POINTER_SIZE)
-        if pcc_gc_foreign_lease_release(slot, token) != 0:
-            pcc_platform_abort()
-            return
-        pcc_gc_store_root(slot, null())
+        pcc_gc_store_root(ptr_add(slots, index * C_POINTER_SIZE), null())
         index = index - 1
     py_clear_exception()
     py_tls_exc_swap_slot(pending)

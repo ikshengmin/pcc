@@ -34,15 +34,12 @@ py_obj_repr = extern("py_obj_repr", (c_ptr,), c_ptr)
 py_bound_method_function = extern("py_bound_method_function", (c_ptr,), c_ptr)
 pcc_gc_scheduler_root_register_handle = extern("pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr)
 pcc_gc_scheduler_root_unregister_handle = extern("pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void)
-pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
-pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 pcc_gc_root_move = extern("pcc_gc_root_move", (c_ptr, c_ptr), c_int64)
 pcc_gc_resolve_root_slot_unlocked = extern("pcc_gc_resolve_root_slot_unlocked", (c_ptr, c_int64), c_ptr)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
-pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 py_err_occurred = extern("py_err_occurred", (), c_int64)
 py_current_exception = extern("py_current_exception", (), c_ptr)
 py_clear_exception = extern("py_clear_exception", (), c_void)
@@ -342,9 +339,8 @@ def _call_optional_attr(callable_obj, name):
     return value
 
 
-def _call_diagnostic_open(slots, tokens, handles) -> int:
+def _call_diagnostic_open(slots, handles) -> int:
     memset(slots, 0, 56)
-    memset(tokens, 0, 56)
     memset(handles, 0, 56)
     count: int = 0
     while count < 7:
@@ -356,57 +352,45 @@ def _call_diagnostic_open(slots, tokens, handles) -> int:
     return count
 
 
-def _call_diagnostic_adopt(slots, tokens, index: int) -> int:
+def _call_diagnostic_adopt(slots, index: int) -> int:
     slot = ptr_add(slots, index * 8)
     if ptr_is_null(load_ptr(slot, 0)):
         _require_result(null(), cstr("call diagnostic"), cstr("diagnostic value allocation failed"))
         return -1
-    token: int = pcc_gc_foreign_lease_acquire(slot)
-    if token < 0:
-        _require_result(null(), cstr("call diagnostic"), cstr("diagnostic value lease failed"))
-        return -1
-    store_i64(tokens, index * 8, token)
     return 0
 
 
-def _call_diagnostic_drop(slots, tokens, index: int) -> None:
+def _call_diagnostic_drop(slots, index: int) -> None:
     slot = ptr_add(slots, index * 8)
-    if pcc_gc_foreign_lease_release(slot, load_i64(tokens, index * 8)) != 0:
-        pcc_platform_abort()
-        return
-    store_i64(tokens, index * 8, 0)
     pcc_gc_store_root(slot, null())
 
 
-def _call_diagnostic_append(slots, tokens) -> int:
-    # acc3 + piece4 -> temporary5; all sources keep independent counted leases.
+def _call_diagnostic_append(slots) -> int:
+    # acc3 + piece4 -> temporary5; every source keeps its own owner.
     store_ptr(slots, 40, py_str_concat(load_ptr(slots, 24), load_ptr(slots, 32)))
-    if _call_diagnostic_adopt(slots, tokens, 5) != 0:
+    if _call_diagnostic_adopt(slots, 5) != 0:
         return -1
-    _call_diagnostic_drop(slots, tokens, 3)
-    _call_diagnostic_drop(slots, tokens, 4)
-    token: int = load_i64(tokens, 40)
+    _call_diagnostic_drop(slots, 3)
+    _call_diagnostic_drop(slots, 4)
     if pcc_gc_root_move(ptr_add(slots, 24), ptr_add(slots, 40)) != 0:
         _require_result(null(), cstr("call diagnostic"), cstr("diagnostic result publication failed"))
         return -1
-    store_i64(tokens, 24, token)
-    store_i64(tokens, 40, 0)
     return 0
 
 
-def _call_diagnostic_append_literal(slots, tokens, text) -> int:
+def _call_diagnostic_append_literal(slots, text) -> int:
     store_ptr(slots, 32, _call_lit(text))
-    if _call_diagnostic_adopt(slots, tokens, 4) != 0:
+    if _call_diagnostic_adopt(slots, 4) != 0:
         return -1
-    return _call_diagnostic_append(slots, tokens)
+    return _call_diagnostic_append(slots)
 
 
-def _call_diagnostic_prefix(slots, tokens, callable_obj) -> int:
-    # The incoming callable has its caller's address lease. The optional
+def _call_diagnostic_prefix(slots, callable_obj) -> int:
+    # The incoming callable stays owned by its caller. The optional
     # original and every allocating metadata/text result publish immediately.
     store_ptr(slots, 0, py_bound_method_function(callable_obj))
     if not ptr_is_null(load_ptr(slots, 0)):
-        if _call_diagnostic_adopt(slots, tokens, 0) != 0:
+        if _call_diagnostic_adopt(slots, 0) != 0:
             return -1
         callable_obj = load_ptr(slots, 0)
     store_ptr(slots, 8, _call_optional_attr(callable_obj, cstr("__qualname__")))
@@ -414,51 +398,51 @@ def _call_diagnostic_prefix(slots, tokens, callable_obj) -> int:
         if py_err_occurred() != 0:
             return -1
         store_ptr(slots, 24, py_obj_repr(callable_obj))
-        if _call_diagnostic_adopt(slots, tokens, 3) != 0:
+        if _call_diagnostic_adopt(slots, 3) != 0:
             return -1
-        return _call_diagnostic_append_literal(slots, tokens, cstr(" "))
-    if _call_diagnostic_adopt(slots, tokens, 1) != 0:
+        return _call_diagnostic_append_literal(slots, cstr(" "))
+    if _call_diagnostic_adopt(slots, 1) != 0:
         return -1
     store_ptr(slots, 16, _call_optional_attr(callable_obj, cstr("__module__")))
     if ptr_is_null(load_ptr(slots, 16)):
         if py_err_occurred() != 0:
             return -1
-    elif _call_diagnostic_adopt(slots, tokens, 2) != 0:
+    elif _call_diagnostic_adopt(slots, 2) != 0:
         return -1
     include_module: int = 0
     if not _is_none(load_ptr(slots, 16)):
         store_ptr(slots, 32, _call_lit(cstr("builtins")))
-        if _call_diagnostic_adopt(slots, tokens, 4) != 0:
+        if _call_diagnostic_adopt(slots, 4) != 0:
             return -1
         include_module = 1
         if _type_of(load_ptr(slots, 16)) == PY_TYPE_STR:
             if py_str_eq(load_ptr(slots, 16), load_ptr(slots, 32)) != 0:
                 include_module = 0
-        _call_diagnostic_drop(slots, tokens, 4)
+        _call_diagnostic_drop(slots, 4)
     if include_module != 0:
         store_ptr(slots, 24, py_obj_str(load_ptr(slots, 16)))
-        if _call_diagnostic_adopt(slots, tokens, 3) != 0:
+        if _call_diagnostic_adopt(slots, 3) != 0:
             return -1
-        if _call_diagnostic_append_literal(slots, tokens, cstr(".")) != 0:
+        if _call_diagnostic_append_literal(slots, cstr(".")) != 0:
             return -1
         store_ptr(slots, 32, py_obj_str(load_ptr(slots, 8)))
-        if _call_diagnostic_adopt(slots, tokens, 4) != 0:
+        if _call_diagnostic_adopt(slots, 4) != 0:
             return -1
-        if _call_diagnostic_append(slots, tokens) != 0:
+        if _call_diagnostic_append(slots) != 0:
             return -1
     else:
         store_ptr(slots, 24, py_obj_str(load_ptr(slots, 8)))
-        if _call_diagnostic_adopt(slots, tokens, 3) != 0:
+        if _call_diagnostic_adopt(slots, 3) != 0:
             return -1
-    return _call_diagnostic_append_literal(slots, tokens, cstr("() "))
+    return _call_diagnostic_append_literal(slots, cstr("() "))
 
 
-def _call_diagnostic_close(slots, tokens, handles, count: int) -> None:
+def _call_diagnostic_close(slots, handles, count: int) -> None:
     if count == 7:
         py_tls_exc_swap_slot(ptr_add(slots, 48))
         index: int = 5
         while index >= 0:
-            _call_diagnostic_drop(slots, tokens, index)
+            _call_diagnostic_drop(slots, index)
             index = index - 1
         py_clear_exception()
         py_tls_exc_swap_slot(ptr_add(slots, 48))
@@ -475,30 +459,29 @@ def _raise_duplicate_keyword(callable_obj, key) -> None:
     Objects without a qualname use their repr, like CPython's function display.
     """
     slots = stack_alloc(56)
-    tokens = stack_alloc(56)
     handles = stack_alloc(56)
-    count: int = _call_diagnostic_open(slots, tokens, handles)
+    count: int = _call_diagnostic_open(slots, handles)
     status: int = -1
     if count == 7:
         if ptr_is_null(callable_obj):
             store_ptr(slots, 24, _call_lit(cstr("")))
-            status = _call_diagnostic_adopt(slots, tokens, 3)
+            status = _call_diagnostic_adopt(slots, 3)
         else:
-            status = _call_diagnostic_prefix(slots, tokens, callable_obj)
+            status = _call_diagnostic_prefix(slots, callable_obj)
         if status == 0:
-            status = _call_diagnostic_append_literal(slots, tokens, cstr("got multiple values for keyword argument '"))
+            status = _call_diagnostic_append_literal(slots, cstr("got multiple values for keyword argument '"))
         if status == 0:
             store_ptr(slots, 32, py_obj_str(key))
-            status = _call_diagnostic_adopt(slots, tokens, 4)
+            status = _call_diagnostic_adopt(slots, 4)
         if status == 0:
-            status = _call_diagnostic_append(slots, tokens)
+            status = _call_diagnostic_append(slots)
         if status == 0:
-            status = _call_diagnostic_append_literal(slots, tokens, cstr("'"))
+            status = _call_diagnostic_append_literal(slots, cstr("'"))
         if status == 0:
             py_raise_owned(py_exc_new(3, py_str_utf8(load_ptr(slots, 24))))
     else:
         _require_result(null(), cstr("call diagnostic"), cstr("diagnostic root registration failed"))
-    _call_diagnostic_close(slots, tokens, handles, count)
+    _call_diagnostic_close(slots, handles, count)
 
 
 def _check_keyword_unique(out, key, callable_obj) -> int:
@@ -684,21 +667,20 @@ def py_call_require_star_iterable(value) -> int:
     if py_obj_special_present(value, cstr("__getitem__")) != 0:
         return 0
     slots = stack_alloc(56)
-    tokens = stack_alloc(56)
     handles = stack_alloc(56)
-    count: int = _call_diagnostic_open(slots, tokens, handles)
+    count: int = _call_diagnostic_open(slots, handles)
     status: int = -1
     if count == 7:
         store_ptr(slots, 24, _call_lit(cstr("Value after * must be an iterable, not ")))
-        status = _call_diagnostic_adopt(slots, tokens, 3)
+        status = _call_diagnostic_adopt(slots, 3)
         if status == 0:
             store_ptr(slots, 32, py_obj_type_name(value))
-            status = _call_diagnostic_adopt(slots, tokens, 4)
+            status = _call_diagnostic_adopt(slots, 4)
         if status == 0:
-            status = _call_diagnostic_append(slots, tokens)
+            status = _call_diagnostic_append(slots)
         if status == 0:
             py_raise_owned(py_exc_new(3, py_str_utf8(load_ptr(slots, 24))))
     else:
         _require_result(null(), cstr("call star diagnostic"), cstr("star diagnostic root registration failed"))
-    _call_diagnostic_close(slots, tokens, handles, count)
+    _call_diagnostic_close(slots, handles, count)
     return -1

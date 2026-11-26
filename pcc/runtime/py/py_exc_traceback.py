@@ -114,20 +114,18 @@ pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_gc_root_move = extern("pcc_gc_root_move", (c_ptr, c_ptr), c_int64)
-pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
+pcc_gc_root_copy = extern("pcc_gc_root_copy", (c_ptr, c_ptr), c_int64)
 py_handled_exception_slot = extern("py_handled_exception_slot", (), c_ptr)
 py_exc_traceback_format_exc_abi = extern("py_exc_traceback_format_exc", (c_ptr,), c_ptr)
 py_exc_traceback_print_exc_abi = extern("py_exc_traceback_print_exc", (c_ptr,), c_void)
 define_global_i32("pcc_traceback_current_map", 2)
 
 py_runtime_error_if_unset_abi = extern("py_runtime_error_if_unset", (c_ptr, c_ptr), c_ptr)
-pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
-pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
+pcc_gc_root_copy_borrowed = extern("pcc_gc_root_copy_borrowed", (c_ptr, c_ptr), c_int64)
 pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 py_cleanup_one_root_preserving_exception = extern("py_cleanup_one_root_preserving_exception", (c_ptr,), c_void)
-py_cleanup_one_lease_preserving_exception = extern("py_cleanup_one_lease_preserving_exception", (c_ptr, c_int64), c_void)
 
 
 def _type_of(obj) -> int:
@@ -668,11 +666,9 @@ def py_exc_traceback_print_exc(exc) -> None:
     free(b)
 
 
-def _tb_current_finish(slots, lease: int):
+def _tb_current_finish(slots):
     # The formatter result is published before either operand cleanup or
     # frame retirement. Keep its NEW owner through the final raw ABI handoff.
-    if lease >= 0:
-        py_cleanup_one_lease_preserving_exception(slots, lease)
     py_cleanup_one_root_preserving_exception(slots)
     result = ptr_add(slots, C_POINTER_SIZE)
     pcc_gc_frame_leave(slots)
@@ -688,19 +684,17 @@ def _tb_current_call(print_only: int):
     memset(slots, 0, 2 * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_traceback_current_map"), slots)
     source = py_handled_exception_slot()
-    lease: int = 0
     if ptr_is_null(source) == 0:
-        lease = pcc_gc_root_copy_lease(slots, source)
-        if lease < 0:
+        if pcc_gc_root_copy(slots, source) < 0:
             _tb_error(cstr("handled exception owner acquisition failed"))
-            return _tb_current_finish(slots, lease)
+            return _tb_current_finish(slots)
     if print_only != 0:
         py_exc_traceback_print_exc_abi(load_ptr(slots, 0))
         pcc_gc_store_root(ptr_add(slots, C_POINTER_SIZE), global_load_ptr("py_None"))
     else:
         store_ptr(slots, C_POINTER_SIZE, py_exc_traceback_format_exc_abi(load_ptr(slots, 0)))
         _tb_adopt(ptr_add(slots, C_POINTER_SIZE))
-    return _tb_current_finish(slots, lease)
+    return _tb_current_finish(slots)
 
 
 @c_abi_export("py_exc_traceback_format_current")
@@ -797,12 +791,8 @@ def _tb_discard_class(candidate) -> None:
 def _tb_new_instance(slots, class_index: int, result_index: int) -> int:
     source = ptr_add(slots, class_index * C_POINTER_SIZE)
     destination = ptr_add(slots, result_index * C_POINTER_SIZE)
-    lease: int = pcc_gc_foreign_lease_acquire(source)
-    if lease < 0:
-        return _tb_error(cstr("class address lease failed"))
     store_ptr(destination, 0, py_instance_new(load_ptr(source, 0)))
     _tb_adopt(destination)
-    py_cleanup_one_lease_preserving_exception(source, lease)
     if ptr_is_null(load_ptr(destination, 0)):
         return _tb_error(cstr("instance allocation failed"))
     return 0
@@ -813,17 +803,7 @@ def _tb_set_slot(slots, object_index: int, name, value_index: int) -> int:
     value = ptr_add(slots, value_index * C_POINTER_SIZE)
     if ptr_is_null(load_ptr(value, 0)):
         return -1
-    object_lease: int = pcc_gc_foreign_lease_acquire(destination)
-    if object_lease < 0:
-        return _tb_error(cstr("instance address lease failed"))
-    value_lease: int = pcc_gc_foreign_lease_acquire(value)
-    if value_lease < 0:
-        py_cleanup_one_lease_preserving_exception(destination, object_lease)
-        return _tb_error(cstr("attribute address lease failed"))
-    rc: int = py_instance_setattr(load_ptr(destination, 0), name, load_ptr(value, 0))
-    py_cleanup_one_lease_preserving_exception(value, value_lease)
-    py_cleanup_one_lease_preserving_exception(destination, object_lease)
-    return rc
+    return py_instance_setattr(load_ptr(destination, 0), name, load_ptr(value, 0))
 
 
 def _tb_set_value(slots, object_index: int, name) -> int:
@@ -841,7 +821,7 @@ def _tb_cstr_or(p, fallback):
 
 
 def _tb_new_entry(slots, index: int) -> int:
-    """Build through authoritative slots; lease only individual raw ABI calls."""
+    """Build through authoritative slots, passing raw values only to ABI calls."""
     pcc_py_gc_minor_graph_lock()
     exc = pcc_gc_load_ptr(null(), ptr_add(slots, _TB_EXCEPTION * C_POINTER_SIZE))
     fr = ptr_add(load_ptr(exc, 48), index * 32)
@@ -924,11 +904,9 @@ def py_exc_traceback_object(exc):
     slots = stack_alloc(_TB_SLOT_COUNT * C_POINTER_SIZE)
     memset(slots, 0, _TB_SLOT_COUNT * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_traceback_owned_map"), slots)
-    lease: int = pcc_gc_root_copy_borrowed_lease(slots, borrowed)
-    if lease < 0:
+    if pcc_gc_root_copy_borrowed(slots, borrowed) < 0:
         _tb_error(cstr("exception owner acquisition failed"))
         return _tb_finish(slots, borrowed, 0)
-    py_cleanup_one_lease_preserving_exception(slots, lease)
     pcc_py_gc_minor_graph_lock()
     exc = pcc_gc_load_ptr(null(), slots)
     n_frames: int = 0
