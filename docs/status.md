@@ -887,8 +887,41 @@ in the relevant section or issue and removes the entry.
    failures, including array-padding oracle returned1 expected42.
    No waiver or claim of current integrated hosted pass.
 
+   C++ array-padding exact external attribution: actual hosted source
+   artifact15146969262 unchanged TU370 bytes SHA25620d0492d4bcb71df5012bcd7a8bbc490f1bf3b6a120ff82da97f087f520b0410
+   equals current fixture. Hosted owned ELF SHA10c35dcc... receipt42/
+   stdout2a000000, original G++13 ELF SHA258e35dc... failed1; original
+   hosted oracle binary happens to return42 locally three times. Its
+   actual emitted member zero stores cover offsets0,4–11,12 of the
+   16-byte object, leaving padding bytes1–3,13–15 untouched, hence
+   accidental stack-history-dependent success. Diagnostic-only exact
+   same placement construction after explicit 0xff storage prefill
+   SHA6110e9c5...: local stock G++14.2 exits1 three times; actual local
+   owned self ELF SHAe225eb1a... exits42/stdout2a000000 three times.
+   [WG21 N4659](https://www.open-std.org/JTC1/SC22/WG21/docs/papers/2017/n4659.pdf)
+   [dcl.init]6.2/8.2 requires class padding zeroing on this
+   non-user-provided default constructor's value-initialization.
+   [GCC's own 2024 RFC](https://gcc.gnu.org/pipermail/gcc-patches/2024-September/664054.html)
+   attributes old automatic struct padding to compiler optimization;
+   GCC15.1 documents a standard-guaranteed mode, but the
+   [Ubuntu24.04 installed image inventory](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md)
+   lists GNU C++12.4,13.3,14.2 only, and
+   [GCC DR status](https://gcc.gnu.org/projects/cxx-dr-status.html)
+   still has no confirmed CWG2394 implementation release. No qualified
+   GCC replacement available or proved for all nine gaps. The same
+   c20 checkpoint's dedicated normative platform artifact15147142116
+   is genuine Clang++18.1.3 /usr/bin/clang++-18 SHA8ef402d4...
+   CAPABILITY_CONFIRMED and all86 original reference/86 owned native
+   nodes pass, G++ diagnostic CAPABILITY_MISMATCH. Its positive
+   capability is not whole-source reference qualification; current
+   explicit independent G++ Source lane policy unchanged. A broad
+   normative source provider change needs maintainer choice, real
+   whole unchanged source oracle validation including deterministic
+   padding probe, and preserved independent G++ evidence. No fixture,
+   expectations, compiler policy or CI guard weakened.
+
    Claims:
-   - C++ reference defaulted array value-init padding oracle exact source/standard attribution: Codex, Linux, 2026-11-26T19:13Z, area ci-cpp-padding-reference
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
