@@ -10,6 +10,14 @@ from pcc.backend.arm64_encode import EncodeError
 from pcc.backend.self_backend_aarch64_fragments import AArch64EmissionFragments
 from pcc.backend.self_backend_value_arena import CompilerIntArena, CompilerRecordSpanArena
 
+
+@pytest.fixture
+def verify_each(monkeypatch):
+    """Arenas changed after append are caught on read only under the
+    debug switch; the default validates each instruction once."""
+    monkeypatch.setenv("PCC_DEBUG_AARCH64_VERIFY_EACH", "1")
+
+
 PASSES = ("thread", "fold", "labels")
 
 
@@ -159,6 +167,7 @@ def test_external_proof_mutation_keeps_captured_record_sequence(kind, mutation):
 
 
 @pytest.mark.parametrize("kind", PASSES)
+@pytest.mark.usefixtures("verify_each")
 def test_external_proof_late_record_corruption_is_not_hidden(kind):
     owner, span = fixture()
     try:

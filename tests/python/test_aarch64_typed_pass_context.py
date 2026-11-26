@@ -17,6 +17,13 @@ from pcc.backend.self_backend_aarch64_typed_cfg import drop_fallthrough_uncond_b
 from pcc.backend.self_backend_value_arena import CompilerInt4
 
 
+@pytest.fixture
+def verify_each(monkeypatch):
+    """Arenas changed after append are caught on read only under the
+    debug switch; the default validates each instruction once."""
+    monkeypatch.setenv("PCC_DEBUG_AARCH64_VERIFY_EACH", "1")
+
+
 def test_arena_fallthrough_reuses_existing_pass_and_retains_empty_ids():
     fragments = AArch64EmissionFragments()
     semantics = AArch64InstructionSemantics()
@@ -49,6 +56,7 @@ def test_arena_rejects_missing_instruction_provenance():
 
 
 @pytest.mark.parametrize("event", [CompilerInt4(1, -3, 0, -1), CompilerInt4(0, -99, 0, -1), CompilerInt4(2, -2, 0, -1)])
+@pytest.mark.usefixtures("verify_each")
 def test_arena_rejects_unknown_or_malformed_events(event):
     fragments = AArch64EmissionFragments()
     semantics = AArch64InstructionSemantics()

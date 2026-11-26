@@ -56,6 +56,10 @@ def test_header_and_operand_bounds_fail_closed_for_missing_or_corrupt_tags():
         with pytest.raises(EncodeError, match="index"):
             owner.operand(1, 1)
         owner.tokens.set(1, 31)
+        # Operands are validated once, at append; a later write is caught
+        # on read only under PCC_DEBUG_AARCH64_VERIFY_EACH.
+        assert owner.require_header(1).first == semantic.semantic_opcode_id("ret")
+        owner.verify_each = True
         with pytest.raises(EncodeError, match="operand"):
             owner.require_header(1)
     finally:
@@ -74,8 +78,10 @@ def test_address_shape_and_explicit_shift_remain_provenance():
         owner.append_header(semantic.semantic_opcode_id("ldr"), semantic.FORM_CANONICAL, start, 5)
         assert owner.operand(0, 4).fourth == 1
         owner.tokens.set(1 * 4 + 2, 4)
+        owner.verify_each = True
         with pytest.raises(EncodeError):
             owner.require_header(0)
+        owner.verify_each = False
         owner.reset()
         owner.append_token(semantic.TOKEN_ADDRESS, semantic.ADDRESS_OFFSET, 2)
         owner.append_token(semantic.TOKEN_REGISTER, semantic.semantic_register_id("w0"))

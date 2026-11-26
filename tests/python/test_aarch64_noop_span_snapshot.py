@@ -23,6 +23,13 @@ from tests.python.owned_regression_support import (
 from tests.python.test_aarch64_typed_peepholes import CASES, A, I, R, _fixture, _ids
 
 
+@pytest.fixture
+def verify_each(monkeypatch):
+    """Arenas changed after append are caught on read only under the
+    debug switch; the default validates each instruction once."""
+    monkeypatch.setenv("PCC_DEBUG_AARCH64_VERIFY_EACH", "1")
+
+
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "pcc/backend/self_backend_aarch64_typed_peepholes.py"
 
@@ -221,6 +228,7 @@ def _nop_owner(count, shape="plain"):
 
 
 @pytest.mark.parametrize("opcode", ["stur", "sturb", "ldur", "ldurb"])
+@pytest.mark.usefixtures("verify_each")
 def test_nonmatching_stack_opcode_validates_without_operand_snapshot(monkeypatch, opcode):
     owner = AArch64EmissionFragments(capture_semantics=True)
     semantics = owner.semantics
@@ -268,6 +276,7 @@ def test_nonmatching_stack_opcode_validates_without_operand_snapshot(monkeypatch
 @pytest.mark.parametrize("opcode,register", [
     ("stur", "x9"), ("sturb", "w9"), ("ldur", "x9"), ("ldurb", "w9"),
 ])
+@pytest.mark.usefixtures("verify_each")
 def test_matching_stack_opcode_keeps_fresh_operand_snapshot(monkeypatch, opcode, register):
     owner = AArch64EmissionFragments(capture_semantics=True)
     semantics = owner.semantics

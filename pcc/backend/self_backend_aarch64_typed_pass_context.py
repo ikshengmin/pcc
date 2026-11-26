@@ -20,6 +20,9 @@ class TypedPassContext:
     def __init__(self, fragments, semantics):
         self.fragments = fragments
         self.semantics = semantics
+        # Producers validate every event and instruction when appending it;
+        # the per-read structure checks below run under the debug switch.
+        self.verify_each = bool(getattr(semantics, "verify_each", True))
         semantics.require_complete(fragments.records, len(fragments.symbol_names))
         self.replacements = fragments.new_fragment()
 
@@ -27,6 +30,8 @@ class TypedPassContext:
         if record_id < 0 or record_id >= len(self.fragments.records) // 4:
             raise EncodeError("AArch64 typed pass record ID is invalid")
         record = self.fragments.records.get4_unchecked(record_id)
+        if not self.verify_each:
+            return record
         if record.second == EMISSION_RECORD_LABEL:
             self.symbol(record.first)
             if record.third != 0 or record.fourth != -1:

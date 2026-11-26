@@ -17,6 +17,13 @@ from pcc.backend.arm64_encode_producer import encode_producer_indirect_branch
 from pcc.backend.self_backend_value_arena import CompilerInt4
 
 
+@pytest.fixture
+def verify_each(monkeypatch):
+    """Arenas changed after append are caught on read only under the
+    debug switch; the default validates each instruction once."""
+    monkeypatch.setenv("PCC_DEBUG_AARCH64_VERIFY_EACH", "1")
+
+
 def R(name):
     return CompilerInt4(sem.TOKEN_REGISTER, sem.semantic_register_id(name), 0, 0)
 
@@ -368,6 +375,7 @@ def test_operand_snapshot_validates_once_per_call(monkeypatch):
     "opcode", "form", "span_start", "span_count", "short_headers",
     "short_tokens", "register", "address_base", "address_span", "closed",
 ])
+@pytest.mark.usefixtures("verify_each")
 def test_operand_snapshot_revalidates_changed_provenance(corruption):
     f, s, source, _ = _fixture([I("stur", R("x9"), A())])
     p = typed._Pass(f, s, source)

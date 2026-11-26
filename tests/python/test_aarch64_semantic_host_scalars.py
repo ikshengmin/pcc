@@ -4,6 +4,14 @@ from pcc.backend import self_backend_aarch64_semantics as sem
 from pcc.backend import self_backend_value_arena as values
 from pcc.backend.arm64_encode import EncodeError
 
+
+@pytest.fixture
+def verify_each(monkeypatch):
+    """Arenas changed after append are caught on read only under the
+    debug switch; the default validates each instruction once."""
+    monkeypatch.setenv("PCC_DEBUG_AARCH64_VERIFY_EACH", "1")
+
+
 REG = (sem.TOKEN_REGISTER, 1, 0, 0)
 IMM = (sem.TOKEN_IMMEDIATE, 8, 10, sem.IMMEDIATE_HASH)
 SHIFT = (sem.TOKEN_SHIFT, 0, 2, 1)
@@ -181,6 +189,7 @@ def test_live_child_read_can_reject_after_valid_base_and_offset():
         obj.close()
 
 
+@pytest.mark.usefixtures("verify_each")
 def test_require_header_reduces_only_temporary_value_construction(monkeypatch):
     obj = owner([ADDRESS, REG, REG, SHIFT])
     opcode = sem.semantic_opcode_id('ldr')
