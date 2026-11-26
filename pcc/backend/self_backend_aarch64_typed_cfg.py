@@ -358,8 +358,15 @@ def drop_loop_separator_nops(fragments, semantics, span):
             prior = raw.get4_unchecked(previous)
             if prior.second >= 0 and not _is_call(ctx.opcode(previous)):
                 following = index + 1
-                while following < count and raw.get4_unchecked(records[following]).second == EMISSION_RECORD_EMPTY:
-                    following += 1
+                scanning = following < count
+                while scanning:
+                    # A lane is read from a named record, never from the call.
+                    following_code = raw.get4_unchecked(records[following])
+                    if following_code.second == EMISSION_RECORD_EMPTY:
+                        following += 1
+                        scanning = following < count
+                    else:
+                        scanning = False
                 if following < count:
                     after = raw.get4_unchecked(records[following])
                     if after.second == EMISSION_RECORD_LABEL:

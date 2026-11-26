@@ -191,6 +191,8 @@ from .self_backend_aarch64_fragments import (
 )
 from .self_backend_aarch64_semantics import (
     TOKEN_SYMBOL, append_semantic_instruction, append_semantic_event,
+    append_copied_semantic_instruction, AArch64InstructionSemantics,
+    FORM_CANONICAL, OPCODE_NAMES,
 )
 from .self_backend_aarch64_darwin_tlv import elide_dead_tlv_resolver_saves
 
@@ -385,10 +387,72 @@ class _NativeAArch64Emission:
                 self.metadata_lines.append(line)
                 self._capture_event(CompilerInt4(EMISSION_DIRECTIVE_METADATA, EMISSION_RECORD_DIRECTIVE, index, -1))
 
+    def _capture_direct_host(self, line: str) -> bool:
+        """Copy the next direct instruction as integers on the CPython host.
+
+        The isel appended it to the direct owner through append_header, which
+        validated its operands, so the copy re-interns symbol IDs and appends
+        the same integers without per-operand records or a second operand
+        walk (append_copied_semantic_instruction). False leaves every other
+        case, PCC_DEBUG_AARCH64_VERIFY_EACH and every error to the checked
+        copy in _capture_line.
+        """
+        source = self.direct_semantics
+        fragments = self.fragments
+        target = fragments.semantics
+        records = self.direct_records
+        if (type(source) is not AArch64InstructionSemantics
+                or type(target) is not AArch64InstructionSemantics
+                or source.verify_each or target.verify_each or source.closed
+                or records._address != 0 or source.headers._address != 0
+                or source.tokens._address != 0 or type(records._values) is not list
+                or type(source.headers._values) is not list or type(source.tokens._values) is not list):
+            return False
+        index = self.direct_index
+        offset = index * 4
+        if (offset + 4 > records._length or offset + 4 > source.headers._length
+                or source.headers._length % 4 or source.tokens._length % 4):
+            return False
+        values = records._values
+        word, family, kind, symbol_id = values[offset], values[offset + 1], values[offset + 2], values[offset + 3]
+        headers = source.headers._values
+        opcode, form, first_token, count = headers[offset], headers[offset + 1], headers[offset + 2], headers[offset + 3]
+        if (opcode <= 0 or opcode >= len(OPCODE_NAMES) or form != FORM_CANONICAL
+                or first_token < 0 or count < 0 or (first_token + count) * 4 > source.tokens._length):
+            return False
+        if line == DIRECT_INDIRECT_CALL_INSTRUCTION_PLACEHOLDER:
+            _require_indirect_call_record(CompilerInt4(word, family, kind, symbol_id))
+        if (line == DIRECT_CALL_INSTRUCTION_PLACEHOLDER) != (family == EMITTED_INSTRUCTION_CALL):
+            raise BackendUnavailable("direct call marker does not match record family")
+        if family == EMITTED_INSTRUCTION_CALL:
+            word, kind = 0x94000000, STRUCTURED_FIXUP_CALL
+        direct_symbols = self.direct_symbols
+        if kind != 0:
+            if symbol_id < 0 or symbol_id >= len(direct_symbols):
+                raise BackendUnavailable("direct instruction relocation symbol is invalid")
+            symbol_id = intern_emitted_symbol(direct_symbols[symbol_id], fragments.symbol_ids, fragments.symbol_names)
+        tokens = source.tokens._values[first_token * 4:(first_token + count) * 4]
+        position = 0
+        while position < len(tokens):
+            if tokens[position] == TOKEN_SYMBOL:
+                symbol = tokens[position + 1]
+                if symbol < 0 or symbol >= len(direct_symbols):
+                    raise BackendUnavailable("direct semantic symbol is invalid")
+                tokens[position + 1] = intern_emitted_symbol(direct_symbols[symbol], fragments.symbol_ids, fragments.symbol_names)
+            position += 4
+        append_copied_semantic_instruction(
+            fragments, target, self.module_span,
+            CompilerInt4(word, family, kind, symbol_id), opcode, form, tokens,
+        )
+        self.direct_index += 1
+        return True
+
     def _capture_line(self, line: str) -> None:
         if line in (DIRECT_INSTRUCTION_PLACEHOLDER, DIRECT_CALL_INSTRUCTION_PLACEHOLDER, DIRECT_INDIRECT_CALL_INSTRUCTION_PLACEHOLDER):
             if self.direct_semantics is None or self.fragments.semantics is None:
                 raise BackendUnavailable("optimized instruction provenance is missing")
+            if self._capture_direct_host(line):
+                return
             if self.direct_index * 4 >= len(self.direct_records):
                 raise BackendUnavailable("direct instruction transport is truncated")
             record: CompilerInt4 = self.direct_records.get4_unchecked(self.direct_index)

@@ -614,6 +614,58 @@ def append_semantic_instruction(
     return old_records // 4
 
 
+def append_copied_semantic_instruction(
+    fragments, semantics: AArch64InstructionSemantics, destination: CompilerInt2,
+    encoded: CompilerInt4, opcode_id: int, form_flags: int,
+    token_values: list[int],
+) -> int:
+    """Append an instruction copied from another validated semantics owner.
+
+    TOKEN_VALUES holds four integers per operand, exactly as the source
+    owner's append_header validated them, apart from symbol IDs the caller
+    re-interned into FRAGMENTS. The encoded record, symbol ranges and header
+    are checked as in append_semantic_instruction; the operand grammar is
+    not walked again (PCC_DEBUG_AARCH64_VERIFY_EACH callers use
+    append_semantic_instruction instead).
+    """
+    fragments._require_open()
+    fragments.spans.length(destination)
+    old_records = fragments.records._length
+    old_headers = semantics.headers._length
+    old_tokens = semantics.tokens._length
+    if semantics.closed:
+        raise RuntimeError("AArch64 instruction semantics are closed")
+    if old_records % 4 or old_headers != old_records or old_tokens % 4 or len(token_values) % 4:
+        raise EncodeError("AArch64 provenance record IDs do not match encoded records")
+    if encoded.first < 0 or encoded.first > 0xFFFFFFFF or encoded.second not in (1, 2, 3, 4):
+        raise EncodeError("AArch64 semantic replacement is not an encoded instruction")
+    if encoded.third not in (0, -1, -19, -26, 1, 2, 3, 4, 5):
+        raise EncodeError("AArch64 semantic replacement relocation is invalid")
+    if encoded.third < 0:
+        _validate_text_fixup_word(encoded.first, encoded.third)
+    if encoded.third != 0 and (encoded.fourth < 0 or encoded.fourth >= len(fragments.symbol_names)):
+        raise EncodeError("AArch64 semantic replacement symbol ID is invalid")
+    if encoded.third == 0 and encoded.fourth != -1:
+        raise EncodeError("AArch64 semantic replacement has an unexpected symbol")
+    if opcode_id <= 0 or opcode_id >= len(OPCODE_NAMES) or form_flags != FORM_CANONICAL:
+        raise EncodeError("AArch64 instruction provenance is unproven")
+    position = 0
+    while position < len(token_values):
+        if token_values[position] == TOKEN_SYMBOL and token_values[position + 1] >= len(fragments.symbol_names):
+            raise EncodeError("AArch64 semantic operand symbol ID is invalid")
+        position += 4
+    try:
+        semantics.tokens.extend_list(token_values)
+        semantics.headers.append4(opcode_id, form_flags, old_tokens // 4, len(token_values) // 4)
+        fragments._append_record(destination, encoded)
+    except Exception:
+        fragments.records.truncate(old_records)
+        semantics.headers.truncate(old_headers)
+        semantics.tokens.truncate(old_tokens)
+        raise
+    return old_records // 4
+
+
 def append_semantic_event(
     fragments, semantics: AArch64InstructionSemantics, destination: CompilerInt2,
     event: CompilerInt4,
