@@ -446,7 +446,7 @@ def pcc_errno_message_into(value: i64, output, capacity: i64) -> i64:
     # intentionally after pcc_errno_get() in PyErr_SetFromErrno.
     host_strerror_r = darwin_libsystem_symbol(cstr("strerror_r"))
     if not ptr_is_null(host_strerror_r):
-        result: i64 = call_i32_i32_ptr_i64(host_strerror_r, value, output, capacity)
+        result: i64 = call_i32_i32_ptr_i64(host_strerror_r, value, output, capacity, "darwin")
         if result == 0:
             store_i8(output, capacity - 1, 0)
             return 0

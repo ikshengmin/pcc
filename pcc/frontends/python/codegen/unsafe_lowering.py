@@ -6170,7 +6170,11 @@ class UnsafeIntrinsicMixin:
                 name=self._fresh("unsafe.call.i32.deflate.init2"),
             )
         if intrinsic == "call_i32_i32_ptr_i64":
-            self._unsafe_expect_arity(intrinsic, expr, 4)
+            # A target-scoped foreign callback is not available elsewhere.
+            # Do not evaluate or emit its callee/operands on a mismatch;
+            # an ordinary unguarded NULL call retains the backend trap.
+            if not self._unsafe_dynamic_library_target_matches(intrinsic, expr, 4):
+                return ir.Constant(_I64, -1)
             fnty = ir.FunctionType(_I32, [_I32, _CSTR, _I64])
             callee = self.builder.bitcast(
                 self._unsafe_address_arg(expr.args[0]),

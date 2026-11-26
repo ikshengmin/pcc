@@ -1165,8 +1165,31 @@ in the relevant section or issue and removes the entry.
    1.813s/50298880 B. No coverage/workflow/resource code change.
    Current same-run Mac source execution remains UNRUN; no CI green.
 
+   Freestanding errno target-honest callback (2026-11-26, frozen
+   e1ac8f39): hosted artifact 15145043938 self raw closure
+   pcc_null_callee_trap reproduced by owned ELF/native test; old
+   8 FAIL/3 PASS guard 5.650s/116920320B. Darwin-only library symbol
+   returns NULL on non-Darwin; existing general raw NULL trap remains
+   fatal. Optional supported literal target applies only to exact
+   int32(ptr/int32/ptr/uint64) raw callback; nonmatch -1 before
+   any operands, same/unguarded unchanged, rejects invalid literal,
+   dynamic, empty, arity and kwargs. Actual Linux owned ELF no
+   undefined; GCC C semantic harness confirms independent libc/PCC
+   errno and three thread TLS addresses, all 134 glibc strerror
+   messages and native matched/unguarded signed32/uint64 ABI, guarded
+   mismatch. Darwin cross owned Mach-O named callbacks and exact
+   legitimate TLV descriptor bootstrap relocation; true Darwin
+   execution UNRUN. Actual 13 PASS/1 LLVM reference local UNRUN
+   (clang absent); unchanged 90s/1GiB guard COMPLETE 3.089s/90554368B.
+   Hosted LLVM reference tls_get_addr unresolved; exact assertion
+   unchanged. Adjacent general trap/unsafe target tests 8 PASS,
+   guard 1.540s/83902464B. Exact changed unsafe_lowering 625-source
+   contextual fallback 0, guard 600s/1.5GiB COMPLETE
+   74.619s/772186112B. No production toolchain, resource/gating or
+   general trap weakening. Latest integrated hosted CI UNRUN.
+
    Claims:
-   - Freestanding errno target-honest raw call closure and TLS oracle: Codex, Linux, 2026-11-26T20:21Z, area freestanding-errno-target-call
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and

@@ -1013,8 +1013,15 @@ def call_i32_ptr_i32_i32_i32_i32_i32_ptr_i32(
     _trap("call_i32_ptr_i32_i32_i32_i32_i32_ptr_i32")
 
 
-def call_i32_i32_ptr_i64(fn: Any, arg0: int, arg1: Any, arg2: int) -> int:
-    """Call ``int32_t (*)(int32_t, void *, uint64_t)`` exactly."""
+def call_i32_i32_ptr_i64(
+    fn: Any, arg0: int, arg1: Any, arg2: int, target_platform: str = ""
+) -> int:
+    """Call ``int32_t (*)(int32_t, void *, uint64_t)`` exactly.
+
+    An optional supported literal target restricts this foreign callback
+    to that platform. A compile-time mismatch returns -1 without evaluating
+    or emitting the callback or its operands. An unguarded call is unchanged.
+    """
     _trap("call_i32_i32_ptr_i64")
 
 
