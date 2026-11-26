@@ -979,8 +979,21 @@ in the relevant section or issue and removes the entry.
    unchanged production source, replacing the old stale model rather
    than removing the assertion. Prior native 8 PASS unaffected.
 
+   Imported constructor integer ABI (Linux owned ELF, 2026-11-26):
+   hosted artifact15145043938 six exact old pinned-slot assertions
+   reproduced locally (6 FAIL/4 PASS). The sole collector uses the
+   ordinary owned result slot. Test now proves concrete constructor
+   result local registered before allocation, allocation published to
+   that slot, receiver reloaded into initializer, exception cleanup,
+   local leave and same-slot take, shared return-root store/register,
+   reload/clear/retire and actual returned SSA. All original ABI
+   define/declare/call physical ptr/i64 lane checks, owned ELF emits
+   and no CPython retained, plus absence of retired pin. 10/10 PASS
+   on unchanged production source (3.73s); no hosted acceptance
+   inferred.
+
    Claims:
-   - Imported integer constructor ABI owned-result model after pin removal: Codex, Linux owned ELF, 2026-11-26T19:30Z, area ci-imported-constructor-abi
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and

@@ -52,7 +52,46 @@ def test_imported_constructor_matches_provider_int_abi(tmp_path, monkeypatch, va
         assert len(matches) == 1, (prefix, symbol)
         lane = matches[0].split(",")[1].strip().split()[0]
         assert lane == ("i64" if machine_provider else "ptr")
-    assert "@pcc_gc_take_pinned_slot(" in calling
+    # Follow the concrete constructor result, not an unrelated take-slot
+    # declaration or another function's metadata result. The sole collector
+    # consumes this ordinary owner without the retired pin protocol.
+    main = re.search(r"define[^\n]*@user_entry_main\([^\n]*\{\n(.*?)\n\}", calling, re.S)
+    assert main is not None
+    body = main.group(1)
+    registered = re.search(
+        r"call[^\n]*@pcc_gc_frame_enter_lifo_local\(ptr [^,]+, ptr "
+        r"(%native\.constructor\.result\.operand\.[^)]+)\)", body)
+    assert registered is not None
+    slot = re.escape(registered.group(1))
+    allocated = re.search(r"(%[^ ]+) = call[^\n]*@py_instance_new\([^\n]+\)", body)
+    assert allocated is not None
+    published = re.search(r"store ptr " + re.escape(allocated.group(1)) + r", ptr " + slot + r"$", body, re.M)
+    receiver = re.search(r"(%native\.constructor\.receiver\.[^ ]+) = load ptr, ptr " + slot + r"$", body, re.M)
+    assert published is not None and receiver is not None
+    initializer = re.search(r"call[^\n]*@" + re.escape(symbol) + r"\(ptr " + re.escape(receiver.group(1)) + r",", body)
+    taken = re.search(r"(%[^ ]+) = call[^\n]*@pcc_gc_take_slot\(ptr " + slot + r"\)", body)
+    assert initializer is not None and taken is not None
+    assert registered.start() < allocated.start() < published.start() < receiver.start() < initializer.start() < taken.start()
+    # A rejected/taken result must not leak its registered local or lose
+    # ownership between the local take and the shared return root.
+    assert re.search(r"call[^\n]*@py_cleanup_two_roots_preserving_exception\(ptr " + slot + r",", body)
+    assert re.search(r"@pcc_gc_frame_leave_lifo_local\(ptr " + slot + r"\)\s+%[^ ]+ = call[^\n]*@pcc_gc_take_slot\(ptr " + slot + r"\)", body)
+    returned = re.search(
+        r"call[^\n]*@pcc_gc_store_return_root\(ptr (%ret\.shared\.[^,]+), ptr " +
+        re.escape(taken.group(1)) + r"\)", body)
+    assert returned is not None and taken.end() < returned.start()
+    ret_slot = re.escape(returned.group(1))
+    return_frame = re.search(
+        r"call[^\n]*@pcc_gc_frame_enter_lifo_local\(ptr [^,]+, ptr " + ret_slot + r"\)",
+        body[returned.end():])
+    assert return_frame is not None
+    tail = re.search(
+        r"(%[^ ]+) = call[^\n]*@pcc_gc_load_ptr\(ptr null, ptr " + ret_slot + r"\)\s+"
+        r"call[^\n]*@pcc_gc_store_return_root\(ptr " + ret_slot + r", ptr null\)\s+"
+        r"call[^\n]*@pcc_gc_frame_leave_lifo_local\(ptr " + ret_slot + r"\)", body)
+    assert tail is not None and returned.end() + return_frame.end() < tail.start()
+    assert re.search(r"ret ptr " + re.escape(tail.group(1)) + r"$", body, re.M)
+    assert "@pcc_gc_take_pinned_slot(" not in calling
     assert not re.search(r"\bcall [^\n]*@py_cpy_", calling)
 
 
