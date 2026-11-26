@@ -811,3 +811,38 @@ def test_compile_profile_rows_group_roles_owners_and_inclusive_time():
     inclusive = dict(rows["inclusive"])
     assert inclusive["run [pcc/frontends/python/worker.py]"] == 60
     assert inclusive["main [pcc/driver/cli.py]"] == 40
+
+
+def test_ir_shapes_rank_functions_and_repeated_blocks():
+    release = ("x.owned.release.{n}:\n  store i1 0, ptr %f\n"
+               "  call void (ptr, ptr) @pcc_gc_store_root(ptr %s, ptr null)\n  br label %c{n}\n")
+    body = "".join(release.format(n=n) for n in range(30))
+    ir = ("define ptr @big(ptr %a) {\nentry:\n  ret ptr %a\n" + body + "}\n"
+          "define i64 @small() {\nentry:\n  %v = add i64 1, 2\n  ret i64 %v\n}\n")
+    rows = PERF.ir_shape_rows(ir.splitlines(keepends=True))
+    assert [function[0] for function in rows["functions"]] == ["big", "small"]
+    assert rows["functions"][0][2] == 31
+    assert rows["functions"][0][3].most_common(1)[0][0] == "x.owned.release.#"
+    shape, (count, lines, families, owners) = rows["shapes"][0]
+    assert shape == ("store", "call pcc_gc_store_root", "br") and count == 30 and lines == 120
+    assert owners.most_common(1)[0][0] == "big"
+
+
+def test_linked_worktree_uses_the_main_checkout_environment(tmp_path):
+    main = tmp_path / "main"
+    main.mkdir()
+    subprocess.run(["git", "init", "-q", str(main)], check=True)
+    subprocess.run(["git", "-C", str(main), "-c", "user.email=t@t", "-c", "user.name=t",
+                    "commit", "-q", "--allow-empty", "-m", "base"], check=True)
+    linked = tmp_path / "linked"
+    subprocess.run(["git", "-C", str(main), "worktree", "add", "-q", "--detach", str(linked)],
+                   check=True)
+    original = PERF.REPO_ROOT
+    try:
+        PERF.REPO_ROOT = linked
+        assert PERF.main_checkout().resolve() == main.resolve()
+        assert PERF.project_environment().resolve() == (main / ".venv").resolve()
+        PERF.REPO_ROOT = main
+        assert PERF.main_checkout().resolve() == main.resolve()
+    finally:
+        PERF.REPO_ROOT = original

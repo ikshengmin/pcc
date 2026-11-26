@@ -33,7 +33,13 @@
                         runtime, empty caches; wall, tree CPU and peak RSS,
                         CPU by process role, by owner package and by function
                         (self and inclusive), from CPU-time (SIGPROF) samples
-                        of every Python process of the build
+                        of every Python process of the build; --program
+                        stage1 profiles the arm's bootstrap --stage 1, and
+                        --keep-ir keeps the backend's input IR for `ir`
+    ir PATH...          the largest functions and the block shapes repeated
+                        most across emitted IR (.ll files or directories):
+                        where code generation copies one sequence into
+                        every exit
     profile-preflight  test Linux kernel sample transport on this tool's thread
 
 Arms, the object cache and the ledger live outside the repository, under
@@ -98,6 +104,8 @@ SEALED = (
     "pyproject.toml", "uv.lock", "hatch_build.py", ".python-version",
 )
 PROGRAMS = ("sync_payload", "native_stats")
+# `compile --program stage1` profiles the arm's own `bootstrap.py --stage 1`.
+STAGE1 = "stage1"
 # pcc has one collector; the tuple keeps the per-collector report shape.
 COLLECTORS = (0,)
 WORKERS = (1, 4)
@@ -297,11 +305,34 @@ def _gateway_package() -> Path:
     """The pcc_gateway package the handler program imports: the sibling
     checkout, unless PCC_GATEWAY_PACKAGE names another."""
     configured = os.environ.get("PCC_GATEWAY_PACKAGE", "")
-    package = Path(configured) if configured else REPO_ROOT.parent / "pcc-gateway" / "pcc_gateway"
+    package = Path(configured) if configured else main_checkout().parent / "pcc-gateway" / "pcc_gateway"
     if not (package / "structured.py").is_file():
         raise SystemExit(
             f"pcc_gateway package not found at {package}; set PCC_GATEWAY_PACKAGE")
     return package
+
+
+def main_checkout() -> Path:
+    """The repository's main checkout: REPO_ROOT, or for a linked worktree
+    the checkout that owns its common git directory. The project
+    environment (.venv) and the sibling pcc-gateway live beside it."""
+    try:
+        common = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "rev-parse", "--path-format=absolute",
+             "--git-common-dir"],
+            capture_output=True, text=True, timeout=30, check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return REPO_ROOT
+    if not common:
+        return REPO_ROOT
+    return Path(common).parent
+
+
+def project_environment() -> Path:
+    """The environment uv runs arm builds in: the main checkout's .venv,
+    so a linked worktree neither creates nor syncs an empty one."""
+    return main_checkout() / ".venv"
 
 
 def performance_lock():
@@ -336,7 +367,7 @@ def build(name: str, timeout: int, max_tree_rss: int,
     from scripts import run_process_tree_sample
 
     environment = dict(
-        UV_PROJECT_ENVIRONMENT=str(REPO_ROOT / ".venv"), UV_NO_SYNC="1",
+        UV_PROJECT_ENVIRONMENT=str(project_environment()), UV_NO_SYNC="1",
         PCC_THREADS="1", PCC_REFCOUNT_KIND="atomic", PCC_RUNTIME_BUILD_JOBS="6",
         PCC_NO_AUTO_PCC1="1", PYTHONPATH=str(arm / "source"),
         PCC_PERF_HOME=str(HOME),
@@ -649,6 +680,127 @@ def print_compile_profile(report: dict, rows: dict, limit: int) -> None:
             print(f"  {100.0 * count / total:5.1f}%  {frame}")
 
 
+_IR_LABEL = re.compile(r'^"?([^"\s:][^":]*)"?:')
+_IR_CALLEE = re.compile(r"call [^@]*@\"?([A-Za-z0-9_.$]+)")
+_IR_OPCODE = re.compile(r"(?:%\S+ = )?([a-z_]+)")
+
+
+def _ir_label_family(label: str) -> str:
+    """A block label without its numbering: the code generator's name for it."""
+    return re.sub(r"[0-9]+", "#", label).replace("#.#", "#")
+
+
+def ir_shape_rows(lines) -> dict:
+    """Functions by IR lines and block shapes repeated across a module set.
+
+    A block's shape is its instruction sequence with names removed (opcodes,
+    and callees for calls). A code generator that copies one cleanup into
+    every exit shows up as one shape repeated thousands of times, and as a
+    function whose lines are dominated by one label family.
+    """
+    functions: list = []
+    shapes: dict = {}
+    current = None
+    block_family = None
+    block_shape: list = []
+    block_lines = 0
+
+    def close_block():
+        if current is None or block_family is None:
+            return
+        key = tuple(block_shape)
+        entry = shapes.get(key)
+        if entry is None:
+            entry = shapes[key] = [0, 0, collections.Counter(), collections.Counter()]
+        entry[0] += 1
+        entry[1] += block_lines
+        entry[2][block_family] += 1
+        entry[3][current[0]] += block_lines
+        current[3][block_family] += block_lines
+
+    for raw in lines:
+        line = raw.rstrip("\n")
+        if line.startswith("define "):
+            at = line.find("@")
+            name = line[at + 1:line.find("(", at)].strip('"')
+            current = [name, 0, 0, collections.Counter()]
+            block_family = "entry-less"
+            block_shape = []
+            block_lines = 0
+            continue
+        if current is None:
+            continue
+        if line == "}":
+            close_block()
+            functions.append(current)
+            current = None
+            block_family = None
+            continue
+        current[1] += 1
+        if not line.startswith((" ", "\t")) and line.endswith(":"):
+            close_block()
+            match = _IR_LABEL.match(line)
+            block_family = _ir_label_family(match.group(1) if match else line)
+            block_shape = []
+            block_lines = 1
+            current[2] += 1
+            continue
+        stripped = line.strip()
+        if not stripped or stripped.startswith(";"):
+            continue
+        block_lines += 1
+        callee = _IR_CALLEE.search(stripped)
+        if callee is not None:
+            block_shape.append("call " + callee.group(1))
+        else:
+            opcode = _IR_OPCODE.match(stripped)
+            block_shape.append(opcode.group(1) if opcode else "?")
+    total = sum(function[1] for function in functions)
+    return {
+        "lines": total,
+        "functions": sorted(functions, key=lambda function: -function[1]),
+        "shapes": sorted(shapes.items(), key=lambda item: -item[1][1]),
+    }
+
+
+def print_ir_shapes(rows: dict, limit: int) -> None:
+    total = max(rows["lines"], 1)
+    print(f"{len(rows['functions'])} functions, {rows['lines']} IR lines")
+    print("\nlargest functions (share of all lines; their largest label families):")
+    for name, count, blocks, families in rows["functions"][:limit]:
+        top = ", ".join(f"{family} {100.0 * lines / count:.0f}%"
+                        for family, lines in families.most_common(3))
+        print(f"  {100.0 * count / total:5.1f}%  {count:8d} lines {blocks:6d} blocks  {name}")
+        print(f"          {top}")
+    print("\nblock shapes by total lines (repeated code a generator copies):")
+    for shape, (count, lines, families, owners) in rows["shapes"][:limit]:
+        text = " ".join(shape)
+        if len(text) > 110:
+            text = text[:107] + "..."
+        family = families.most_common(1)[0][0]
+        owner = owners.most_common(1)[0]
+        print(f"  {100.0 * lines / total:5.1f}%  {count:7d} x  {text}")
+        print(f"          e.g. {family}; most in {owner[0]} ({100.0 * owner[1] / lines:.0f}%)")
+
+
+def ir_shapes_of(paths: list[Path]) -> dict:
+    files: list[Path] = []
+    for path in paths:
+        if path.is_dir():
+            files.extend(sorted(path.rglob("*.ll")))
+        else:
+            files.append(path)
+    if not files:
+        raise SystemExit("no .ll files under " + ", ".join(str(path) for path in paths))
+
+    def lines():
+        for file in files:
+            with open(file, encoding="utf-8", errors="replace") as stream:
+                yield from stream
+
+    return ir_shape_rows(lines())
+
+
 def report_compile_run(run: Path, limit: int, callers: str, depth: int,
                        process_rank: int = 0) -> int:
     """Print a profiled compile's report from its run directory; with
@@ -692,7 +844,7 @@ def report_compile_run(run: Path, limit: int, callers: str, depth: int,
 
 def compile_profile(name: str, program: str, hz: int, limit: int, timeout: int,
                     max_tree_rss: int, preflight_reserve: int,
-                    settings: list[str] | None = None) -> int:
+                    settings: list[str] | None = None, keep_ir: bool = False) -> int:
     """Profile one cold compile of PROGRAM with arm NAME's sealed compiler;
     SETTINGS (``KEY=VALUE``) are compiler environment settings under test."""
     extra: dict[str, str] = {}
@@ -705,20 +857,24 @@ def compile_profile(name: str, program: str, hz: int, limit: int, timeout: int,
     build_report = _read_arm_json(arm / "build.json")
     if not build_report.get("complete"):
         raise SystemExit(f"arm {name} is not completely built; run `arm {name}` first")
-    if program not in PROGRAMS:
-        raise SystemExit(f"program must be one of {', '.join(PROGRAMS)}")
+    if program not in PROGRAMS + (STAGE1,):
+        raise SystemExit(f"program must be one of {', '.join(PROGRAMS + (STAGE1,))}")
     run = HOME / "compile" / f"{name}-{program}-{time.strftime('%Y%m%d-%H%M%S')}"
     samples = run / "samples"
     inject = run / "inject"
     for directory in (samples, inject, run / "object-cache", run / "ir-cache"):
         directory.mkdir(parents=True)
+    if keep_ir:
+        # The link step writes every module's backend input here.
+        (run / "ir").mkdir()
+        extra["PCC_DEBUG_SELF_IR_DUMP_DIR"] = str(run / "ir")
     (inject / "sitecustomize.py").write_text(_COMPILE_SAMPLER, encoding="utf-8")
     runtime = build_report["runtime"]
     sys.path.insert(0, str(REPO_ROOT))
     from scripts import run_process_tree_sample
 
     environment = dict(
-        UV_PROJECT_ENVIRONMENT=str(REPO_ROOT / ".venv"), UV_NO_SYNC="1",
+        UV_PROJECT_ENVIRONMENT=str(project_environment()), UV_NO_SYNC="1",
         PCC_THREADS="1", PCC_REFCOUNT_KIND="atomic", PCC_NO_AUTO_PCC1="1",
         PCC_TEST_NO_NATIVE_PROVISIONING="1",
         PYTHONPATH=str(inject) + os.pathsep + str(arm / "source"),
@@ -770,8 +926,16 @@ def compile_child(arm: Path, program: str, run: Path) -> int:
     runtime = Path(build_report["runtime"])
     assert hashlib.sha256(runtime.read_bytes()).hexdigest() == build_report["runtime_sha256"]
     started = time.monotonic()
-    compile_python(str(arm / "programs" / (program + ".py")), str(run / program),
-                   backend="self", ir_scaffold_mode="on", runtime_archive=str(runtime))
+    stage1_code = None
+    if program == STAGE1:
+        # The production Stage1 itself: the arm's own bootstrap builds pcc1
+        # from its sealed source and runs its stage smoke (compile and run a
+        # program with the new pcc1).
+        bootstrap = _load_module(source / "scripts" / "bootstrap.py")
+        stage1_code = bootstrap.main(["--stage", "1", "--out-dir", str(run / "stage1")])
+    else:
+        compile_python(str(arm / "programs" / (program + ".py")), str(run / program),
+                       backend="self", ir_scaffold_mode="on", runtime_archive=str(runtime))
     wall = time.monotonic() - started
     own = resource.getrusage(resource.RUSAGE_SELF)
     children = resource.getrusage(resource.RUSAGE_CHILDREN)
@@ -788,6 +952,14 @@ def compile_child(arm: Path, program: str, run: Path) -> int:
     # A setting that changes how the program is compiled is only a result
     # when the program still computes what CPython computes.
     failures = []
+    if stage1_code is not None:
+        if stage1_code != 0:
+            failures.append({"argv": ["bootstrap.py", "--stage", "1"], "code": stage1_code,
+                             "stdout": "", "stderr": "see build.stderr"})
+        report["smoke"] = "passed" if not failures else "FAILED"
+        report["smoke_failures"] = failures
+        (run / "compile.json").write_text(json.dumps(report, indent=1) + "\n")
+        return 0 if not failures else 1
     binary = run / program
     for argv, expected in smoke_cases(program, binary, arm / "programs"):
         done = subprocess.run(argv, capture_output=True, text=True, timeout=120,
@@ -1786,10 +1958,14 @@ def main(argv: list[str] | None = None) -> int:
     compile_parser.add_argument("--depth", type=int, default=2)
     compile_parser.add_argument("--process", type=int, default=0, metavar="RANK",
                                 help="report only the process with this CPU rank (1 = largest)")
+    compile_parser.add_argument("--keep-ir", action="store_true",
+                                help="keep the backend's input IR in the run directory (ir/)")
     compile_parser.add_argument("--env", dest="settings", action="append", default=[],
                                 metavar="PCC_NAME=VALUE",
                                 help="a compiler setting under test (repeatable)")
-    compile_parser.add_argument("--program", default="native_stats", choices=PROGRAMS)
+    compile_parser.add_argument("--program", default="native_stats", choices=PROGRAMS + (STAGE1,),
+                                help="a benchmark program, or stage1: the arm's own "
+                                     "bootstrap --stage 1 (pcc compiling pcc)")
     compile_parser.add_argument("--hz", type=int, default=1000,
                                 help="samples per second of each process's own CPU time")
     compile_parser.add_argument("--limit", type=int, default=25)
@@ -1870,6 +2046,11 @@ def main(argv: list[str] | None = None) -> int:
     locks.add_argument("--seconds", type=int, default=4)
     locks.add_argument("--primitive", default="")
 
+    ir_parser = commands.add_parser(
+        "ir", help="functions and repeated block shapes of emitted IR (files or directories)")
+    ir_parser.add_argument("paths", nargs="+", type=Path)
+    ir_parser.add_argument("--limit", type=int, default=25)
+
     layout = commands.add_parser("layout")
     layout.add_argument("a")
     layout.add_argument("b", nargs="?")
@@ -1925,7 +2106,8 @@ def main(argv: list[str] | None = None) -> int:
         if not args.name:
             raise SystemExit("compile needs an arm NAME or --from RUN")
         return compile_profile(args.name, args.program, args.hz, args.limit, args.timeout,
-                               args.max_tree_rss, args.preflight_reserve, args.settings)
+                               args.max_tree_rss, args.preflight_reserve, args.settings,
+                               args.keep_ir)
     if args.command == "_compile":
         return compile_child(args.arm, args.program, args.run)
     if args.command == "ab":
@@ -1986,6 +2168,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "locks":
         print_locks(args.name, args.gc, args.workers, args.seconds, args.primitive)
+        return 0
+    if args.command == "ir":
+        print_ir_shapes(ir_shapes_of(args.paths), args.limit)
         return 0
     if args.command == "layout":
         import pcc_hot_layout
