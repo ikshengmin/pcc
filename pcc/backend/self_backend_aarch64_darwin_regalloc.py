@@ -1466,9 +1466,14 @@ def _merge_alias_groups(
                 continue
             if not _groups_disjoint(group_list[left_root], group_list[right_root], span):
                 continue
-            keep, drop = (left_root, right_root) if left_root < right_root else (right_root, left_root)
+            keep = left_root
+            drop = right_root
+            if right_root < left_root:
+                keep = right_root
+                drop = left_root
             parent[drop] = keep
-            group_list[keep].extend(group_list.pop(drop))
+            moved = group_list.pop(drop)
+            group_list[keep].extend(moved)
 
     group_start: dict[int, int] = {}
     group_end: dict[int, int] = {}
@@ -2326,8 +2331,9 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
         )
         # All reload membership consumers are finished before alias grouping.
         reload_offsets.clear()
+        phi_pairs = _phi_coalescing_pairs(kernel)
         group_intervals, group_members = _merge_alias_groups(
-            pool_intervals, alias_pairs, _phi_coalescing_pairs(kernel)
+            pool_intervals, alias_pairs, phi_pairs
         )
         # A group that must survive a call keeps x19-x28 for all members.
         fixed_roots: dict[int, int] = {}
