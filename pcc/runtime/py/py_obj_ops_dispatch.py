@@ -105,9 +105,7 @@ pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int6
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
-pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
-pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
 py_clear_exception = extern("py_clear_exception", (), c_void)
@@ -433,8 +431,6 @@ pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_load_borrowed_ptr = extern("pcc_gc_load_borrowed_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_retain = extern("pcc_gc_retain", (c_ptr,), c_ptr)
 pcc_gc_release = extern("pcc_gc_release", (c_ptr,), c_void)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_diagnostics_runtime_log_event_code = extern(
     "pcc_diagnostics_runtime_log_event_code",
@@ -947,11 +943,10 @@ def py_obj_truthy_rooted(slot) -> int:
     """Truth of the object in one of the caller frame's own root slots.
 
     Nothing else rebinds that slot during the call, so it keeps the object
-    alive and the caller needs no retain, pin or lease of its own. A value
-    whose truth is a header or field read is decided here without a call:
-    nothing can move it meanwhile. Every other value may run __bool__ or
-    __len__ (and reach a safepoint), so it is retained and pinned around
-    py_obj_truthy exactly as the caller did before.
+    alive and the caller needs no retain or lease of its own. A value
+    whose truth is a header or field read is decided here without a call.
+    Every other value may run __bool__ or __len__ (and reach a safepoint),
+    so it is retained around py_obj_truthy exactly as the caller did before.
     """
     o = pcc_gc_load_borrowed_ptr(null(), slot)
     if ptr_is_null(o) != 0 or is_tagged_int(o) != 0:
@@ -975,9 +970,7 @@ def py_obj_truthy_rooted(slot) -> int:
     if tag == PY_TYPE_SET:
         return 1 if py_set_len(o) != 0 else 0
     held = pcc_gc_retain(o)
-    pcc_gc_pin(held)
     truth: int = py_obj_truthy(held)
-    pcc_gc_unpin(held)
     pcc_gc_release(held)
     return truth
 
@@ -1592,17 +1585,6 @@ def _bitwise_unsupported(op: int) -> int:
     return _bitwise_error(3, cstr("unsupported operand type(s) for ^"))
 
 
-def _bitwise_pin_result(slot: c_ptr) -> int:
-    pcc_py_gc_minor_graph_lock()
-    value = pcc_gc_load_ptr(null(), slot)
-    prior: int = 0
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        pcc_gc_pin(value)
-    pcc_py_gc_minor_graph_unlock()
-    return prior
-
-
 def _py_obj_bitwise_dispatch(a, b, op: int):
     # Incoming values are borrowed from live caller owners. Register their
     # updateable slots before any new owner frame or input-copy operation.
@@ -1641,14 +1623,13 @@ def _py_obj_bitwise_dispatch(a, b, op: int):
         _bitwise_clear(slots, tokens, _BITWISE_RESULT)
     py_clear_exception()
     py_tls_exc_swap_slot(error)
-    prior: int = _bitwise_pin_result(result)
     token = load_i64(tokens, _BITWISE_RESULT * C_POINTER_SIZE)
     if token >= 0 and pcc_gc_foreign_lease_release(result, token) != 0:
         pcc_platform_abort()
         return null()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(result, prior)
+    return pcc_gc_take_slot(result)
 
 
 @c_abi_export("py_obj_and")
@@ -2999,28 +2980,20 @@ def _py_lock_method_bound(o, which: int):
     # typed lock, the sibling of the `__enter__`/`__exit__` case below:
     # `freeze()` walks `self._locks` and calls `acquire()` on each element,
     # which the static lowering cannot type.
-    # Every allocation below may run a moving collection: the receiver, the
-    # captures and the method stay pinned until the method owns them, the
-    # protocol of _py_sync_method_bound. An unpinned fresh captures tuple
-    # moved under py_func_new_bound left the method holding its old address.
-    prior: int = _py_sync_pin(o)
+    # Every allocation below may run a collection; the one collector never
+    # moves the receiver, the captures or the method meanwhile.
     captures = py_tuple_new(1)
     if ptr_is_null(captures) != 0:
-        _py_sync_unpin(o, prior)
         return null()
-    pcc_gc_pin(captures)
     py_tuple_set_item(captures, 0, o)
     if which == 0:
         wrapped = _py_sync_signature_captures(
             captures, 2, cstr("blocking"), 8, global_load_ptr("py_True"),
             cstr("timeout"), 7, py_int_from_i64(-1),
         )
-        pcc_gc_pin(wrapped)
-        pcc_gc_unpin(captures)
         py_decref(captures)
         captures = wrapped
         if ptr_is_null(captures):
-            _py_sync_unpin(o, prior)
             return null()
     if which == 2:
         fn = py_func_new_bound(_py_lock_locked_entry, captures, cstr("locked"), o)
@@ -3028,11 +3001,7 @@ def _py_lock_method_bound(o, which: int):
         fn = py_func_new_bound(_py_lock_release_entry, captures, cstr("release"), o)
     else:
         fn = py_func_new_bound(_py_lock_acquire_entry, captures, cstr("acquire"), o)
-    pcc_gc_pin(fn)
-    pcc_gc_unpin(captures)
     py_decref(captures)
-    _py_sync_unpin(o, prior)
-    pcc_gc_unpin(fn)
     return fn
 
 
@@ -3140,27 +3109,11 @@ def _py_sync_captured(captures):
     return py_tuple_get(captures, 0)
 
 
-def _py_sync_pin(o) -> int:
-    prior: int = 64
-    if ptr_is_null(o) == 0 and is_tagged_int(o) == 0:
-        prior = load_i32(o, 12) & 64
-        if prior == 0:
-            pcc_gc_pin(o)
-    return prior
-
-
-def _py_sync_unpin(o, prior: int) -> None:
-    if prior == 0:
-        pcc_gc_unpin(o)
-
-
 def _py_sync_call_captured(captures, op: int):
     o = _py_sync_captured(captures)
     if ptr_is_null(o):
         return null()
-    prior: int = _py_sync_pin(o)
     result = _py_sync_invoke(o, op)
-    _py_sync_unpin(o, prior)
     # tuple_get owns its result; __enter__ transfers that reference, other
     # methods consume it. Do not leak a receiver for every dynamic call.
     if ptr_eq(result, o) == 0:
@@ -3228,16 +3181,12 @@ def _py_sync_wait_entry(captures, args):
     o = _py_sync_captured(captures)
     if ptr_is_null(o):
         return null()
-    prior: int = _py_sync_pin(o)
     timeout = py_tuple_get(args, 0)
-    timeout_prior: int = _py_sync_pin(timeout)
     if load_i32(o, 8) == PY_TYPE_THREAD_CONDITION:
         result = _py_sync_rc_bool(py_threading_condition_wait_timeout(o, timeout))
     else:
         result = _py_sync_rc_bool(py_threading_event_wait_args(o, timeout))
-    _py_sync_unpin(timeout, timeout_prior)
     py_decref(timeout)
-    _py_sync_unpin(o, prior)
     py_decref(o)
     return result
 
@@ -3347,12 +3296,9 @@ def _py_sync_method_bound(o, tag: int, name):
     op: int = _py_sync_method_op(tag, name)
     if op < 0:
         return null()
-    prior: int = _py_sync_pin(o)
     captures = py_tuple_new(1)
     if ptr_is_null(captures) != 0:
-        _py_sync_unpin(o, prior)
         return null()
-    pcc_gc_pin(captures)
     py_tuple_set_item(captures, 0, o)
     # Methods with arguments bind them through a native signature, as
     # CPython's positional-or-keyword parameters with their defaults.
@@ -3376,12 +3322,9 @@ def _py_sync_method_bound(o, tag: int, name):
         )
         wrap = 1
     if wrap != 0:
-        pcc_gc_pin(wrapped)
-        pcc_gc_unpin(captures)
         py_decref(captures)
         captures = wrapped
         if ptr_is_null(captures):
-            _py_sync_unpin(o, prior)
             return null()
     # Each entry is named directly in the extern call: that is what lowers a
     # function to its code address (as a pcc argument it becomes an object).
@@ -3409,11 +3352,7 @@ def _py_sync_method_bound(o, tag: int, name):
         fn = py_func_new_bound(_py_sync_notify_all_entry, captures, cstr("notify_all"), o)
     else:
         fn = py_func_new_bound(_py_sync_notify_entry, captures, cstr("notify"), o)
-    pcc_gc_pin(fn)
-    pcc_gc_unpin(captures)
     py_decref(captures)
-    _py_sync_unpin(o, prior)
-    pcc_gc_unpin(fn)
     return fn
 
 
@@ -3424,23 +3363,15 @@ def _py_lock_context_bound(o, want_exit: int):
     # (`self._locks[shard]`) reaches the generic attribute path -- which had
     # no `__enter__`, so a self-hosted parallel link died with
     # "'object' object has no attribute '__enter__'".
-    # Pinned across the allocations exactly as in _py_lock_method_bound.
-    prior: int = _py_sync_pin(o)
     captures = py_tuple_new(1)
     if ptr_is_null(captures) != 0:
-        _py_sync_unpin(o, prior)
         return null()
-    pcc_gc_pin(captures)
     py_tuple_set_item(captures, 0, o)
     if want_exit != 0:
         fn = py_func_new_bound(_py_lock_exit_entry, captures, cstr("__exit__"), o)
     else:
         fn = py_func_new_bound(_py_lock_enter_entry, captures, cstr("__enter__"), o)
-    pcc_gc_pin(fn)
-    pcc_gc_unpin(captures)
     py_decref(captures)
-    _py_sync_unpin(o, prior)
-    pcc_gc_unpin(fn)
     return fn
 
 
@@ -3523,20 +3454,13 @@ def _bound_list_finish(borrowed, slots, tokens, status: int):
         _bound_list_clear(slots, tokens, _BOUND_LIST_RESULT)
     py_clear_exception()
     py_tls_exc_swap_slot(error)
-    pcc_py_gc_minor_graph_lock()
-    value = pcc_gc_load_ptr(null(), result)
-    prior: int = 0
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        pcc_gc_pin(value)
-    pcc_py_gc_minor_graph_unlock()
     token: int = load_i64(tokens, _BOUND_LIST_RESULT * C_POINTER_SIZE)
     if token >= 0 and pcc_gc_foreign_lease_release(result, token) != 0:
         pcc_platform_abort()
         return null()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(result, prior)
+    return pcc_gc_take_slot(result)
 
 
 def _py_list_append_bound_entry(captures, args):
@@ -3690,38 +3614,22 @@ def _py_set_pop_bound_entry(captures, args):
 
 
 def _py_list_pop_bound(o):
-    # Pinned across both allocations as in _py_lock_method_bound.
-    prior: int = _py_sync_pin(o)
     captures = py_tuple_new(1)
     if ptr_is_null(captures) != 0:
-        _py_sync_unpin(o, prior)
         return null()
-    pcc_gc_pin(captures)
     py_tuple_set_item(captures, 0, o)
     fn = py_func_new_bound(_py_list_pop_bound_entry, captures, cstr("pop"), o)
-    pcc_gc_pin(fn)
-    pcc_gc_unpin(captures)
     py_decref(captures)
-    _py_sync_unpin(o, prior)
-    pcc_gc_unpin(fn)
     return fn
 
 
 def _py_dict_pop_bound(o):
-    # Pinned across both allocations as in _py_lock_method_bound.
-    prior: int = _py_sync_pin(o)
     captures = py_tuple_new(1)
     if ptr_is_null(captures) != 0:
-        _py_sync_unpin(o, prior)
         return null()
-    pcc_gc_pin(captures)
     py_tuple_set_item(captures, 0, o)
     fn = py_func_new_bound(_py_dict_pop_bound_entry, captures, cstr("pop"), o)
-    pcc_gc_pin(fn)
-    pcc_gc_unpin(captures)
     py_decref(captures)
-    _py_sync_unpin(o, prior)
-    pcc_gc_unpin(fn)
     return fn
 
 
@@ -3810,20 +3718,13 @@ def _bound_method_finish(borrowed, slots, tokens, status: int):
         _bound_method_clear(slots, tokens, _BOUND_METHOD_RESULT)
     py_clear_exception()
     py_tls_exc_swap_slot(error)
-    pcc_py_gc_minor_graph_lock()
-    value = pcc_gc_load_ptr(null(), result)
-    prior: int = 0
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        pcc_gc_pin(value)
-    pcc_py_gc_minor_graph_unlock()
     token: int = load_i64(tokens, _BOUND_METHOD_RESULT * C_POINTER_SIZE)
     if token >= 0 and pcc_gc_foreign_lease_release(result, token) != 0:
         pcc_platform_abort()
         return null()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(result, prior)
+    return pcc_gc_take_slot(result)
 
 
 # Operations: dict 1..11, list 21..28, bytes/bytearray find 31, bytearray pop 32, set 41..49
@@ -4369,20 +4270,12 @@ def _py_bound_method(o, operation: int):
 
 
 def _py_set_pop_bound(o):
-    # Pinned across both allocations as in _py_lock_method_bound.
-    prior: int = _py_sync_pin(o)
     captures = py_tuple_new(1)
     if ptr_is_null(captures) != 0:
-        _py_sync_unpin(o, prior)
         return null()
-    pcc_gc_pin(captures)
     py_tuple_set_item(captures, 0, o)
     fn = py_func_new_bound(_py_set_pop_bound_entry, captures, cstr("pop"), o)
-    pcc_gc_pin(fn)
-    pcc_gc_unpin(captures)
     py_decref(captures)
-    _py_sync_unpin(o, prior)
-    pcc_gc_unpin(fn)
     return fn
 
 
@@ -4445,20 +4338,13 @@ def _property_accessor_get(descriptor, field_offset: int):
         _property_accessor_clear(slots, tokens, _PROPERTY_ACCESSOR_RESULT)
     py_clear_exception()
     py_tls_exc_swap_slot(error)
-    pcc_py_gc_minor_graph_lock()
-    value = pcc_gc_load_ptr(null(), result)
-    prior: int = 0
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        pcc_gc_pin(value)
-    pcc_py_gc_minor_graph_unlock()
     token = load_i64(tokens, _PROPERTY_ACCESSOR_RESULT * C_POINTER_SIZE)
     if token >= 0 and pcc_gc_foreign_lease_release(result, token) != 0:
         pcc_platform_abort()
         return null()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(result, prior)
+    return pcc_gc_take_slot(result)
 
 
 @c_abi_export("py_obj_getattr")
@@ -5738,20 +5624,13 @@ def _descriptor_type_call(args, kwargs, tag: int):
         index = index - 1
     py_clear_exception()
     py_tls_exc_swap_slot(error)
-    pcc_py_gc_minor_graph_lock()
-    value = pcc_gc_load_ptr(null(), result)
-    prior: int = 0
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        pcc_gc_pin(value)
-    pcc_py_gc_minor_graph_unlock()
     token = load_i64(tokens, _DESCRIPTOR_RESULT * C_POINTER_SIZE)
     if token >= 0 and pcc_gc_foreign_lease_release(result, token) != 0:
         pcc_platform_abort()
         return null()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(result, prior)
+    return pcc_gc_take_slot(result)
 
 
 def _class_call_new(callable_obj, args, kwargs):
