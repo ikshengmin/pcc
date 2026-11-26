@@ -1356,7 +1356,7 @@ in the relevant section or issue and removes the entry.
    hosted/native-pcc1/Stage1/2 or performance acceptance claimed.
 
    Claims:
-   - none
+   - Exact cross-module raw machine integer method ABI metadata: Codex, Linux, 2026-11-26T21:15Z, area raw-machine-method-abi
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
