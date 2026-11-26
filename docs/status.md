@@ -3369,10 +3369,58 @@ in the relevant section or issue and removes the entry.
        (+9.7% one-off, NOT formal A/B). Reject as unpromising rather
        than consume formal quiet slot or risk Stage2 overhead.
        Both changes restored; no Stage1 or Stage2 speed claim.
+       Actual ARM typed trampoline attribution/rejected candidate
+       (Codex/Linux, base6238b7e3; source same7f8a3bda, changes tests/docs).
+       c_codegen real prepass1,521,122 events,453,460 event candidates,
+       113,702 branches,313,692 local labels,4,718 trampoline labels;
+       4,695 targets hit (4.13%), all distinct, hops4691 one/4 two;
+       memoization has no measured reuse. Diagnostic owner CPU2.935s,
+       706 samples, frozen CompilerInt4 constructors223 (31.6%),
+       repeated ordinary instruction boundary/empty and label facts.
+       Exact host raw scalar positive family body proof and direct
+       nontrampoline target skip, canonical caches and public observer
+       fallback; fixed initial native outer import-shadow regression
+       with distinct private aliases. Strict contextual625 closure
+       base76 funcs/29,543 instr; candidate79/32,912, fallback0/no
+       libpython. Five native hot function instruction counts and full
+       call multisets exactly unchanged: dense trampoline2595/1308,
+       outer286/148, CFG driver2955/1690, candidate scanner601/274,
+       metadata129/50. 229 host focused tests passed; final alias source
+       full actual ARM PCO22,204,134B sha256
+       88554c1a84e58c21ae6def1a6a56049726bdfc5ed8c6c726feb94e427264a7b0,
+       exact independent base/candidate, guard peak1,154,682,880B.
+       Five quiet actual frozen c_codegen owner alternating triples:
+       CPU2.877867->2.388236s (-17.014%,5/5), control2.814487,
+       normalized -18.465%5/5 vs drift2.363%; wall normalized
+       -18.900%5/5, RSS657588->657616KiB (+0.004%, neutral). All15
+       exact output/append planes sha256
+       37b99072e4762cabc00e1025a0f63ed6bcdd94d22d1493af2c996fe0601c837d,
+       1,507,697 output IDs,4,682 appended records,8,316 tokens.
+       Five quiet actual small full worker_resource_plan triples:
+       trampoline phase0.347060->0.296402s (-14.596%,4/5),
+       normalized -17.888%4/5 vs drift3.934%; full CPU normalized
+       -1.365%4/5 vs drift2.950%, neutral; full wall -1.206%.
+       All15 exact PCO2,777,336B sha256
+       cbff0094db13b8b62e2abb637264d6c9902579c1c1d09e7f36f46cc5f2307717.
+       REJECT: full worker RSS167080->172072KiB normalized +2.903%
+       (4/5 higher) vs same-base drift0.165%. Guarded non-timed
+       smaps samples identify no changed owner cache/retained increase:
+       cache lengths+sizes all5 planes exact, allocated-block delta+86;
+       import/decode RSS0/28KiB difference, candidate ~2.3MB lower at
+       trampoline end. First divergence next unchanged conditional-fold
+       completion RSS139188->162920KiB (+23.7MB anonymous, file neutral,
+       allocated blocks still+86); later peak +6160KiB. Likely allocator
+       large-buffer release layout, not a proven live-object regression,
+       but real measured peak gate still fails. No allocator tuning.
+       Follow-up private exact forward in-place compaction reuses
+       rewritten list (source list untouched, no writes reach unread
+       events),97 host focused tests pass, exact small PCO; directional
+       single smoke RSS172076KiB, still +4996KiB vs base formal median.
+       Reject correction too, no formal timing or production changes.
        Next (latest actual Stage1 codegen priority): (1) ARM typed
-       finalize/prepare trampoline branch indexing or typed validation
-       repeated work, guided by measured dominant child phases and
-       preserving private/public snapshot contracts; then common indexed fact/emission
+       validate/prepare or native dominant owner repeated work, guided
+       by measured child phases and preserving private/public
+       snapshot contracts; then common indexed fact/emission
        owner; (2) J2 (e) one error
        landing per function after registering temporaries once, measured
        against the actual CI block inventory; (3) the allocation model
@@ -3687,7 +3735,6 @@ in the relevant section or issue and removes the entry.
    pre-sizing candidate; no unsafe blanket lock/provenance removal.
 
    Claims:
-   - Stage1 ARM typed trampoline branches shared resolution and sparse branch owner: Codex, Linux, 2026-11-26T20:16Z, area backend-aarch64-cfg
    - Actual raw allocator callsite and slab lifecycle attribution: Codex, Linux, 2026-11-26T20:17Z, area runtime-gc-raw-allocation
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
