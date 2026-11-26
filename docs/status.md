@@ -1018,9 +1018,41 @@ in the relevant section or issue and removes the entry.
    after terminal clear. All28 PASS (5.23s) on unchanged production.
    No native GC coverage claim or gate waiver.
 
+   Iterator root models and genuine native lambda retirement fix
+   (2026-11-26, frozen source7a099ce3): exact former14 module/2 dynamic
+   model failures reproduced (16 FAIL1.68s). Current root APIs require
+   actual local registration, concrete owner publication and same
+   physical iterator read, exact normal/error clears while active and
+   reachable matching frame exits. Private loop cursor is scalar, not
+   a GC root; its owned slot is passed to py_obj_private_for_next,
+   whose runtime source reads pcc_gc_load_ptr initially, after length
+   and on fallback. Dynamic target consumes the exact next result;
+   store_root_take runtime publishes before releasing previous owner,
+   and current target reads and guarded error+normal clears verified.
+   Existing target preparation and x64 stackmap proof preserved.
+   Stronger model exposed REAL native lambda successful return leaving
+   its regular comprehension root registered: old source14 PASS/2
+   FAIL exact CFG (call.slot.ready.206), error already retired.
+   Actual contextual native valueclass legacy-capture comprehension
+   reproduces the same missing leave on both targets (2 FAIL1.34s).
+   Fixed only both lambda success epilogues, retiring registered
+   expression frames after argument cleanup while separate lexical
+   result root still owns value, before caller result handoff. Error
+   path unchanged. All original16 plus two legacy-target models PASS,
+   18/18; adjacent68 models PASS. Changed module exact 625-source
+   context fallback0, guarded COMPLETE95.270s/676814848 B under
+   600s/1.5GiB cap/reserve2GiB. Fresh source/codegen-admitted threaded
+   atomic runtime SHA256
+   a86281a54cb58ab1bce638e0ff456f4e9d5c5bf4225818db49970c928560c697
+   guard COMPLETE102.500s/387371008 B. Actual new two native lambda
+   adapters, three repeats, callback error and 15 finalizers with
+   nested gc.collect compare exact CPython stdout, emitted full frame
+   ledger and no CPython calls; plus two existing native lambda
+   tests, 3/3 PASS, unchanged90s/1GiB guard COMPLETE6.654s/110702592 B.
+   No gate weakening or hosted acceptance claim.
+
    Claims:
-   - Iterator root IR models follow exact local ownership and private cursor slot ABI: Codex, Linux IR and stackmaps, 2026-11-26T19:42Z, area ci-iterator-root-models
-   - Native lambda activation success retirement of regular expression root frames: Codex, Linux, 2026-11-26T19:46Z, area lambda-success-root-retirement
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and

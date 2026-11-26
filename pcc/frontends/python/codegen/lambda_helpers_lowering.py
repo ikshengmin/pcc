@@ -626,6 +626,11 @@ class LambdaHelperLoweringMixin:
                 self._release_slot_call_roots(tuple(roots[1:]))
                 self._try_err_block = self._slot_call_cleanup_block((return_slot,), error_target)
                 self._cpy_operand_cleanup_block = self._try_err_block
+                # Expression lowering can create function-wide roots in the
+                # adapter (e.g. a comprehension's iterator). Retire them on
+                # success as on error, while the separate lexical return slot
+                # still owns its result across any runtime frame leave.
+                self._emit_exit_frame_leaves()
                 self.builder.ret(self._take_slot_call_root(return_slot))
             except NotImplementedError:
                 self.builder = saved_builder
@@ -761,6 +766,7 @@ class LambdaHelperLoweringMixin:
                     self._gc_retain(result_obj)
                 self.builder.call(self.runtime["pcc_gc_store_root"], [return_ptr, result_obj])
                 self._release_rooted_pcc_lifetimes(argument_lifetimes)
+                self._emit_exit_frame_leaves()
                 result_obj = self._leave_return_cleanup_root(result_obj, return_slot, return_ptr)
                 self.builder.ret(result_obj)
             except NotImplementedError:

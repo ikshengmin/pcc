@@ -214,21 +214,15 @@ def test_dynamic_for_iterator_is_an_owned_gc_frame_root(tmp_path):
     )
     ir_text = out.read_text(encoding="utf-8")
 
-    body_match = re.search(
-        r"define\s+[^@]*@user_[^(]*consume[^{]*\{(?P<body>.*?)\n\}",
-        ir_text,
-        re.S,
-    )
-    assert body_match is not None, ir_text
-    body = body_match.group("body")
-    assert "for.obj.iter.root" in body
-    assert re.search(
-        r"@\.pcc\.gc\.frame\.map\.1[^\n]*\n"
-        r"\s*%gc\.frame\.slots\.ptr\.[^\n]*%for\.obj\.iter\.root",
-        body,
-    ), body
-    assert "@pcc_gc_load_ptr" in body
-    assert "@pcc_gc_release" in body
+    from tests.owned_ir_validation import verify_ir_text
+    from tests.python.iterator_root_contract import assert_iterator_owner, parsed_root_contract
+
+    module = verify_ir_text(ir_text)
+    function = next(fn for fn in module.functions if fn.name.startswith("user_") and fn.name.endswith("consume"))
+    roots = parsed_root_contract(module, function)
+    owner = next(name for name in roots.allocas if name.startswith("for.obj.iter.root."))
+    assert_iterator_owner(roots, owner, private=True)
+    roots.assert_frame_exits(exact_abi=True)
 
 
 def test_dynamic_for_target_replaces_an_owned_gc_frame_root(tmp_path):
@@ -255,22 +249,16 @@ def test_dynamic_for_target_replaces_an_owned_gc_frame_root(tmp_path):
     )
     ir_text = out.read_text(encoding="utf-8")
 
-    body_match = re.search(
-        r"define\s+[^@]*@user_[^(]*consume[^{]*\{(?P<body>.*?)\n\}",
-        ir_text,
-        re.S,
-    )
-    assert body_match is not None, ir_text
-    body = body_match.group("body")
-    assert "value.owned" in body
-    assert re.search(
-        r"@\.pcc\.gc\.frame\.map\.1[^\n]*\n"
-        r"\s*%gc\.frame\.slots\.ptr\.[^\n]*%value(?:\.for\.obj)?\.addr",
-        body,
-    ), body
-    # Each owned result from py_obj_next replaces (and releases) the prior
-    # target binding; function cleanup releases the final value.
-    assert len(re.findall(r"call void @pcc_gc_release", body)) >= 3
+    from tests.owned_ir_validation import verify_ir_text
+    from tests.python.iterator_root_contract import assert_iterator_owner, assert_iterator_target, parsed_root_contract
+
+    module = verify_ir_text(ir_text)
+    function = next(fn for fn in module.functions if fn.name.startswith("user_") and fn.name.endswith("consume"))
+    roots = parsed_root_contract(module, function)
+    owner = next(name for name in roots.allocas if name.startswith("for.obj.iter.root."))
+    item = assert_iterator_owner(roots, owner, private=True)
+    assert_iterator_target(roots, item)
+    roots.assert_frame_exits(exact_abi=True)
 
 
 def test_temporary_gc_roots_use_lifo_frame_api(tmp_path):
