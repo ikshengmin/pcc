@@ -85,6 +85,42 @@ def _export_returns_none(ret_ty) -> bool:
     return _closed_world_is_node(ret_ty, _NoneType)
 
 
+def _export_void_managed_parameter_abi(fd, box_int_abi) -> bool:
+    """Prove a void method's source-owned managed-pointer parameter ABI.
+
+    The ordinary wire integer descriptor loses the explicit machine type
+    name. Read the actual raw formal annotation before encoding, never infer
+    this fact from a decoded descriptor. Unresolved class/type aliases and
+    explicit machine/raw/value/scalar lanes do not supply a proof.
+    """
+    from pcc.frontends.python.py_ast import (
+        ByteArrayType as _ByteArrayType, BytesType as _BytesType,
+        DictType as _DictType, DynType as _DynType, IntType as _IntType,
+        ListType as _ListType, MemoryViewType as _MemoryViewType,
+        SetType as _SetType, StrType as _StrType, TupleType as _TupleType,
+    )
+
+    if not _export_returns_none(_export_return_ty_or_none(fd)):
+        return False
+    for arg in _py_ast_field_value(fd, "args", ()):
+        if _py_ast_field_value(arg, "name", "") == "":
+            continue
+        annotation = _py_ast_field_value(arg, "annotation", None)
+        if annotation is None:
+            continue
+        if _closed_world_is_node(annotation, _IntType):
+            if (_py_ast_field_value(annotation, "name", "") != "int"
+                    or not box_int_abi):
+                return False
+            continue
+        if not _closed_world_is_node(annotation, (
+            _DynType, _StrType, _BytesType, _ByteArrayType, _MemoryViewType,
+            _ListType, _SetType, _DictType, _TupleType,
+        )):
+            return False
+    return True
+
+
 def _export_typed_int_unboxed_abi_mode() -> str:
     mode = os.environ.get("PCC_PYTHON_TYPED_INT_ABI", "auto").strip().lower()
     if mode == "0":

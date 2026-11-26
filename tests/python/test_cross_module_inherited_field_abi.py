@@ -347,6 +347,9 @@ def touch_nested(arena: Arena | None) -> int:
     ir_text = output.read_text(encoding="utf-8")
     body = function_body(ir_text, "user_consumer_touch")
     assert "@user_owner_Arena_append4" in body, body
+    assert "@user_owner_Arena_append4_method_native_adapter" in body, body
+    assert "@py_func_slot_has_native_entry" in body, body
+    assert "@py_obj_load_method" in body and "@py_obj_call_loaded_method" in body, body
     assert "@py_obj_getattr" not in body, body
     nested_start = ir_text.index(
         "define external void @user_consumer___nested_append_one"
@@ -354,6 +357,9 @@ def touch_nested(arena: Arena | None) -> int:
     nested_end = ir_text.index("\n}", nested_start)
     nested_body = ir_text[nested_start:nested_end]
     assert "@user_owner_Arena_append4" in nested_body, nested_body
+    assert "@user_owner_Arena_append4_method_native_adapter" in nested_body, nested_body
+    assert "@py_func_slot_has_native_entry" in nested_body, nested_body
+    assert "@py_obj_load_method" in nested_body and "@py_obj_call_loaded_method" in nested_body, nested_body
     assert "@py_obj_getattr" not in nested_body, nested_body
 
 

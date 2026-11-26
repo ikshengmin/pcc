@@ -26,7 +26,7 @@ from pcc.frontends.python.pipeline_ast_wire import _PY_AST_BASE_NAME_OVERRIDES, 
 from pcc.frontends.python.pipeline_closed_world import _closed_world_dyn_module_global_export, _closed_world_function_object_exports, _closed_world_is_identity_decorator, _flatten_closed_world_class_export_fields, _closed_world_module_block_assign_targets, _closed_world_module_def_counts, _closed_world_shallow_lift_module, _mark_closed_world_function_object_exports, _merge_closed_world_reexports, _repair_closed_world_default_global_owners
 from pcc.frontends.python.pipeline_exports import instance_field_assignment_statements, _class_is_dataclass, _class_is_valueclass, _closed_world_is_node, _export_annotation_or_none, export_default_factory_name as _export_default_factory_name, _export_call_sig, _export_module_defines_str_default_cells, _expand_local_valueclass_export_refs, _export_func_uses_unboxed_typed_int_abi, _export_literal_value_or_none, _export_method_symbol, _export_param_types, _export_return_ty_or_none, _export_return_type, _export_returns_none, _export_static_all_names, _export_static_literal_type, _normalise_export_annotation_text
 from pcc.frontends.python.pipeline_exports import export_dataclass_factory_default
-from pcc.frontends.python.pipeline_exports import _export_func_has_python_int_signature
+from pcc.frontends.python.pipeline_exports import _export_func_has_python_int_signature, _export_void_managed_parameter_abi
 from pcc.frontends.python.pipeline_import_policy import dataclasses_field_binding_names
 from pcc.frontends.python.pipeline_closed_world import (
     qualified_class_base_name,
@@ -870,6 +870,22 @@ def build_closed_world_context(
                             kind = "classmethod"
                         elif dec_ident == "property":
                             kind = "property_getter"
+                # Without a decorator the verified C ABI factory scan is
+                # necessarily empty. Reuse its single exact result for both
+                # the existing ABI metadata and the new source proof.
+                method_c_abi = (
+                    verified_c_abi_export_symbol(ast_mod, body_stmt)
+                    if body_stmt_decorators else ""
+                )
+                method_box_int_abi = (
+                    module_box_int_abi
+                    if class_is_valueclass
+                    else (
+                        (module_box_int_abi or _export_func_has_python_int_signature(body_stmt))
+                        and not freestanding_int_abi
+                        and not method_c_abi
+                    )
+                )
                 methods.append(
                     {
                         "name": body_stmt_name,
@@ -899,15 +915,12 @@ def build_closed_world_context(
                         ),
                         "has_return_annotation": bool(_py_ast_field_value(body_stmt, "has_return_annotation", False)),
                         "manual_pointer_abi": manual_pointer_abi,
-                        "manual_pointer_abi_symbol": verified_c_abi_export_symbol(ast_mod, body_stmt) if manual_pointer_abi else "",
-                        "box_int_abi": (
-                            module_box_int_abi
-                            if class_is_valueclass
-                            else (
-                                (module_box_int_abi or _export_func_has_python_int_signature(body_stmt))
-                                and not freestanding_int_abi
-                                and not verified_c_abi_export_symbol(ast_mod, body_stmt)
-                            )
+                        "manual_pointer_abi_symbol": method_c_abi if manual_pointer_abi else "",
+                        "box_int_abi": method_box_int_abi,
+                        "void_managed_pointer_abi": (
+                            kind == "instance" and not class_is_valueclass
+                            and not freestanding_int_abi and not method_c_abi
+                            and _export_void_managed_parameter_abi(body_stmt, method_box_int_abi)
                         ),
                     }
                 )

@@ -1305,8 +1305,58 @@ in the relevant section or issue and removes the entry.
    2880356352B, six workers, largest472285184B, no test outcomes.
    Do not infer pass or increase cap.
 
+   Ordinary external void live receiver guard (2026-11-26,
+   frozen0846c755): original Optional Parent formal/typed nested
+   alias still called Parent body for erased Duck and None; stronger
+   source/IR/native test-first4 FAIL/1 PASS guard16.348s/114995200B.
+   New direct branch is admitted only for actual source-owned
+   void_managed_pointer_abi exact Boolean true on provider method,
+   explicit normal instance void, untyped/definite managed object
+   arguments or actual ordinary boxed int; explicit raw machine,
+   scalar, valueclass, unresolved source type aliases, old/malformed
+   proof and low-level/resumable ABI excluded. Actual canonical
+   source method row/body symbol/native adapter, unique source
+   symbol owner and no adapter collision, complete positional
+   pointer parameters, no closure or speculative alias declaration.
+   Live py_obj_load_method resolves before args; receiver/method/args
+   evaluate once, stay rooted, exact bound receiver and captured
+   native entry check choose body, otherwise invoke same captured
+   callable on same arguments. Direct Python None/result owner
+   and exception cleanup preserved. Concrete ctor unchanged;
+   noncanonical but proven-managed source uses ordinary live
+   fallback. Existing optional Arena and nested direct body
+   assertion retained and strengthened to require actual live
+   guard/fallback, not annotation/non-null proof.
+   Host19 PASS/6 integration not selected, guard51.075s/356630528B.
+   Final source metadata/exports/type-wire adjacent67 PASS
+   guard6.903s/120119296B. Fresh strict candidate runtime
+   COMPLETE111.634s/390270976B under tighter1GiB+2GiB reserve;
+   archive770606d6... identical bytes with current source/codegen
+   proof. Actual final uninstrumented native6/6 PASS guard
+   30.966s/121155584B: boxed previous controls plus Parent/Duck/
+   None, typed nested alias, exact ctor, subclass, descriptor lookup
+   before argument, class rebind during argument preserving captured
+   old method, later replacement, argument exception/recovery.
+   Diagnostic exact original final IR SHA4246d5e4... only branch
+   write markers, owned static ELF a5ae78d9... same exact semantic
+   bytes, stderr FDF = cold Parent fallback, warm Parent exact
+   native adapter direct, Duck fallback, guard2.831s/56737792B.
+   Three actual contextual625 fallback0: method_call_expression
+   80.184s/751398912B, pipeline_exports99.084s/674033664B,
+   pipeline_context83.420s/664403968B under tighter1GiB.
+   Separate genuine raw integer export loss discovered: source
+   pcc.i64 encoded identical to ordinary int, untouched0846 IR
+   ce8d3ad8... caller void(ptr,ptr) vs actual provider void(ptr,i64).
+   Three-module raw native ELFbbb961df... output151 vs CPython37,
+   guard60.543s/373342208B; includes an independent analogous
+   free-function import edge. Raw source flag false/no new guard,
+   not claimed correct. Next isolate two-module method-only exact
+   named raw ABI descriptor and signed/unsigned boundaries; the
+   free-function route remains independently open. No integrated
+   hosted/native-pcc1/Stage1/2 or performance acceptance claimed.
+
    Claims:
-   - Ordinary external void method live receiver guard and retained direct ABI: Codex, Linux, 2026-11-26T20:58Z, area external-void-live-method
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and

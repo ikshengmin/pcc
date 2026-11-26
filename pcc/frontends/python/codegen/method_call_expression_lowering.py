@@ -602,6 +602,234 @@ class MethodCallExpressionLoweringMixin:
             )
         return False
 
+    def _external_void_receiver(self, receiver: Expr) -> bool:
+        # A local alias of an external annotated formal is no more an exact
+        # runtime proof than the formal itself. Concrete constructor call
+        # expressions and lexical self retain their independent lowering.
+        if not isinstance(receiver, Name) or receiver.ident == "self":
+            return False
+        ty = receiver.ty
+        return (isinstance(ty, ClassType) and bool(ty.module)
+                and ty.module != self.ast_module.name and not ty.valueclass)
+
+    def _external_void_managed_source(self, info, fn, method_name):
+        """Accept only the actual provider's source-owned pointer ABI fact."""
+        owner = getattr(info, "owning_module", None)
+        class_name = getattr(info, "export_class_name", None)
+        if not owner or owner == self.ast_module.name or not class_name:
+            return None
+        table = self._native_module_exports
+        provider = table.get(owner) if isinstance(table, dict) else None
+        if not isinstance(provider, dict):
+            return None
+        exported_class = provider.get(class_name)
+        if (not isinstance(exported_class, dict) or exported_class.get("kind") != "class"
+                or exported_class.get("owning_module") != owner
+                or exported_class.get("class_name") != class_name):
+            return None
+        found = False
+        for row in exported_class.get("methods", ()):
+            if row.get("name") != method_name:
+                continue
+            if (row.get("void_managed_pointer_abi") is not True
+                    or row.get("kind") != "instance"
+                    or row.get("returns_none") is not True
+                    or row.get("manual_pointer_abi") is not False
+                    or row.get("is_async") is not False):
+                return None
+            if row.get("symbol") == fn.name:
+                found = True
+        return provider if found else None
+
+    def _maybe_emit_guarded_external_void_method(self, expr, info, fd, fn, kind, provider):
+        """Use a direct void ABI only for the method the live receiver loaded.
+
+        The ordinary method loader is authoritative, including descriptor
+        lookup, class/instance mutation, and lookup-before-arguments. Only a
+        bound receiver plus the exact capture-free native entry admits the
+        direct body; every other binding calls that same captured callable.
+        Neither branch evaluates a receiver or argument twice.
+        """
+        attr = expr.func
+        if (kind != "instance" or fd is None or fd.is_async
+                or fd.name != attr.name or expr.kwargs
+                or self._has_unpacked_operands(expr.args, expr.kwargs)
+                or len(expr.args) > 8 or len(fd.args) != len(expr.args) + 1
+                or getattr(self, "_generator_ctx_stack", ())
+                or self.class_lowering.method_name_is_closure(info, attr.name)):
+            return None
+        for formal in fd.args:
+            if not formal.name or formal.kind not in ("pos", "pos_only"):
+                return None
+        if len(fn.function_type.args) != len(fd.args):
+            return None
+        for param in fn.function_type.args:
+            if param != _CSTR:
+                return None
+        # The ordinary top-level instance-method publication emits the
+        # <class>_<method>_method_native_adapter. Do not guess this symbol
+        # for split/aliased/colliding names, synthetic mixin owners, private
+        # names, or any noncanonical method ABI.
+        owner = getattr(info, "owning_module", None)
+        class_name = getattr(info, "export_class_name", None)
+        if (not owner or owner == self.ast_module.name or not class_name
+                or not class_name.isascii() or not attr.name.isascii()
+                or attr.name.startswith("__")):
+            return None
+        canonical = "user_" + self._module_symbol_suffix(owner) + "_" + class_name + "_" + attr.name
+        if fn.name != canonical:
+            return None
+        exported_class = provider[class_name]
+        if class_name + "_" + attr.name + "_method" in provider:
+            return None
+        source_method = None
+        for row in exported_class.get("methods", ()):
+            if row.get("name") != attr.name:
+                continue
+            if source_method is not None:
+                return None
+            source_method = row
+        if (source_method is None or source_method.get("symbol") != canonical
+                or source_method.get("void_managed_pointer_abi") is not True
+                or source_method.get("has_return_annotation") is not True):
+            return None
+        # Reject another class export that could own the same physical body
+        # symbol (underscores or duplicate source declarations). Every
+        # admitted adapter must belong to exactly one actual source row.
+        symbol_owners = 0
+        for export in provider.values():
+            if (not isinstance(export, dict) or export.get("kind") != "class"
+                    or export.get("owning_module") != owner):
+                continue
+            for row in export.get("methods", ()):
+                if row.get("symbol") == canonical:
+                    symbol_owners += 1
+                    if symbol_owners > 1:
+                        return None
+        if symbol_owners != 1:
+            return None
+        adapter_name = canonical + "_method_native_adapter"
+        adapter = self.module.globals.get(adapter_name)
+        if adapter is None:
+            adapter = ir.Function(
+                self.module, ir.FunctionType(_CSTR, [_CSTR, _CSTR]), name=adapter_name,
+            )
+        elif (not isinstance(adapter, ir.Function)
+                or adapter.function_type.return_type != _CSTR
+                or tuple(adapter.function_type.args) != (_CSTR, _CSTR)):
+            return None
+
+        label = "method." + attr.name + ".live_void"
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root(label + ".result")
+            roots.append(output)
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            receiver = self._emit_slot_call_operand(attr.obj, label + ".receiver")
+            roots.append(receiver)
+            method = self._new_slot_call_root(label + ".method")
+            roots.append(method)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            loaded_self = self._alloca_in_entry(
+                _CSTR, self._fresh(label + ".self"), init_null=True,
+            )
+            self._slot_call_runtime_call(
+                "py_obj_load_method", (receiver,), result_slot=method,
+                suffix_args=(self._attr_name_ptr(attr.name), loaded_self),
+                span=expr.span,
+            )
+            self._emit_attribute_error_if_null(
+                self.builder.load(method, name=self._fresh(label + ".checked.method")),
+                attr.name, attr.span,
+            )
+            raw_self = self.builder.load(loaded_self, name=self._fresh(label + ".self.value"))
+            bound = self.builder.icmp_unsigned(
+                "!=", raw_self, ir.Constant(_CSTR, None), name=self._fresh(label + ".bound"),
+            )
+            same_self = self.builder.icmp_unsigned(
+                "==", raw_self, self.builder.load(receiver), name=self._fresh(label + ".same.self"),
+            )
+            exact_receiver = self.builder.and_(bound, same_self, name=self._fresh(label + ".exact.self"))
+            has_self = self.builder.zext(bound, _I64, name=self._fresh(label + ".self.flag"))
+
+            argument_roots = []
+            for argument in expr.args:
+                root = self._emit_slot_call_operand(argument, label + ".argument")
+                roots.append(root)
+                argument_roots.append(root)
+                self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+                self._cpy_operand_cleanup_block = self._try_err_block
+            match = self.builder.call(
+                self.runtime["py_func_slot_has_native_entry"],
+                [self._as_gc_ptr(method), self.builder.bitcast(adapter, _CSTR)],
+                name=self._fresh(label + ".entry.match"),
+            )
+            direct_test = self.builder.and_(
+                exact_receiver, self.builder.icmp_signed("!=", match, ir.Constant(_I64, 0)),
+                name=self._fresh(label + ".direct.test"),
+            )
+            function = self.current_function
+            direct = function.append_basic_block(self._fresh(label + ".direct"))
+            dynamic = function.append_basic_block(self._fresh(label + ".dynamic"))
+            done = function.append_basic_block(self._fresh(label + ".done"))
+            self.builder.cbranch(direct_test, direct, dynamic)
+
+            self.builder.position_at_end(direct)
+            current_args = [self.builder.load(receiver, name=self._fresh(label + ".current.receiver"))]
+            for root in argument_roots:
+                value = root if self._value_is_never_gc_object(root) else self.builder.load(
+                    root, name=self._fresh(label + ".current.argument"),
+                )
+                current_args.append(value)
+            # Every operand owner stays in its registered root through the
+            # direct body and its error check. The void result is Python None.
+            self._call_user(fn, current_args, "", span=expr.span)
+            self._publish_slot_call_owned(output, self._emit_none_literal(), label="direct void method")
+            self.builder.branch(done)
+
+            self.builder.position_at_end(dynamic)
+            args = self._new_slot_call_root(label + ".args")
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots) + (args,), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            value = self.builder.call(
+                self.runtime["py_tuple_new"], [ir.Constant(_I64, len(argument_roots))],
+                name=self._fresh(label + ".tuple"),
+            )
+            self._publish_slot_call_owned(args, value, label="live void arguments")
+            self._emit_post_call_err_check(expr.span)
+            for index, root in enumerate(argument_roots):
+                self._slot_call_runtime_call(
+                    "py_tuple_set_item", (args, root),
+                    suffix_args=(ir.Constant(_I64, index),), argument_order=(0, 2, 1),
+                    span=expr.args[index].span,
+                )
+            self._slot_call_runtime_call(
+                "py_obj_call_loaded_method", (method, receiver, args),
+                result_slot=output, suffix_args=(has_self,), span=expr.span,
+            )
+            self._release_slot_call_roots((args,))
+            self.builder.branch(done)
+
+            self.builder.position_at_end(done)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            self._slot_call_note_published(output)
+            self._release_slot_call_roots(tuple(roots[1:]) if sink is None else tuple(roots))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        if sink is not None:
+            return self.builder.load(output, name=self._fresh(label + ".output"))
+        return self._take_slot_call_root(output)
+
     def _emit_method_call(self, expr: Call) -> ir.Value:
         """Lower ``obj.method(args)`` using the class method registry.
 
@@ -806,6 +1034,28 @@ class MethodCallExpressionLoweringMixin:
                     and self._external_class_annotation_receiver(attr.obj)
                     and not self._resumable_may_park_method(binding_owner, attr.name)
                 )
+                if (class_object is None and binding_fn is not None and kind == "instance"
+                        and isinstance(binding_fn.function_type.return_type, ir.VoidType)
+                        and self._external_void_receiver(attr.obj)
+                        and not attr.name.startswith("__")
+                        and not self._resumable_may_park_method(binding_owner, attr.name)
+                        and attr.name not in getattr(binding_owner, "may_park_methods", set())
+                        and not any(self._expr_returns_unsafe_raw_pointer(arg) for arg in expr.args)
+                        and self._ordinary_call_needs_runtime_binding(
+                            expr, binding_fd, bound_receiver, True,
+                        )):
+                    provider = self._external_void_managed_source(
+                        binding_owner, binding_fn, attr.name,
+                    )
+                    if provider is not None:
+                        guarded = self._maybe_emit_guarded_external_void_method(
+                            expr, binding_owner, binding_fd, binding_fn, kind, provider,
+                        )
+                        if guarded is not None:
+                            return guarded
+                        return self._emit_runtime_bound_user_call(
+                            expr, binding_owner.name + "." + attr.name, binding_fn,
+                        )
                 if self._ordinary_call_needs_runtime_binding(
                     expr, binding_fd, bound_receiver,
                     sink_requires_object or live_annotation,
