@@ -153,7 +153,8 @@ class _Summaries:
                           + 2 * rare + records + functions)
         self.rows = bytearray(8 * sets)
         tree = bytearray(16 * leaves)
-        if not self._fill_leaves_host(payload, locations_base, locations, leaves, tree):
+        packed_words = self._fill_leaves_host(payload, locations_base, locations, leaves, tree)
+        if not packed_words:
             for index in range(locations):
                 self._visit()
                 value = self._word(payload, locations_base, index)
@@ -174,14 +175,14 @@ class _Summaries:
             )
             end = first + count
             value = 0
-            while first < end and first % _BLOCK_LOCATIONS:
-                self._visit()
-                value = max(value, self._word(payload, locations_base, first))
-                first += 1
-            while first < end and end % _BLOCK_LOCATIONS:
-                self._visit()
-                end -= 1
-                value = max(value, self._word(payload, locations_base, end))
+            if first % _BLOCK_LOCATIONS:
+                prefix_end = min(end, first + _BLOCK_LOCATIONS - first % _BLOCK_LOCATIONS)
+                value = self._edge_max(payload, locations_base, first, prefix_end, packed_words)
+                first = prefix_end
+            if first < end and end % _BLOCK_LOCATIONS:
+                suffix_start = end - end % _BLOCK_LOCATIONS
+                value = max(value, self._edge_max(payload, locations_base, suffix_start, end, packed_words))
+                end = suffix_start
             left = leaves + first // _BLOCK_LOCATIONS
             right = leaves + end // _BLOCK_LOCATIONS
             while left < right:
@@ -222,13 +223,14 @@ class _Summaries:
                 raise wire.PreciseStackMapError("runtime validation work budget exceeded")
             self.remaining -= locations
             with view[base:base + 4 * locations] as raw, raw.cast("i") as words:
-                low = bytes(raw[0::4])
                 block = 0
                 while block * _BLOCK_LOCATIONS < locations:
                     start = block * _BLOCK_LOCATIONS
                     end = min(start + _BLOCK_LOCATIONS, locations)
                     with words[start:end] as chunk:
-                        if max(chunk) >= 0 or 1 in low[start:end].translate(_LOW_BYTE_BAD):
+                        with raw[start * 4:end * 4:4] as lows:
+                            bad_low = 1 in bytes(lows).translate(_LOW_BYTE_BAD)
+                        if max(chunk) >= 0 or bad_low:
                             value = _INVALID
                         else:
                             value = -(min(chunk) & ~1)
@@ -237,6 +239,28 @@ class _Summaries:
             return True
         finally:
             view.release()
+
+    def _edge_max(self, payload, base, first, end, packed_words):
+        # A partial block is bounded by 255 locations. For host packed words
+        # use the same maximum as a complete block, charging one visit per
+        # word before reading. The temporary snapshot is bounded (under 1 KiB)
+        # rather than proportional to the total location table.
+        count = end - first
+        if packed_words and type(payload) is bytes and count >= 8:
+            if count > self.remaining:
+                self.remaining = 0
+                raise wire.PreciseStackMapError("runtime validation work budget exceeded")
+            self.remaining -= count
+            raw = payload[base + first * 4:base + end * 4]
+            with memoryview(raw).cast("i") as words:
+                if max(words) >= 0 or 1 in raw[::4].translate(_LOW_BYTE_BAD):
+                    return _INVALID
+                return -(min(words) & ~1)
+        value = 0
+        for position in range(first, end):
+            self._visit()
+            value = max(value, self._word(payload, base, position))
+        return value
 
     def _visit(self):
         if self.remaining <= 0:

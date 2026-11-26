@@ -2301,11 +2301,26 @@ in the relevant section or issue and removes the entry.
    owners, equal-ceiling Stage2/3 CI. This status/release commit intentionally
    triggers current master validation of the accumulated reviewed changes;
    no new production change in this unit, no CI acceptance implied.
+   Stage1 Mach-O host runtime-table validation: partial location blocks now
+   compute the same signed packed maximum with bounded byte slices, rather
+   than one scalar Python decode per root, preserving one visit per word.
+   Full-block low-byte scratch is also bounded per block. Linux host CPython
+   3.13 cross-target real Darwin worker_resource_plan IR SHA256
+   `3988b84c88373bcb45b47b9e344277aa0a3169ad3e1e6561cc9df2aca2959cfa`
+   emitted a version 3 table SHA256
+   `1d4442207b0e04e2381381ba36e171dd89b970d66079a462b066b92d32f90865`
+   with 105 functions, 19,194 safepoints, 1,314 live sets, 37,423 locations.
+   Five alternating CPU pairs, 15 validations per arm: median 0.02342 ->
+   0.01349 s (-42.4%, 5/5); unchanged generic validator 0.01958 -> 0.01999 s.
+   Exact summary bytes and remaining work counter agree. 170 focused host
+   runtime/stack-map validation and spool tests pass. This is an owner-level
+   cross-target measurement, not native macOS, full link or Stage1 timing.
+   Next link slice: measure per-object prep moved to the codegen workers;
+   confirm full-stage timing and Stage2 resource parity in CI.
    [Phase investigation](investigations/stage2-worker-budget-parity-45643044565.md).
 
    Claims:
    - Stage2 native repeated preload and resource parity: Codex, Linux, 2026-11-26T15:46Z, area selfhost
-   - Stage1 Mach-O stack-map/link preparation attribution and scoped optimization (pcc/backend/macho_obj.py and precise_stackmap.py, disjoint from Stage2 preload): Codex, Linux, 2026-11-26T15:46Z, area backend
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its

@@ -76,3 +76,42 @@ def test_host_leaves_charge_one_visit_per_location():
     with pytest.raises(wire.PreciseStackMapError, match="work budget exceeded"):
         _leaves(words, False, remaining=299)
     assert _leaves(words, True, remaining=300)[1] == _leaves(words, False, remaining=300)[1] == 0
+
+
+@pytest.mark.parametrize("count", [8, 31, 255])
+@pytest.mark.parametrize("bad", [None, 0, 2, -7, -10])
+def test_host_partial_block_has_exact_summary_and_visit_count(count, bad):
+    # A partial block (starting away from a block boundary) used to decode
+    # every root in Python. The packed range has the same result and charge,
+    # including malformed words and the signed-int32 lower endpoint.
+    if validation.sys.byteorder != "little":
+        pytest.skip("packed host words require little-endian order")
+    words = [-8 * (i + 1) - i % 2 for i in range(count + 1)]
+    words[-1] = -(1 << 31)
+    if bad is not None:
+        words[1 + count // 2] = bad
+    payload = struct.pack("<%di" % len(words), *words)
+    scalar = object.__new__(validation._Summaries)
+    scalar.remaining = count
+    expected = scalar._edge_max(payload, 0, 1, count + 1, False)
+    packed = object.__new__(validation._Summaries)
+    packed.remaining = count
+    assert packed._edge_max(payload, 0, 1, count + 1, True) == expected
+    assert packed.remaining == scalar.remaining == 0
+    packed.remaining = count - 1
+    with pytest.raises(wire.PreciseStackMapError, match="work budget exceeded"):
+        packed._edge_max(payload, 0, 1, count + 1, True)
+    assert packed.remaining == 0
+
+
+def test_partial_block_avoids_scalar_decodes_without_skipping_word_charge(monkeypatch):
+    if validation.sys.byteorder != "little":
+        pytest.skip("packed host words require little-endian order")
+    packed = object.__new__(validation._Summaries)
+    packed.remaining = 16
+    payload = struct.pack("<17i", *([-8] * 16 + [-16]))
+    def unexpected(*args):
+        pytest.fail("packed edge should not decode an individual root")
+    monkeypatch.setattr(packed, "_word", unexpected)
+    assert packed._edge_max(payload, 0, 1, 17, True) == 16
+    assert packed.remaining == 0
