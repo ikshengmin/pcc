@@ -3654,8 +3654,42 @@ in the relevant section or issue and removes the entry.
    source-matched context and actual phase/RSS instrumentation; no
    full bootstrap or relaxed guard, then choose measured owner fix.
 
+   Authentic hosted singleton replay (2026-11-26). CI run 45856871699,
+   Linux x64 source 6cbafc4a14b20d38ae831d168133c6ebd85568de,
+   Stage1 artifact 15140867848, retained native pcc1 SHA256
+   c88e3ba155f98cef716e2f5b75009ba6cc3721d4b6abb92dd37b8bbbe5cdae08.
+   The exact terminal worker_3 manifest (SHA256
+   1ceb7de640a3b6e5005a734571fc63f9d8b3bb13683c620d75ec205cb14961f3)
+   gives singleton class_gen index 209, 625 modules, 624 sibling initializers,
+   442 indexed export dependencies, and the 245 admitted export chunks.
+   Reconstructed old-source context matches hosted indexed exports size
+   32,747,067 bytes and dependency count; hosted payload hash unavailable.
+   Native target export singleton agreed byte-for-byte with the local host
+   AST (11,271,500 bytes, SHA256 b248d4510926ae8d117800144cc0e8aed91793d7bea7e9b803ef122d25a00240),
+   shard exports (220,417 bytes) and dependency sidecar (12,505 bytes).
+   Local source path differs from hosted path. Actual pcc1 source identity
+   b0c2890c1ddceda8b43d6e3262589870b6f0c54eae3829a0c6e08717e8245322
+   is the exact hosted 1587-file tree, and the original native runtime
+   provenance is validated. The retained native compiler replay uses the
+   same oversized assembly route (direct native object disabled), one
+   worker, no fallback, unchanged 400-second / 1.8-GiB isolated guard.
+   Result: TIMEOUT 400.240535 s, isolated process-tree peak 1,671,671,808 B,
+   terminal native process RSS 1,661,886,464 B; CPU censored by guard kill,
+   no final assembly/object/result. Frontend inference 7.354 s, prepare
+   17.378 s, ClassLowering class body 129.594 s, direct capture 22.631 s;
+   supported records 440,208, blocks 86,393, call continuations 13,617,
+   error cleanups 2,317, error frames 7,145, instructions 332,713,
+   functions 727 and zero fallbacks exactly match hosted replay evidence.
+   Frontend/capture completes, backend emit does not finish before the
+   guard. These are isolated actual owner observations, not completed
+   Stage2 measurements or an uncensored backend timer. Hosted class
+   body was 99.022 s versus Stage1 11.246 s. Next: same-route host
+   comparator to observe phase shape, rank actual ClassLowering method
+   costs and instrument backend subphases independently, with exact input
+   and fixed guards. No increased limits/concurrency, no extra full bootstrap.
+   
    Claims:
-   - Stage2 authentic hosted singleton class_gen owner replay: Codex, Linux, 2026-11-26T18:18Z, area selfhost
+   - none
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
