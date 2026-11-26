@@ -142,3 +142,39 @@ def test_call_operand_programs_execute(tmp_path, optimize):
     output.chmod(0o755)
     ran = subprocess.run([str(output)], capture_output=True, text=True, timeout=10)
     assert (ran.returncode, ran.stdout, ran.stderr) == (0, "", "")
+
+
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
+def test_name_only_operands_join_the_parallel_move(tmp_path, monkeypatch):
+    """An operand recorded without a value ID is still a register copy.
+
+    The direct indexed capture can hand the call emitter an operand by name
+    only. Its materialization copies the operand's allocated register, so it
+    must be ordered with the other copies; placed in the load phase it read
+    an argument register already overwritten (pcc1's ``Function.__init__``
+    passed one value as both arguments of ``Argument(ty, index)``).
+    """
+    from pcc.backend import self_backend_aarch64_darwin_calls as calls
+    from pcc.backend.macho_exec import link_executable
+    from pcc.backend.native_object import NativeObject
+
+    original = calls.emit_scalar_register_arguments
+
+    def name_only(func, kernel, entries, module_symbols):
+        stripped = [(entry[0], entry[1], entry[2], -1) for entry in entries]
+        return original(func, kernel, stripped, module_symbols)
+
+    monkeypatch.setattr(calls, "emit_scalar_register_arguments", name_only)
+    assembly = emit_aarch64_darwin_asm(SOURCE, optimize=True)
+    swap = _body(assembly, "swap")
+    assert "  mov x16, x0" in swap or "  mov x16, x1" in swap, swap
+    transport = emit_aarch64_darwin_indexed_transport(
+        parse_self_backend_module(SOURCE), optimize=True, structured_instructions=True,
+    )
+    sections, undefined = transport.assemble_sections()
+    data = NativeObject.from_sections(sections, undefined=undefined).to_macho()
+    output = tmp_path / "name_only_operands"
+    output.write_bytes(link_executable([data], entry="_main"))
+    output.chmod(0o755)
+    ran = subprocess.run([str(output)], capture_output=True, text=True, timeout=10)
+    assert (ran.returncode, ran.stdout, ran.stderr) == (0, "", "")

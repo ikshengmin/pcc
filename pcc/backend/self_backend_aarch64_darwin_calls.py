@@ -25,6 +25,7 @@ from .self_backend_aarch64_darwin_abi import (
 )
 from .self_backend_aarch64_darwin_flow import emit_bit_count_intrinsic_call
 from .self_backend_aarch64_darwin_regalloc import (
+    allocated_register_name,
     commit_allocated_scalar_result,
     commit_allocated_scalar_result_indexed,
 )
@@ -2060,6 +2061,40 @@ def _store_indexed_scalar_result(
 _PARALLEL_MOVE_PARK = 16
 
 
+def _register_argument_source(
+    func: ParsedFunction,
+    kernel: IndexedFunctionKernel,
+    value: str,
+    type_id: int,
+    value_id: int,
+) -> int:
+    """The register an operand's materialization copies from, or -1.
+
+    Mirrors ``materialize_scalar_value_indexed``: with the indexed slot
+    projection and a value ID, the kernel's assignment; otherwise (an
+    operand that reaches the call by name only, as the direct indexed
+    capture records some) ``materialize_value``'s lookup by name. Any
+    operand that is a register copy must join the parallel move: copied
+    in the load phase it would read an argument register an earlier load
+    already wrote (pcc1's ``Function.__init__`` passed one value as both
+    ``Argument(ty, index)`` arguments).
+    """
+    kind = kernel.type_kind_id(type_id)
+    if kind != TYPE_KIND_INT and kind != TYPE_KIND_PTR:
+        return -1
+    if value_id >= 0 and func.indexed_slot_projection:
+        if kernel.alloca_offset(value_id) >= 0:
+            return -1
+        allocated = kernel.value_register(value_id)
+        if allocated is None:
+            return -1
+        return allocated
+    name = allocated_register_name(func, value, kernel.type_desc(type_id))
+    if name is None:
+        return -1
+    return int(name[1:])
+
+
 def emit_scalar_register_arguments(
     func: ParsedFunction,
     kernel: IndexedFunctionKernel,
@@ -2082,13 +2117,7 @@ def emit_scalar_register_arguments(
     loads: list[tuple[int, str, int, int]] = []
     for entry in entries:
         register_index, value, type_id, value_id = entry
-        source = -1
-        if value_id >= 0 and func.indexed_slot_projection:
-            kind = kernel.type_kind_id(type_id)
-            if (kind == TYPE_KIND_INT or kind == TYPE_KIND_PTR) and kernel.alloca_offset(value_id) < 0:
-                allocated = kernel.value_register(value_id)
-                if allocated is not None:
-                    source = allocated
+        source = _register_argument_source(func, kernel, value, type_id, value_id)
         if source >= 0:
             moves.append([register_index, source, type_id])
         else:
