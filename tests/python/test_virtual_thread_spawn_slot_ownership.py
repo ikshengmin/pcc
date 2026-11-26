@@ -33,6 +33,9 @@ def _spawn_source(generator=False, sink=True, module_scope=False, resume=False):
 CLEANUP_HELPERS = {
     "py_cleanup_one_root_preserving_exception": 1,
     "py_cleanup_two_roots_preserving_exception": 2,
+    "py_cleanup_three_roots_preserving_exception": 3,
+    "py_cleanup_four_roots_preserving_exception": 4,
+    "py_cleanup_five_roots_preserving_exception": 5,
 }
 
 
@@ -46,8 +49,8 @@ def _cleanup_helper(ins, addresses):
 def _assert_singleton_root_cleanup(block, addresses):
     """Recognize the audited helpers without hiding caller-slot retirement.
 
-    One or two lexical operand roots are cleared by one helper call, which
-    saves/restores the selecting exception internally (two roots share one
+    One to five lexical operand roots are cleared by one helper call, which
+    saves/restores the selecting exception internally (the roots share one
     exception scope); tests in test_owned_cleanup_helpers execute those
     bodies with hostile moving callbacks. Here each exact caller owner must
     remain live through the call and retire, in reverse registration order,

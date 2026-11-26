@@ -56,6 +56,9 @@ class CleanupModel(CallObjectLoweringMixin):
             "pcc_gc_load_ptr", "py_raise", "pcc_gc_foreign_lease_release",
             "py_cleanup_one_root_preserving_exception",
             "py_cleanup_two_roots_preserving_exception",
+            "py_cleanup_three_roots_preserving_exception",
+            "py_cleanup_four_roots_preserving_exception",
+            "py_cleanup_five_roots_preserving_exception",
             "py_cleanup_one_lease_preserving_exception",
         )}
         self._slot_call_root_records = [(name, None, True) for name in owners]
@@ -466,7 +469,9 @@ def test_cleanup_scopes_do_not_enroll_function_owners():
     from tests.python.test_slot_call_lexical_roots import _emit
 
     codegen, text = _emit("def probe(source: dict):\n    return dict(source)\n")
-    assert "call.slot.exception" in text
+    # Three plain owners take the runtime helper; no cleanup-local exception
+    # owner exists, inline or not, among the function's owners.
+    assert "@py_cleanup_three_roots_preserving_exception(" in text
     assert not any("call.slot.exception" in name for name in codegen._owned_local_names)
     assert not any("call.slot.exception" in name for name in codegen.env)
 
@@ -483,7 +488,8 @@ def test_cleanup_local_frames_balance_at_module_function_and_generator_errors(so
     from tests.python.test_slot_call_lexical_roots import _emit
 
     _codegen, text = _emit(source)
-    assert "@py_tls_exc_swap_slot(" in text
+    assert ("@py_tls_exc_swap_slot(" in text
+            or re.search(r"@py_cleanup_\w+_roots?_preserving_exception\(", text))
     prepared = prepare_module_for_target(text, aggregate_returned_indirect=_aggregate_returned_indirect)
     plans = build_stack_map_plans(prepared.functions, prepared.globals_, target="x86_64-linux")
     assert len(plans) == len(prepared.functions)

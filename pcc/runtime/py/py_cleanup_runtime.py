@@ -58,6 +58,57 @@ def py_cleanup_two_roots_preserving_exception(first: c_ptr, second: c_ptr) -> No
     pcc_gc_frame_leave_lifo(error)
 
 
+# Three to five owners: the same program as two, releasing the last owner
+# first (the order of the caller's inline cleanup it replaces).
+@c_abi_typed_export("py_cleanup_three_roots_preserving_exception", "void", ("ptr", "ptr", "ptr"))
+def py_cleanup_three_roots_preserving_exception(first: c_ptr, second: c_ptr, third: c_ptr) -> None:
+    error = stack_alloc(C_POINTER_SIZE)
+    store_ptr(error, 0, null())
+    pcc_gc_frame_enter_lifo(global_addr("pcc_cleanup_exception_map"), error)
+    py_tls_exc_swap_slot(error)
+    pcc_gc_store_root(third, null())
+    pcc_gc_store_root(second, null())
+    pcc_gc_store_root(first, null())
+    py_clear_exception()
+    py_tls_exc_swap_slot(error)
+    pcc_gc_frame_leave_lifo(error)
+
+
+@c_abi_typed_export("py_cleanup_four_roots_preserving_exception", "void", ("ptr", "ptr", "ptr", "ptr"))
+def py_cleanup_four_roots_preserving_exception(
+    first: c_ptr, second: c_ptr, third: c_ptr, fourth: c_ptr,
+) -> None:
+    error = stack_alloc(C_POINTER_SIZE)
+    store_ptr(error, 0, null())
+    pcc_gc_frame_enter_lifo(global_addr("pcc_cleanup_exception_map"), error)
+    py_tls_exc_swap_slot(error)
+    pcc_gc_store_root(fourth, null())
+    pcc_gc_store_root(third, null())
+    pcc_gc_store_root(second, null())
+    pcc_gc_store_root(first, null())
+    py_clear_exception()
+    py_tls_exc_swap_slot(error)
+    pcc_gc_frame_leave_lifo(error)
+
+
+@c_abi_typed_export("py_cleanup_five_roots_preserving_exception", "void", ("ptr", "ptr", "ptr", "ptr", "ptr"))
+def py_cleanup_five_roots_preserving_exception(
+    first: c_ptr, second: c_ptr, third: c_ptr, fourth: c_ptr, fifth: c_ptr,
+) -> None:
+    error = stack_alloc(C_POINTER_SIZE)
+    store_ptr(error, 0, null())
+    pcc_gc_frame_enter_lifo(global_addr("pcc_cleanup_exception_map"), error)
+    py_tls_exc_swap_slot(error)
+    pcc_gc_store_root(fifth, null())
+    pcc_gc_store_root(fourth, null())
+    pcc_gc_store_root(third, null())
+    pcc_gc_store_root(second, null())
+    pcc_gc_store_root(first, null())
+    py_clear_exception()
+    py_tls_exc_swap_slot(error)
+    pcc_gc_frame_leave_lifo(error)
+
+
 @c_abi_typed_export("py_cleanup_one_lease_preserving_exception", "void", ("ptr", "i64"))
 def py_cleanup_one_lease_preserving_exception(slot: c_ptr, acquired: i64) -> None:
     error = stack_alloc(C_POINTER_SIZE)

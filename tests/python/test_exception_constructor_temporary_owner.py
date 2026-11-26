@@ -123,7 +123,8 @@ def _temporary_owner_contract(module, symbol, has_argument, nested):
                 cleared.append(roots.slot(roots.args(ins)[0]))
             elif roots.called(ins, "py_cleanup_one_root_preserving_exception"):
                 cleared.append(roots.slot(roots.args(ins)[0]))
-            elif roots.called(ins, "py_cleanup_two_roots_preserving_exception"):
+            elif any(roots.called(ins, "py_cleanup_" + count + "_roots_preserving_exception")
+                     for count in ("two", "three", "four", "five")):
                 cleared.extend(roots.slot(arg) for arg in roots.args(ins))
             if argument is not None and argument in cleared:
                 assert lease_released and not argument_cleared, "argument owner must retire once, after its lease"

@@ -80,7 +80,8 @@ def _message_contract(module, converted):
                 retired.append(roots.slot(roots.args(ins)[0]))
             elif roots.called(ins, "py_cleanup_one_root_preserving_exception"):
                 retired.append(roots.slot(roots.args(ins)[0]))
-            elif roots.called(ins, "py_cleanup_two_roots_preserving_exception"):
+            elif any(roots.called(ins, "py_cleanup_" + count + "_roots_preserving_exception")
+                     for count in ("two", "three", "four", "five")):
                 retired.extend(roots.slot(arg) for arg in roots.args(ins))
             for slot in inputs.intersection(retired):
                 assert slot not in cleared, "message owner must retire once"

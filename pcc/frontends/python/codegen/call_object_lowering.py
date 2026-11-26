@@ -196,6 +196,14 @@ def stable_parameter_operand_source(host, expr):
 # such a gate (pcc_thread_all_stopped_at_gates); runtime polls never relocate.
 # Collectors mark and rewrite that frame and the caller's root slots alike.
 _GATE_FREE_ARGUMENT_LITERALS = (IntLit, FloatLit, BoolLit, NoneLit, StrLit, BytesLit)
+# Exception-preserving cleanup of N root slots (pcc/runtime/py/py_cleanup_runtime.py).
+_ROOTS_CLEANUP_HELPERS = {
+    1: "py_cleanup_one_root_preserving_exception",
+    2: "py_cleanup_two_roots_preserving_exception",
+    3: "py_cleanup_three_roots_preserving_exception",
+    4: "py_cleanup_four_roots_preserving_exception",
+    5: "py_cleanup_five_roots_preserving_exception",
+}
 
 
 def direct_call_argument_reads_stable_root(host, expr, target_ty) -> bool:
@@ -528,6 +536,18 @@ class CallObjectLoweringMixin:
             if lifo:
                 self._emit_gc_frame_leave_lifo_for_slot(slot)
 
+    def _roots_cleanup_helper(self, count):
+        """The runtime's exception-preserving cleanup for COUNT root slots."""
+        name = _ROOTS_CLEANUP_HELPERS[count]
+        if name in self.runtime:
+            return self.runtime[name]
+        declared = self.module.globals.get(name)
+        if declared is None:
+            declared = ir.Function(
+                self.module, ir.FunctionType(ir.VoidType(), [_CSTR] * count), name=name,
+            )
+        return declared
+
     def _slot_call_cleanup_block(self, roots, target, leases=()):
         # A token-0 lease (every lease under the one collector) needs no
         # release on the error edge.
@@ -565,30 +585,22 @@ class CallObjectLoweringMixin:
         self.builder.position_at_end(cleanup)
         # Keep caller-frame retirement visible to precise stack-map analysis.
         # Only the helper's own balanced exception frame is hidden by this call.
-        one_root = (len(root_owners) == 1 and not lease_owners
-                    and root_owners[0][1] is None and root_owners[0][2])
-        two_roots = (len(root_owners) == 2 and not lease_owners
-                     and root_owners[0][1] is None and root_owners[0][2]
-                     and root_owners[1][1] is None and root_owners[1][2])
+        # One to five plain LIFO owners without a flag: one runtime helper
+        # runs the whole exception-preserving program (one exception scope
+        # spans every release; chaining single-root helpers would hide the
+        # first callback's error from the next). It releases the last owner
+        # first, as the inline program below does.
+        helper_roots = (not lease_owners and 1 <= len(root_owners) <= 5
+                        and all(flag is None and lifo for _slot, flag, lifo in root_owners))
         one_lease = not root_owners and len(lease_owners) == 1
-        if one_root or two_roots or one_lease:
-            if one_root:
-                slot = root_owners[0][0]
+        if helper_roots or one_lease:
+            if helper_roots:
                 self.builder.call(
-                    self.runtime["py_cleanup_one_root_preserving_exception"],
-                    [self._as_gc_ptr(slot)],
+                    self._roots_cleanup_helper(len(root_owners)),
+                    [self._as_gc_ptr(owner[0]) for owner in root_owners],
                 )
-                self._emit_gc_frame_leave_lifo_for_slot(slot)
-            elif two_roots:
-                first, second = root_owners[0][0], root_owners[1][0]
-                # One exception scope spans both releases. Chaining single-root
-                # helpers would hide the first callback's error from the next.
-                self.builder.call(
-                    self.runtime["py_cleanup_two_roots_preserving_exception"],
-                    [self._as_gc_ptr(first), self._as_gc_ptr(second)],
-                )
-                self._emit_gc_frame_leave_lifo_for_slot(second)
-                self._emit_gc_frame_leave_lifo_for_slot(first)
+                for owner in reversed(root_owners):
+                    self._emit_gc_frame_leave_lifo_for_slot(owner[0])
             else:
                 slot, token = lease_owners[0]
                 self.builder.call(
