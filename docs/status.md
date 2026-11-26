@@ -218,6 +218,20 @@ in the relevant section or issue and removes the entry.
   likely run without pointer-authentication keys, so the hint instructions
   may protect nothing there; not verified.
 
+- P0 (c), asked by Claude 2026-11-26: the self AArch64 allocator's model
+  now limits P0 (technique log (e)): every value keeps a stack slot and a
+  register is only a projection, call operands and values crossing calls
+  live in x19-x28 and are copied into x0-x7, and no interval is split.
+  Peephole-sized changes measured 0.4-2.2% each. Replace the allocation
+  model (an LLVM-greedy-like allocator: live-range splitting, call-site
+  register constraints with a parallel-move argument setup, coalescing,
+  callee-saved shrink-wrapping), a multi-day backend change shared by
+  Darwin and Linux AArch64 and gated by the bootstrap, or keep extending the
+  current one? Claude's recommendation: replace it, starting with the
+  call-site constraints and parallel moves, which carry the "args before
+  call", "into argument register" and "result after call" copies (48% of the
+  register copies in the step trace).
+
 1. **GC correctness.** Open issues:
    [#7](https://github.com/ikshengmin/pcc/issues/7) (ownership of managed
    boxed-int direct returns) waits for a new reported native owner witness,
@@ -1486,6 +1500,27 @@ in the relevant section or issue and removes the entry.
    `tests/python/test_aarch64_label_run_fallthrough_and_loop_separator.py`
    (text, typed and native agree; native bytes equal the assembled text;
    a loop program runs).
+   (e) Phi coalescing in the register allocator (Claude, 2026-11-26).
+   Of the 19392 register copies in the step trace, block-local copy
+   propagation could remove at most 1073 (5.5%); the rest come from
+   allocation: phi edge copies, call operands forced into x19-x28 so the
+   argument setup copies them, call results moved out of x0. The callee-
+   saved allocator now merges a phi and an incoming value into one
+   register group when no member interval of one overlaps one of the other
+   (`_phi_coalescing_pairs`, `_merge_alias_groups`); the edge copy then has
+   equal source and destination and is skipped. Platforms: AArch64 Darwin
+   and Linux (shared allocator); the x86-64 allocator is separate. Measured
+   with `instr` (load 4.6): 259091 (p1-sep) -> 258168 (p1-phi), -0.36%,
+   run spread at most 0.17%. Test: `tests/python/test_aarch64_phi_coalescing.py`
+   (merge rules, a swap cycle and a value used after its loop stay apart,
+   native execution in both modes). With (c) to (e) self runs 258168
+   instructions per request against 186681 for clang's code generation of
+   the same IR (1.38x) and 155k for asyncio (1.67x). Three peephole-sized
+   changes measured 2.2%, 1.4% and 0.4%: the remaining gap is the
+   allocation model (every value keeps a stack slot, call operands live in
+   callee-saved registers, no parallel-move argument setup, no live-range
+   splitting, no shrink-wrapped callee-saved saves), which needs a design
+   decision before more work; see the waiting list.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2

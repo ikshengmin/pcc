@@ -1364,9 +1364,61 @@ def _alias_root(parent: dict[int, int], value_id: int) -> int:
     return root
 
 
+_COALESCE_CHECK_LIMIT = 4096
+
+
+def _phi_coalescing_pairs(kernel) -> list[tuple[int, int]]:
+    """(phi, incoming value) pairs in block and phi order.
+
+    A phi and an incoming value that share one register make that edge's
+    copy a no-op (``_phi_copy_schedule`` skips a copy whose source and
+    destination keys are equal).
+    """
+
+    pairs: list[tuple[int, int]] = []
+    block_id = 0
+    while block_id < len(kernel.block_names):
+        phi_fact = kernel.block_phi_fact(block_id)
+        phi_index = 0
+        while phi_index < phi_fact.second:
+            phi = kernel.phi_record(phi_fact.first + phi_index)
+            if phi.first >= 0:
+                incoming_index = 0
+                while incoming_index < phi.fourth:
+                    incoming = kernel.phi_incoming(phi.third + incoming_index)
+                    if incoming.first >= 0 and incoming.first != phi.first:
+                        pairs.append((phi.first, incoming.first))
+                    incoming_index += 1
+            phi_index += 1
+        block_id += 1
+    return pairs
+
+
+def _groups_disjoint(
+    left: list[int], right: list[int], span: dict[int, tuple[int, int]],
+) -> bool:
+    """Whether no member interval of ``left`` overlaps one of ``right``.
+
+    Intervals follow the scan's donation rule: one ending at a position may
+    hand its register to one starting there.  A pair too large to check is
+    treated as overlapping.
+    """
+
+    if len(left) * len(right) > _COALESCE_CHECK_LIMIT:
+        return False
+    for left_id in left:
+        left_start, left_end = span[left_id]
+        for right_id in right:
+            right_start, right_end = span[right_id]
+            if not (left_end <= right_start or right_end <= left_start):
+                return False
+    return True
+
+
 def _merge_alias_groups(
     intervals: list[tuple[int, int, int, bool]],
     alias_pairs: list[tuple[int, int]],
+    coalesce_pairs: list[tuple[int, int]] | None = None,
 ) -> tuple[list[tuple[int, int, int, bool]], dict[int, list[int]]]:
     """Coalesce no-op casts with their sources into one register group.
 
@@ -1374,11 +1426,18 @@ def _merge_alias_groups(
     source's bits, so the pair may share one register for the union of their
     intervals.  Each group is keyed by its smallest value id; only candidates
     (values with an interval) are merged.
+
+    ``coalesce_pairs`` (a phi and an incoming value) hold different values,
+    so their groups merge only when no member interval of one overlaps a
+    member interval of the other: the register then holds each value only
+    while it is live, and the edge copy between them disappears.
     """
 
     has_interval: set[int] = set()
-    for _start, _end, value_id, _needs in intervals:
+    span: dict[int, tuple[int, int]] = {}
+    for start, end, value_id, _needs in intervals:
         has_interval.add(value_id)
+        span[value_id] = (start, end)
     parent: dict[int, int] = {}
     for dest_id, source_id in alias_pairs:
         if dest_id not in has_interval or source_id not in has_interval:
@@ -1391,6 +1450,25 @@ def _merge_alias_groups(
             parent[source_root] = dest_root
         else:
             parent[dest_root] = source_root
+    if coalesce_pairs:
+        group_list: dict[int, list[int]] = {}
+        for _start, _end, value_id, _needs in intervals:
+            root = _alias_root(parent, value_id)
+            if root not in group_list:
+                group_list[root] = []
+            group_list[root].append(value_id)
+        for left_id, right_id in coalesce_pairs:
+            if left_id not in has_interval or right_id not in has_interval:
+                continue
+            left_root = _alias_root(parent, left_id)
+            right_root = _alias_root(parent, right_id)
+            if left_root == right_root:
+                continue
+            if not _groups_disjoint(group_list[left_root], group_list[right_root], span):
+                continue
+            keep, drop = (left_root, right_root) if left_root < right_root else (right_root, left_root)
+            parent[drop] = keep
+            group_list[keep].extend(group_list.pop(drop))
 
     group_start: dict[int, int] = {}
     group_end: dict[int, int] = {}
@@ -2249,7 +2327,7 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
         # All reload membership consumers are finished before alias grouping.
         reload_offsets.clear()
         group_intervals, group_members = _merge_alias_groups(
-            pool_intervals, alias_pairs
+            pool_intervals, alias_pairs, _phi_coalescing_pairs(kernel)
         )
         # A group that must survive a call keeps x19-x28 for all members.
         fixed_roots: dict[int, int] = {}
