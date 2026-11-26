@@ -4138,10 +4138,37 @@ in the relevant section or issue and removes the entry.
    not performance evidence. No coallocation change. Next read the
    naturally cumulative hosted Stage2 histogram to quantify actual
    live small-table footprint before any candidate; continue analyzing
-   list growth and continuation node ownership.
+   independent lifetime owners.
+
+   Actual allocator live-byte accounting owner screen (Linux, Codex):
+   after inline-list (a5b2bb00), five actual C20 pairs yield 45.92625
+   allocations and 44.9025 non-null frees/request. Magazine route covers
+   90.70125 of 90.82875 accounting operations/request. Each existing
+   allocation/free computes the stack-shard address and performs two
+   atomic RMWs; structural 181.6575 RMWs/request is not a cycle estimate.
+   Exact allocator source b3f78849107559fcc4fb94a61963ff51be2224804c82eb4787f1c63fbd4f30a8
+   is byte-identical current b73eec84 and owned archive fa4ef058
+   (built 5f49dbca plus exact dictionary diagnostic source, not current
+   full compiler artifact). Native owned C ELF b4d020ebcfc88132990d20f85ca5ad10df82c098867414b9a536af557914fa28,
+   10M pairs/arm, 5 alternating triples per 32/32,72/128,168/256 B
+   size pair and control; all 90 runs exact checksum and quiescent
+   allocator counter balances. Actual account allocate+free excess over
+   same indirect noops 38.709/38.073/38.246 ns/pair (max unchanged
+   drift .163/.527/.284 ns); a same-binary single-writer relaxed
+   load/store reference removes 33.140/33.037/33.017 ns/pair, 5/5
+   each (max control 1.256/1.639/4.804 ns). Entire owner upper envelope
+   1.727–1.756 us/request (3.06–3.11% of measured 56.4 us/request);
+   plausible local counter reference only 1.497–1.503 us (2.65–2.67%),
+   before registering/retiring per-thread stats, foreign fallback and
+   exact concurrent read costs. No memory reduction. Guard build
+   2.315s / 76,566,528B; quiet measurement 21.771s / 17,391,616B,
+   unchanged 1 GiB tree guard / 2 GiB reserve. REJECT this complex
+   per-thread accounting proposal below the 3% ceiling; no production
+   source change and no actual-handler speed claim. Next attribute the
+   terminal release/finish ownership chain or another larger structural
+   lifecycle owner before selecting the next candidate.
 
    Claims:
-   - Actual native allocator live-byte accounting owner attribution: Codex, Linux, 2026-11-26T23:08Z, area runtime-gc-allocator-accounting
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
    - Hosted Stage1 inline error-edge route parity: Codex, Linux, 2026-11-26T22:42Z, area selfhost (bootstrap_platform.py only; existing direct inline edge semantics and actual class_gen A/B before enablement)
 4. **Source-language frontends**, in parallel with item 2 (different files;
