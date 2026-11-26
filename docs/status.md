@@ -3497,10 +3497,67 @@ in the relevant section or issue and removes the entry.
        events),97 host focused tests pass, exact small PCO; directional
        single smoke RSS172076KiB, still +4996KiB vs base formal median.
        Reject correction too, no formal timing or production changes.
+       Actual ARM typed validation attribution/rejected scalar proof
+       (Codex/Linux, base2b583f88, real frozen ARM Linux PIDX from
+       same backend source7f8a3bda). Initial c_codegen1,525,851 records
+       (1,072,391 instructions/453,460 events),2,364,993 tokens,
+       498,726 symbol tokens,322,969 symbols, completed prefix0.
+       Diagnostic require_complete CPU4.646s,1,145 samples: frozen
+       CompilerInt4 constructors735 (64.2%), get4_unchecked165
+       (14.4%), token_count67, require_header33. Exact host scalar
+       successful proof checks every original header opcode/form/token
+       range/event-zero/symbol condition; malformed/custom/debug fall
+       to canonical diagnostics/order, no validator thinning.
+       Unrestricted candidate focused233 pass and frozen owner smoke
+       CPU4.218->.814s exact digest; small full exact PCO but three
+       non-timed RSS prescreen triples paired -1.73%,+3.77%,+3.04%,
+       median+3.04% vs control1.42%; reject unrestricted.
+       Narrow initial-only host threshold >=500,000 records (observed
+       c_codegen1.526M, small worker ~200k), small/incremental paths
+       canonical;234 focused tests pass, boundary/incremental,
+       malformed/debug/custom exact fallback. Actual small canonical
+       smoke exact PCO, RSS166144KiB within control. Strict contextual
+       625 closure base73 funcs/23,844 instr; candidate76/26,817,
+       fallback0/no libpython. Five unchanged native methods full
+       call multisets/instruction counts exact; require_complete
+       843->929 instructions,399->444 static calls solely host gate,
+       no new py_obj_call/valuebox edges, per-record loop exact.
+       Actual native CFG raw i1 flag gate block96, true101->helper119,
+       false124 helper unreachable; native sys.implementation=pcc,
+       only one raw load/branch per call, no host helper execution.
+       Clean actual full c_codegen matched screens (not formal)
+       exact PCO22,204,134B sha256
+       88554c1a84e58c21ae6def1a6a56049726bdfc5ed8c6c726feb94e427264a7b0,
+       RSS1,139,324->1,130,544KiB directional lower, validation
+       wall4.082->1.138s. Five quiet actual frozen c_codegen owner
+       triples: CPU4.208698->.892289s (-78.799%,5/5), control4.238471,
+       norm -78.644%5/5 vs drift1.311%; wall norm -78.135%5/5;
+       RSS299932->299872KiB norm -0.023%, neutral. All15 exact
+       authoritative provenance planes sha256
+       8bc489ae9c08df8f800cbff86742dc026acfdd29dc6804c791171f1f560de3a5,
+      1,525,851 records/322,969 symbols.
+       Actual qualifying ARM emitter own module (143,487 direct
+       indexed instructions, initial582,912 records/416,086
+       instructions/166,826 events,931,084 tokens,116,110 symbols)
+       five independently guarded full backend+object alternating
+       triples, same input/controls, all15 exact PCO8,355,115B sha256
+       de7b1b8e30a98d36437f9f83ea0b69a119c2afcdfb408f102be5bf7b03d6db06.
+       typed_validate wall1.648540->.385848s (-76.595%,5/5),
+       norm -76.579%5/5 vs drift5.781%; finalize norm -7.257%5/5
+       vs drift1.989%; backend+object CPU51.759876->49.090141s
+       (-5.158%,5/5), norm -2.665%5/5 vs drift2.705%; full decode+
+       backend CPU norm -2.619%5/5 vs drift2.474%.
+       REJECT: qualifying full worker RSS437488->458120KiB,
+       control435876, raw+4.716%, paired median+2.520% (3/5 higher)
+       vs median control drift.596%; paired -1.157,+5.204,+2.520,
+       -.032,+5.807%; max same-base drift6.93% but no stable memory
+       noninferiority. Strong actual owner/phase gain alone cannot
+       override full RSS gate. No allocator tuning or another
+       threshold retry, no production source change/whole Stage1 claim.
        Next (latest actual Stage1 codegen priority): (1) ARM typed
-       validate/prepare or native dominant owner repeated work, guided
-       by measured child phases and preserving private/public
-       snapshot contracts; then common indexed fact/emission
+       prepare memory: actual private read_span temporary list
+       duplication/ownership transfer, measure calls/cost/RSS and
+       preserve public snapshot/callback/native path; then common indexed fact/emission
        owner; (2) J2 (e) one error
        landing per function after registering temporaries once, measured
        against the actual CI block inventory; (3) the allocation model
@@ -3871,7 +3928,6 @@ in the relevant section or issue and removes the entry.
    ownership cost before selecting the next structural reduction.
 
    Claims:
-   - Stage1 ARM typed validation successful scalar provenance owner: Codex, Linux, 2026-11-26T20:40Z, area backend-aarch64-validate
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
