@@ -1902,6 +1902,28 @@ in the relevant section or issue and removes the entry.
        checks it 15 times, once after each call that already returns
        NULL on error); then the QPS measurement and a systematic review
        of the frontend for the same exits-times-locals shape.
+       Codex conservative static save-prefix screen (Linux, source
+       `702bb226`, actual gateway `b1490486`, 25-module closure plus stdlib):
+       1,172,323 -> 1,172,178 total IR lines, 19,759 -> 19,649 save moves;
+       the dominant `_proxy_exchange_attempt` is unchanged at 95,620 lines
+       and 9,852 `py_gen_frame_move` calls. Its 73 shared-exit value inputs
+       are all raw `vthread.delegate.value` SSA results, excluded by the
+       proof that admitted only permanent words or registered handoff slots.
+       A 32-park fixture did shrink 704 -> 22 moves and x86 object
+       144,616 -> 101,688 bytes; five alternating compile+object CPU pairs
+       1.236 -> 0.900 s, 4/5 raw but only 3/5 control-normalized wins;
+       unchanged control 0.441 -> 0.476 s, byte-identical within/across arms.
+       This is not evidence of a Stage1 or gateway QPS gain. Source-matched
+       Linux native text and direct indexed arms matched CPython's output
+       for yield/send/throw/close and finalization. Related host gates: 19
+       passing, 29 failing, same 29 on the exact base (17 passing before
+       the new two host nodes); the failures are unchanged borrowed-owner
+       retirement assertions and Linux-to-Darwin target mismatch.
+       Rejected, no production code published. Next first prove the delegated
+       return's owned handoff to an always-empty registered activation slot
+       before existing frame saves, and verify that publication, callback
+       order, stack-map identity and resumed child ownership stay exact;
+       then reconsider shared save-prefix or park-live-slot reduction.
    J2s. Stage1 compile time (the user, 2026-11-26: target five minutes,
        six workers). A macOS Stage1 on dcc443bcf's tree took 2163 s wall
        under host load and 8795 s CPU; its 622 codegen workers took about
@@ -2099,7 +2121,6 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
-   - J2 Stage1 IR reduction: consolidate generator frame-save programs with identical slot/flag plans, disjoint from runtime and preload; Claude resting per maintainer, previous claim retained: Codex, Linux, 2026-11-26T15:50Z, area frontend-python
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
