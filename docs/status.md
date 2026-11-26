@@ -3775,6 +3775,29 @@ in the relevant section or issue and removes the entry.
    described above. This confirms the exact phase shape and motivates
    bounded real backend progress receipts and actual class method traces.
 
+   Authentic retained native pcc1 method trace (diagnostic only): same
+   old-source singleton/manifest, 400-second / 1.8-GiB guard, existing
+   PCC_DEBUG_CODEGEN_PHASES enables statement/body logging, filtered
+   method inter-event wall timestamps while independent builds ran.
+   All 155 ClassLowering methods completed, no skips/open method;
+   final methods-end marker at 275.162475 s from invocation. Intentional
+   scope stop after observing marker (exit 130; guard JSON remained a
+   RUNNING checkpoint; no worker completion, no CPU result). Last sample
+   at 293.518 s; sampled peak tree 1,285,758,976 B. Trace SHA256
+   670a61b808faf278ca219a5853c0f6b7f10ed1ebbb49cefd8e617c1bbc8e693d.
+   Observed completed method compilation spans total 163.406172 s,
+   top _emit_class_init 21.647770, _emit_method_body 14.573946,
+   _emit_class_init_outline_body 10.706633 (top three 28.72% of sum),
+   _maybe_expand_dataclass 6.751469, declare_extern_class 5.309528,
+   _emit_class_method_publication 5.169204, emit_instantiate 5.119972,
+   _normalize_native_class_bases 5.048629 s. The values identify which
+   method bodies the retained compiler was compiling, not execution
+   costs of those routines or an uninstrumented benchmark. Preserve
+   the earlier exact uninstrumented timeout as the owner evidence.
+   Next: bounded x86 backend phase events (no timer schema change);
+   quantify actual method function-table snapshot visits and mutations
+   before selecting a structural optimization.
+
    Claims:
    - Stage2 class_gen same-route host comparator and method attribution: Codex, Linux, 2026-11-26T18:30Z, area selfhost
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
