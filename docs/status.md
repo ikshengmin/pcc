@@ -728,7 +728,7 @@ in the relevant section or issue and removes the entry.
    under the unchanged 90 s / 1 GiB guard. Hosted verification pending.
 
    Claims:
-   - none
+   - shared stack-map scratch CPython reference explicit checkout import root (hosted 15144448317): Codex, Linux, 2026-11-26T18:28Z, area ci-shared-scratch-reference
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
