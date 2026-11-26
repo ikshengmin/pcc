@@ -1702,12 +1702,42 @@ in the relevant section or issue and removes the entry.
        locals die at one exit pcc releases them in name order, not
        CPython's; CPython's traceback keeps a thrown-into generator's
        frame alive until its except block ends, pcc releases earlier.
-       Next: (b) a park saves only the slots live across it (73 parks
-       x 90-142 `py_gen_frame_move` in the gateway function, also per
-       park at run time); a park's fresh hidden selection slots
-       (`handled.resume.pending.owner`, `except.class.*`) could reuse
-       one per function; then a systematic review of the frontend for
-       the same exits-times-locals shape.
+       The first version joined the exits through phis; the self IR
+       verifier rejected a shared exit's phi with excess predecessor
+       edges in Stage1, so ca5d198e6 turned it off. dcc443bcf carries
+       the value, next state and handoff slot through three entry
+       allocas instead and turns it on by default
+       (`PCC_GENERATOR_SHARED_EXIT=0` turns it off); a macOS Stage1 of
+       it passed, smoke included. (c) done in the same commit: the
+       hidden owners of `handled.resume.pending`, `except.class` and
+       `except.class.replacement` reuse one slot per function and label
+       (`tests/python/test_exception_selection_slot_reuse.py`). (d) one
+       traceback-append block per function: with slots it added 2.6% IR
+       lines on the measured module, not merged. Next: (b) a park saves
+       only the slots live across it (73 parks x 90-142
+       `py_gen_frame_move` in the gateway function, also per park at run
+       time); (e) shared call-site error cleanup; (f) fewer
+       `py_err_occurred` checks (a `__repr__` of a three-field dataclass
+       checks it 15 times, once after each call that already returns
+       NULL on error); then the QPS measurement and a systematic review
+       of the frontend for the same exits-times-locals shape.
+   J2s. Stage1 compile time (the user, 2026-11-26: target five minutes,
+       six workers). A macOS Stage1 on dcc443bcf's tree took 2163 s wall
+       under host load and 8795 s CPU; its 622 codegen workers took about
+       8600 worker-seconds, 91% of a large worker in the self backend
+       (54% in the record-level passes after selection, about 20% in
+       constructing frozen-dataclass records on CPython), and produced
+       objects at about 3.4 s per MB (pcc1 `__text` 225.4 MiB;
+       `pcc.frontends.python.py_ast`, 10 KB of source, is a 10 MB object
+       and a 60 s worker). Six perfectly scheduled workers would still
+       need about 1440 s, so five minutes needs about a fifth of the CPU:
+       smaller generated code first, then the backend's per-record cost.
+       Done: 781c088d1 (module memory prior: 3-4 workers ran where 6
+       fit; replayed admission 1823 -> 1506 s), 6b3df67a0 (host workers
+       decode their root's export closure, not the 30.7 MB graph),
+       564bac71a (the pool stops re-deciding an unchanged declined
+       admission), a35adce4c (six Stage1 frontend workers, six backend
+       jobs). Unmeasured as a whole: no Stage1 has run with all four.
    J3. TaskScope (5x CPython), `time.perf_counter` (7x), `str.encode` (5x).
    A1. Darwin thread-local access inline (TSD slot through `tpidrro_el0`,
        startup check, fallback to the call): the resolver is 0.65 us per
@@ -1763,7 +1793,7 @@ in the relevant section or issue and removes the entry.
    on 2026-11-26.
 
    Claims:
-   - J2 plan (b)-(f), one unit each: (b) a park saves only the slots live across it; (c) one hidden exception-selection slot per function; (d) one traceback-append block per function; (e) shared call-site error cleanup; (f) fewer `py_err_occurred` checks on the normal path; then one QPS measurement: Claude, macOS, 2026-11-26T05:20Z, area runtime-codegen (`pcc/frontends/python/codegen/` `exception_lowering.py`, `generator_lowering.py`, `ownership_lowering.py`, `call_object_lowering.py` and their tests; none of these is in item 2 (d) U7-U14 or its uncommitted `runtime_abi.py`/`unsafe_lowering.py` edits)
+   - J2 plan (b), (e), (f), one unit each ((a) and (c) done in dcc443bcf, (d) not merged): (b) a park saves only the slots live across it; (e) shared call-site error cleanup; (f) fewer `py_err_occurred` checks on the normal path; then one QPS measurement: Claude, macOS, 2026-11-26T07:40Z, area runtime-codegen (`pcc/frontends/python/codegen/` `exception_lowering.py`, `generator_lowering.py`, `ownership_lowering.py`, `call_object_lowering.py` and their tests; none of these is in item 2 (d) U7-U14 or its uncommitted `runtime_abi.py`/`unsafe_lowering.py` edits)
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
