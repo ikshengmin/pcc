@@ -1734,7 +1734,7 @@ in the relevant section or issue and removes the entry.
    on 2026-11-26.
 
    Claims:
-   - none
+   - J2 plan (b)-(f), one unit each: (b) a park saves only the slots live across it; (c) one hidden exception-selection slot per function; (d) one traceback-append block per function; (e) shared call-site error cleanup; (f) fewer `py_err_occurred` checks on the normal path; then one QPS measurement: Claude, macOS, 2026-11-26T05:20Z, area runtime-codegen (`pcc/frontends/python/codegen/` `exception_lowering.py`, `generator_lowering.py`, `ownership_lowering.py`, `call_object_lowering.py` and their tests; none of these is in item 2 (d) U7-U14 or its uncommitted `runtime_abi.py`/`unsafe_lowering.py` edits)
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
