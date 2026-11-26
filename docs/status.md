@@ -952,8 +952,25 @@ in the relevant section or issue and removes the entry.
    All 35 model/object cases PASS; four actual native Darwin driver
    cases UNRUN on Linux, not waived. No production or policy change.
 
+   Generator C fixtures (Linux native, 2026-11-26): strict-admitted
+   current source/codegen threaded atomic runtime archive SHA256
+   a853269963429ae3d6c193c5d86c0226878d3cee354881c6ed58c3e439f901ac.
+   Baseline four exact C probes all FAIL undefined static ELF
+   pcc_gc_set_backend (guard COMPLETE19.921s/104722432 B). Removed
+   retired selector and unreachable multi-collector branches only.
+   Native probes now enforce successful bulk stores (including aliases),
+   invalid save nonmutation, fixed sizes 0/1/33 initialized to None,
+   traced child survival, 10 take/save round trips, retaining-getter
+   negative exit2, invalid destination rejection, owned/same-value
+   transfer, borrowed retention, and terminal allocation-count baseline.
+   Four probes PASS under same90s/1GiB guard COMPLETE10.321s/107581440 B.
+   Whole three files 8 PASS/1 pre-existing IR model failure (bulk
+   rejected experiment expects old frame_set but current resume emits
+   frame_move), guard COMPLETE22.064s/144093184 B. No production,
+   native test or resource policy change; remaining model independent.
+
    Claims:
-   - Generator native fixtures remove retired selector while retaining one-collector ownership checks: Codex, Linux, 2026-11-26T19:25Z, area ci-generator-single-collector
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and

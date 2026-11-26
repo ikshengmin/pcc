@@ -137,9 +137,7 @@ def test_frame_restore_and_save_move_one_owner(tmp_path, pcc_runtime_archive):
     source = tmp_path / "frame_roundtrip.c"
     source.write_text('''#include "py_runtime.h"
 #include <stdio.h>
-#include <stdlib.h>
-int main(int argc, char **argv) {
-    if (argc != 2 || pcc_gc_set_backend(atoi(argv[1])) != 0) return 1;
+int main(void) {
     int64_t baseline = py_gc_get_count(0);
     PyObject *roots[2] = {py_gen_frame_new(1), py_list_new(0)};
     int32_t map[1] = {2};
@@ -152,8 +150,7 @@ int main(int argc, char **argv) {
     for (int iteration = 0; iteration < 10; iteration++) {
         roots[1] = py_list_get_for_frame(roots[0], 0);
         PyObject *saved = py_list_get(roots[0], 0);
-        if ((pcc_gc_backend() == 0 && saved != py_None) ||
-            (pcc_gc_backend() != 0 && saved != roots[1])) return 2;
+        if (saved != py_None) return 2;
         py_decref(saved);
         py_gc_collect();
         number = py_list_get(roots[1], 0);
@@ -162,14 +159,14 @@ int main(int argc, char **argv) {
         py_decref(number);
         unsigned char owned = 1;
         py_list_set_from_owned_root(roots[0], 0, &roots[1], &owned);
-        if (owned) pcc_gc_store_root(&roots[1], NULL);
-        else roots[1] = NULL;
+        if (owned != 0) return 4;
+        roots[1] = NULL;
         py_gc_collect();
     }
     pcc_gc_store_root(&roots[0], NULL);
     pcc_gc_frame_leave(roots);
     py_gc_collect();
-    if (atoi(argv[1]) == 0 && py_gc_get_count(0) != baseline) return 6;
+    if (py_gc_get_count(0) != baseline) return 6;
     puts("frame-owner-roundtrip-ok");
     return 0;
 }
@@ -178,24 +175,21 @@ int main(int argc, char **argv) {
     compile_owned_c_with_runtime(
         source, executable, runtime_archive=pcc_runtime_archive, cpp_args=["-Dpy_list_get_for_frame=py_list_get"],
     )
-    ran = subprocess.run([str(executable), "0"], capture_output=True, text=True, timeout=15)
+    ran = subprocess.run([str(executable)], capture_output=True, text=True, timeout=15)
     assert ran.returncode == 2, "the ordinary retaining getter must leave the frame slot occupied"
     compile_owned_c_with_runtime(source, executable, runtime_archive=pcc_runtime_archive)
-    for backend in (0,):
-        ran = subprocess.run([str(executable), str(backend)], capture_output=True, text=True, timeout=15)
-        assert ran.returncode == 0, f"GC{backend}: " + ran.stdout + ran.stderr
-        assert ran.stdout.strip() == "frame-owner-roundtrip-ok"
+    ran = subprocess.run([str(executable)], capture_output=True, text=True, timeout=15)
+    assert ran.returncode == 0, ran.stdout + ran.stderr
+    assert ran.stdout.strip() == "frame-owner-roundtrip-ok"
 
 
 def test_frame_store_transfers_only_owned_sources(tmp_path, pcc_runtime_archive):
     source = tmp_path / "frame_owners.c"
     source.write_text('''#include "py_runtime.h"
 #include <stdio.h>
-#include <stdlib.h>
 extern void py_list_set_from_owned_root(PyObject *, int64_t, void *, void *);
 extern int64_t pcc_gc_try_store_ptr_take(PyObject *, PyObject **, PyObject *);
-int main(int argc, char **argv) {
-    if (argc != 2 || pcc_gc_set_backend(atoi(argv[1])) != 0) return 1;
+int main(void) {
     int64_t baseline = py_gc_get_count(0);
     PyObject *roots[3] = {py_gen_frame_new(1), py_list_new(0), NULL};
     int32_t map[1] = {3};
@@ -207,9 +201,8 @@ int main(int argc, char **argv) {
     py_list_set_from_owned_root(roots[0], 5, &roots[1], &owned);
     if (owned != 1) return 2; /* failed stores cannot consume the source */
     py_list_set_from_owned_root(roots[0], 0, &roots[1], &owned);
-    if (owned != (atoi(argv[1]) != 0)) return 3;
-    if (owned) pcc_gc_store_root(&roots[1], NULL);
-    else roots[1] = NULL; /* its reference now belongs to the frame */
+    if (owned != 0) return 3;
+    roots[1] = NULL; /* its reference now belongs to the frame */
     py_gc_collect();
     roots[1] = py_list_get(roots[0], 0);
     if (py_list_len(roots[1]) != 1) return 8;
@@ -220,8 +213,8 @@ int main(int argc, char **argv) {
     owned = 1;
     /* Same-value stores must consume the extra source owner too. */
     py_list_set_from_owned_root(roots[0], 0, &roots[1], &owned);
-    if (owned) pcc_gc_store_root(&roots[1], NULL);
-    else roots[1] = NULL;
+    if (owned != 0) return 11;
+    roots[1] = NULL;
     py_gc_collect();
     roots[1] = py_list_new(0);
     PyObject *borrowed = roots[1];
@@ -232,27 +225,24 @@ int main(int argc, char **argv) {
     py_gc_collect();
     roots[1] = py_list_get(roots[0], 0);
     if (py_list_len(roots[1]) != 0) return 5;
-    /* The primitive's unsupported path leaves both owner and slot alone. */
+    /* A missing destination must not consume the incoming owner. */
     py_incref(roots[1]);
-    int64_t moved = pcc_gc_try_store_ptr_take(NULL, &roots[2], roots[1]);
-    if (moved != (atoi(argv[1]) == 0)) return 6;
-    if (!moved) {
-        if (roots[2] != NULL) return 7;
-        py_decref(roots[1]);
-    }
+    int64_t moved = pcc_gc_try_store_ptr_take(NULL, NULL, roots[1]);
+    if (moved != 0 || roots[2] != NULL) return 7;
+    moved = pcc_gc_try_store_ptr_take(NULL, &roots[2], roots[1]);
+    if (moved != 1 || roots[2] != roots[1]) return 6;
     pcc_gc_store_root(&roots[2], NULL);
     pcc_gc_store_root(&roots[1], NULL);
     pcc_gc_store_root(&roots[0], NULL);
     pcc_gc_frame_leave(roots);
     py_gc_collect();
-    if (atoi(argv[1]) == 0 && py_gc_get_count(0) != baseline) return 10;
+    if (py_gc_get_count(0) != baseline) return 10;
     puts("frame-owner-transfer-ok");
     return 0;
 }
 ''')
     executable = tmp_path / "frame_owners"
     compile_owned_c_with_runtime(source, executable, runtime_archive=pcc_runtime_archive)
-    for backend in (0,):
-        ran = subprocess.run([str(executable), str(backend)], capture_output=True, text=True, timeout=15)
-        assert ran.returncode == 0, f"GC{backend}: " + ran.stdout + ran.stderr
-        assert ran.stdout.strip() == "frame-owner-transfer-ok"
+    ran = subprocess.run([str(executable)], capture_output=True, text=True, timeout=15)
+    assert ran.returncode == 0, ran.stdout + ran.stderr
+    assert ran.stdout.strip() == "frame-owner-transfer-ok"

@@ -46,10 +46,8 @@ def test_bulk_save_keeps_aliases_and_falls_back_without_mutation(tmp_path, pcc_r
     source = tmp_path / "bulk_save.c"
     source.write_text('''#include "py_runtime.h"
 #include <stdio.h>
-#include <stdlib.h>
 extern int64_t py_gen_frame_save(PyObject *, void *, int64_t);
-int main(int argc, char **argv) {
-    if (argc != 2 || pcc_gc_set_backend(atoi(argv[1])) != 0) return 1;
+int main(void) {
     PyObject *roots[3] = {py_gen_frame_new(2), py_list_new(0), py_list_new(0)};
     int32_t map[1] = {3};
     pcc_gc_frame_enter(map, roots);
@@ -64,21 +62,17 @@ int main(int argc, char **argv) {
     py_decref(value);
     py_gc_collect();
     int64_t saved = py_gen_frame_save(roots[0], slots, 2);
-    if (saved != (atoi(argv[1]) == 0)) return 5;
-    if (!saved) {
-        value = py_list_get(roots[0], 0);
-        if (value != py_None) return 6;
-        py_decref(value);
-        py_list_set(roots[0], 0, roots[1]);
-        py_list_set(roots[0], 1, roots[2]);
-    }
+    if (saved != 1) return 5;
+    value = py_list_get(roots[0], 0);
+    if (value != roots[1]) return 6;
+    py_decref(value);
+    value = py_list_get(roots[0], 1);
+    if (value != roots[2]) return 6;
+    py_decref(value);
     /* Both saved slots may alias the same independently owned source. */
     pcc_gc_store_root(&roots[2], roots[1]);
     saved = py_gen_frame_save(roots[0], slots, 2);
-    if (!saved) {
-        py_list_set(roots[0], 0, roots[1]);
-        py_list_set(roots[0], 1, roots[2]);
-    }
+    if (saved != 1) return 9;
     pcc_gc_store_root(&roots[1], NULL);
     pcc_gc_store_root(&roots[2], NULL);
     py_gc_collect();
@@ -100,7 +94,6 @@ int main(int argc, char **argv) {
 ''')
     executable = tmp_path / "bulk_save"
     compile_owned_c_with_runtime(source, executable, runtime_archive=pcc_runtime_archive)
-    for backend in (0,):
-        ran = subprocess.run([str(executable), str(backend)], capture_output=True, text=True, timeout=15)
-        assert ran.returncode == 0, f"GC{backend}: " + ran.stdout + ran.stderr
-        assert ran.stdout.strip() == "bulk-frame-save-ok"
+    ran = subprocess.run([str(executable)], capture_output=True, text=True, timeout=15)
+    assert ran.returncode == 0, ran.stdout + ran.stderr
+    assert ran.stdout.strip() == "bulk-frame-save-ok"

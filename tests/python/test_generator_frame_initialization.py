@@ -11,10 +11,8 @@ def test_generator_frame_none_slots_survive_each_collector(tmp_path: Path, pcc_r
     source.write_text('''#include "py_runtime.h"
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
 extern PyObject *py_gen_frame_new(int64_t slots);
-int main(int argc, char **argv) {
-    if (argc != 2 || pcc_gc_set_backend(atoi(argv[1])) != 0) return 1;
+int main(void) {
     int counts[3] = {0, 1, 33};
     for (int n = 0; n < 3; n++) {
         int count = counts[n];
@@ -49,8 +47,7 @@ int main(int argc, char **argv) {
 ''')
     executable = tmp_path / "frame_init"
     compile_owned_c_with_runtime(source, executable, runtime_archive=pcc_runtime_archive)
-    for backend in (0,):
-        ran = subprocess.run([str(executable), str(backend)], capture_output=True,
-                             text=True, timeout=15)
-        assert ran.returncode == 0, f"GC{backend}: " + ran.stdout + ran.stderr
-        assert ran.stdout.strip() == "generator-frame-init-ok"
+    ran = subprocess.run([str(executable)], capture_output=True,
+                         text=True, timeout=15)
+    assert ran.returncode == 0, ran.stdout + ran.stderr
+    assert ran.stdout.strip() == "generator-frame-init-ok"
