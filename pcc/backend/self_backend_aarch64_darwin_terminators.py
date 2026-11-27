@@ -222,6 +222,10 @@ def emit_cond_branch_terminator_indexed(
         icmp: CompilerInt4 = kernel.instruction_record(metadata.second)
         fused_predicate = kernel.call_texts[icmp.first]
         zero_operand = aarch64_zero_test_operand(kernel, icmp)
+        if condition_ref in func.aarch64_test_predicates:
+            # The compare emitted ``tst``: branch on Z, not on a register.
+            fused_predicate = func.aarch64_test_predicates[condition_ref]
+            zero_operand = -1
         if zero_operand >= 0:
             register = allocated_scalar_register_indexed(kernel, zero_operand, icmp.second)
             if register < 0:

@@ -1424,6 +1424,14 @@ class ParsedFunction:
     # their block's br_cond: the compare only sets the flags, the terminator
     # branches on them, and the i1 is never materialised.
     aarch64_fused_branch_values: dict[int, int] = field(default_factory=dict)
+    # Fused compares that test a masked value (``tst x, #C``), by icmp value
+    # id: the tested value id, the mask, and the condition on the flags that
+    # selects the true edge ("eq" when the masked value is zero).  The folded
+    # ``and`` value ids map to their icmp: they are never emitted.
+    aarch64_test_sources: dict[int, int] = field(default_factory=dict)
+    aarch64_test_masks: dict[int, int] = field(default_factory=dict)
+    aarch64_test_predicates: dict[int, str] = field(default_factory=dict)
+    aarch64_folded_test_ands: dict[int, int] = field(default_factory=dict)
     # The AArch64 allocator proved this function needs no frame: no call, no
     # stack memory, every value in a register.  Its prologue pushes nothing
     # and every return is a bare ``ret``.

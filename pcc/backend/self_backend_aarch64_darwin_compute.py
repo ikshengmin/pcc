@@ -1148,6 +1148,9 @@ def emit_compute_instruction_by_id(
         )
 
     if kind_id == PARSED_INSTRUCTION_KIND_BINOP:
+        if indexed_kernel is not None and indexed_dest_id in func.aarch64_folded_test_ands:
+            # Selected into its compare's ``tst`` (_masked_test_fusions).
+            return []
         if indexed_kernel is not None:
             binop_record: CompilerInt4 = indexed_kernel.instruction_record(data)
             op = indexed_kernel.call_texts[binop_record.first]
@@ -1473,6 +1476,25 @@ def emit_compute_instruction_by_id(
             if value_type_header.first in (TYPE_KIND_INT, TYPE_KIND_PTR):
                 if not indexed_dest_has_slot:
                     return []
+                if indexed_dest_id in func.aarch64_test_sources:
+                    # ``tst x, #C`` for the folded ``and``; the terminator
+                    # branches on Z (_masked_test_fusions).
+                    test_source = func.aarch64_test_sources[indexed_dest_id]
+                    test_register = allocated_scalar_register_indexed(
+                        indexed_kernel, test_source, value_type_id,
+                    )
+                    if test_register < 0:
+                        test_register = 9
+                    test_lines = materialize_scalar_value_indexed(
+                        func, indexed_kernel, indexed_kernel.value_name(test_source),
+                        value_type_id, test_register, module_symbols,
+                        value_id=test_source,
+                    )
+                    test_lines.append(emitted_scalar_immediate_line(
+                        "tst", reg_name_indexed(indexed_kernel, value_type_id, test_register),
+                        "", func.aarch64_test_masks[indexed_dest_id],
+                    ))
+                    return test_lines
                 if indexed_dest_id in func.aarch64_fused_branch_values:
                     zero_operand = aarch64_zero_test_operand(indexed_kernel, icmp_record)
                     if zero_operand >= 0:

@@ -162,6 +162,12 @@ def encode_producer_immediate(
         if left:
             raise EncodeError("unexpected producer MOV source operand")
         return _enc_mov_immediate(rd, immediate, d64, "producer MOV immediate")
+    if mnemonic == "tst":
+        # ANDS ZR, Rn, #imm: the first operand is the tested register.
+        if left:
+            raise EncodeError("unexpected producer TST second register")
+        n_bit, immr, imms = _logical_imm(immediate, d64)
+        return _sf(d64) | 0x72000000 | (n_bit << 22) | (immr << 16) | (imms << 10) | (rd << 5) | 31
     rn, n64 = _reg(left)
     if d64 != n64 or _is_sp_token(left):
         raise EncodeError("producer immediate register widths differ")

@@ -3163,6 +3163,22 @@ in the relevant section or issue and removes the entry.
    Next: the AArch64 instruction-selection layer (machine IR with
    pattern-based selection after LLVM's AArch64 patterns, then block
    placement), measured by executed instructions against arm ra-cg.
+   (m) Merged (Claude, 2026-11-27): masked tests select as `tst`. A fused
+   `icmp eq/ne iN (and x, C), 0` (or `, C` for a single-bit C) whose `and`
+   directly precedes it, has no other use and whose C is a logical
+   immediate emits `tst x, #C` with the branch on Z; the `and` is not
+   emitted and takes no register (`_masked_test_fusions`; text and producer
+   encoders gained `tst` with an immediate, words checked against clang 20).
+   Arm h4-tst against h3-base, control h3-base2 (no `pcc/` change between
+   8e5e7906e and 27d455f2a): instructions -0.61% (control +0.10%), w1
+   +1.2% (5/5, floor 9.7%), w4 +1.4% (floor 2.7%): within noise. Test:
+   `test_aarch64_and_test_fusion.py` (shapes, four refusals, encodings,
+   native execution of every branch in both allocator modes). AArch64, TLS
+   and encoder files 4683 passed (three nodes excluded that fail on HEAD
+   or need `PCC_RUNTIME_ARCHIVE`). Each selection pattern added this way
+   is worth 0.5-1% and touches three encoders, the allocator and the
+   emitters; a selection framework that matches single-use operand trees
+   once would make each further pattern a table entry.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2

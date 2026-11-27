@@ -1878,6 +1878,153 @@ def _fusable_branch_conditions(kernel) -> dict[int, int]:
 
 
 
+def _integer_literal(text: str) -> int | None:
+    body = text[1:] if text.startswith("-") else text
+    if not body or not body.isdigit():
+        return None
+    return int(text)
+
+
+def _masked_test_fusions(func: ParsedFunction, kernel, fused: dict[int, int]) -> None:
+    """Fused compares of a masked value that select as one ``tst``.
+
+    LLVM's AArch64 selection matches ``(icmp eq/ne (and x, C), 0)`` and
+    ``(icmp eq/ne (and x, C), C)`` for a single-bit ``C`` as ``tst x, #C``
+    with the branch on Z.  Here the ``and`` must be its block's
+    second-to-last instruction, directly before the fused compare (so no
+    value is defined between its read of ``x`` and the ``tst``), its only use
+    in the function must be that compare, ``C`` must be a logical immediate
+    of the compare's width, and the compare must be a 32- or 64-bit integer
+    one.  Fills the ``aarch64_test_*`` fields and
+    ``aarch64_folded_test_ands``.
+    """
+
+    from .arm64_encode import EncodeError, _logical_imm
+
+    func.aarch64_test_sources = {}
+    func.aarch64_test_masks = {}
+    func.aarch64_test_predicates = {}
+    func.aarch64_folded_test_ands = {}
+    pending_icmp: dict[int, int] = {}
+    pending_source: dict[int, int] = {}
+    pending_mask: dict[int, int] = {}
+    pending_predicate: dict[int, str] = {}
+    for icmp_id in fused:
+        block_id = fused[icmp_id]
+        block_fact: CompilerInt4 = kernel.block_fact(block_id)
+        if block_fact.second < 2:
+            continue
+        last_id = block_fact.first + block_fact.second - 1
+        metadata: CompilerInt4 = kernel.instruction_metadata_by_id(last_id)
+        icmp: CompilerInt4 = kernel.instruction_record(metadata.second)
+        predicate = kernel.call_texts[icmp.first]
+        if predicate != "eq" and predicate != "ne":
+            continue
+        header: CompilerInt4 = kernel.type_header(icmp.second)
+        if header.first != TYPE_KIND_INT or (header.second != 32 and header.second != 64):
+            continue
+        width = header.second
+        if icmp.third >= 0 and icmp.fourth < 0:
+            and_id = icmp.third
+            constant_text = kernel.call_texts[-icmp.fourth - 1]
+        elif icmp.fourth >= 0 and icmp.third < 0:
+            and_id = icmp.fourth
+            constant_text = kernel.call_texts[-icmp.third - 1]
+        else:
+            continue
+        previous: CompilerInt4 = kernel.instruction_metadata_by_id(last_id - 1)
+        if previous.first != PARSED_INSTRUCTION_KIND_BINOP:
+            continue
+        previous_fact: CompilerInt4 = kernel.instruction_fact_by_id(last_id - 1)
+        if previous_fact.first != and_id:
+            continue
+        binop: CompilerInt4 = kernel.instruction_record(previous.second)
+        if kernel.call_texts[binop.first] != "and" or binop.second != icmp.second:
+            continue
+        if binop.third >= 0 and binop.fourth < 0:
+            source_id = binop.third
+            mask_text = kernel.call_texts[-binop.fourth - 1]
+        elif binop.fourth >= 0 and binop.third < 0:
+            source_id = binop.fourth
+            mask_text = kernel.call_texts[-binop.third - 1]
+        else:
+            continue
+        mask = _integer_literal(mask_text)
+        constant = _integer_literal(constant_text)
+        if mask is None or constant is None:
+            continue
+        modulus = 1 << width
+        mask = mask % modulus
+        constant = constant % modulus
+        try:
+            _logical_imm(mask, width == 64)
+        except EncodeError:
+            continue
+        if constant == 0:
+            flags = predicate
+        elif constant == mask and (mask & (mask - 1)) == 0:
+            # (x & bit) == bit exactly when the masked value is nonzero.
+            flags = "ne" if predicate == "eq" else "eq"
+        else:
+            continue
+        pending_icmp[and_id] = icmp_id
+        pending_source[and_id] = source_id
+        pending_mask[and_id] = mask
+        pending_predicate[and_id] = flags
+    if not pending_icmp:
+        return
+
+    # Exactly one use: the compare. Count every reader of the candidates.
+    uses: dict[int, int] = {}
+    block_id = 0
+    while block_id < len(kernel.block_names):
+        block_fact = kernel.block_fact(block_id)
+        instruction_index = 0
+        while instruction_index < block_fact.second:
+            use_count = kernel.instruction_use_count(block_id, instruction_index)
+            use_index = 0
+            while use_index < use_count:
+                used = kernel.instruction_use_id(block_id, instruction_index, use_index)
+                if used in pending_icmp:
+                    uses[used] = uses.get(used, 0) + 1
+                use_index += 1
+            instruction_index += 1
+        terminator_uses = kernel.terminator_use_count(block_id)
+        terminator_index = 0
+        while terminator_index < terminator_uses:
+            used = kernel.terminator_use_id(block_id, terminator_index)
+            if used in pending_icmp:
+                uses[used] = uses.get(used, 0) + 2
+            terminator_index += 1
+        phi_fact = kernel.block_phi_fact(block_id)
+        phi_index = 0
+        while phi_index < phi_fact.second:
+            phi: CompilerInt4 = kernel.phi_record(phi_fact.first + phi_index)
+            incoming_index = 0
+            while incoming_index < phi.fourth:
+                incoming = kernel.phi_incoming(phi.third + incoming_index)
+                if incoming.first in pending_icmp:
+                    uses[incoming.first] = uses.get(incoming.first, 0) + 2
+                incoming_index += 1
+            phi_index += 1
+        error_span = kernel.inline_error_edge_span(block_id)
+        error_index = 0
+        while error_index < error_span.second:
+            condition = kernel.inline_error_edge_condition(error_span.first + error_index)
+            if condition in pending_icmp:
+                uses[condition] = uses.get(condition, 0) + 2
+            error_index += 1
+        block_id += 1
+    for and_id in pending_icmp:
+        if uses.get(and_id, 0) != 1:
+            continue
+        icmp_id = pending_icmp[and_id]
+        func.aarch64_test_sources[icmp_id] = pending_source[and_id]
+        func.aarch64_test_masks[icmp_id] = pending_mask[and_id]
+        func.aarch64_test_predicates[icmp_id] = pending_predicate[and_id]
+        func.aarch64_folded_test_ands[and_id] = icmp_id
+
+
 def aarch64_zero_test_operand(kernel, icmp: CompilerInt4) -> int:
     """SSA operand of an exact i32/i64/pointer eq/ne-zero comparison.
 
@@ -1934,6 +2081,8 @@ def _value_needs_slot(func: ParsedFunction, kernel, value_id: int) -> bool:
     ) >= 0:
         return False
     if value_id in func.aarch64_fused_branch_values:
+        return False
+    if value_id in func.aarch64_folded_test_ands:
         return False
     return aarch64_madd_fusion_for_product(func, kernel.value_name(value_id)) is None
 
@@ -2083,6 +2232,10 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
     kernel.clear_value_registers()
     func.aarch64_callee_saved = []
     func.aarch64_fused_branch_values = {}
+    func.aarch64_test_sources = {}
+    func.aarch64_test_masks = {}
+    func.aarch64_test_predicates = {}
+    func.aarch64_folded_test_ands = {}
     func.aarch64_frameless = False
     if func.is_vararg:
         return
@@ -2099,6 +2252,7 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
         function_level = True
         call_results = True
         func.aarch64_fused_branch_values = _fusable_branch_conditions(kernel)
+        _masked_test_fusions(func, kernel, func.aarch64_fused_branch_values)
     pool_intervals: list[tuple[int, int, int, bool]] = []
     alias_pairs: list[tuple[int, int]] = []
     call_barriers: list[int] = []
@@ -2238,7 +2392,9 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
                 instruction_id
             )
             dest_id = instruction_fact.first
-            if dest_id < 0 or dest_id in phi_input_ids:
+            if (dest_id < 0 or dest_id in phi_input_ids
+                    or dest_id in func.aarch64_folded_test_ands):
+                # A folded test ``and`` is selected into its compare's tst.
                 position += 1
                 continue
             dest = kernel.value_name(dest_id)

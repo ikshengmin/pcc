@@ -3701,8 +3701,14 @@ def _encode_one(line, at, labels, resolve_branch, relocations, undefined,
         imms = width - 1 - sh
         return _sf(d64) | 0x53000000 | n_bit | (immr << 16) | (imms << 10) | (rn << 5) | rd
 
-    if mn == "tst":  # alias of ands zr, rn, rm
+    if mn == "tst":  # alias of ands zr, rn, rm / ands zr, rn, #imm
         rn, n64 = _reg(ops[0])
+        if ops[1].strip().startswith("#"):
+            n_bit, immr, imms = _logical_imm(_imm_exact(ops[1]), n64)
+            return (
+                _sf(n64) | 0x72000000 | (n_bit << 22)
+                | (immr << 16) | (imms << 10) | (rn << 5) | 31
+            )
         rm, _ = _reg(ops[1])
         return _enc_logical_reg(3, 31, rn, rm, n64)
 
