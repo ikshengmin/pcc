@@ -5371,6 +5371,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend toward LLVM parity: locate the LLVM step the self passes lack (pcc_perf reference ablations, scripts/pcc_perf.py), then implement it in pcc's own AArch64 passes (shrink-wrapping, allocation or selection, whichever the ablation ranks first); IR-pass changes are target-neutral and reach x64; avoids the typed x64 MIR files: Claude, macOS, 2026-11-27T06:46Z, area backend
+   - Owned AST V2 compact tape validated POD side-plan scratch proof (resolve node labels/file IDs once, bounded4B per record, raw lifetime/error/fallback before constructor; no managed references/runtime/ABI/production edits or CI, host first): Codex, Linux, 2026-11-27T13:20Z, area runtime-codegen
    - Stage1 AArch64 private peephole-history retirement at peepholes-to-CFG boundary (one-shot private canonical authority; preserve old roots/cursors/observer/malformed/error semantics; source finalizer and scoped tests only, actual small exact PCO/RSS/CPU before merge, no cap or CI): Codex, Linux, 2026-11-27T13:17Z, area backend
 
 
