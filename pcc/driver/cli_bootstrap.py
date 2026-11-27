@@ -10504,6 +10504,20 @@ def _bootstrap_cli_main_impl(
         raw_argv = _normalized_sys_argv()
     else:
         raw_argv = _copy_seq(argv)
+    if raw_argv and raw_argv[0] == "--pcc-python-multi-ir-worker":
+        if len(raw_argv) != 3:
+            _write_text("Error: Python multi IR worker requires request and response paths", err=True)
+            return 2
+        if sys.implementation.name != "pcc":
+            _write_text("Error: Python multi IR worker requires native pcc1", err=True)
+            return 2
+        from pcc.frontends.python.native_multi_artifact import run_native_multi_ir
+
+        try:
+            return run_native_multi_ir(raw_argv[1], raw_argv[2])
+        except Exception as error:
+            _write_text("Error: Python multi IR worker: " + str(error), err=True)
+            return 1
     if raw_argv and raw_argv[0] == "--pcc-c-unit-artifact-worker":
         if len(raw_argv) != 3:
             _write_text("Error: C artifact worker requires request and output paths", err=True)

@@ -160,6 +160,128 @@ def test_strict_unsupported_never_compiles_on_host(bound_route, options):
     assert len(_rows(s)) == 1 and _rows(s)[0]["route"] == "unsupported"
 
 
+def test_strict_multi_ir_preserves_explicit_order_and_names(bound_route, monkeypatch, capsys):
+    s = bound_route
+    output = s.compiler.parent / "multi.ll"
+    sources = ["two.py", "one.py"]
+    modules = ["pkg.second", "pkg.first"]
+    # Explicit self overrides a conflicting default, as the API does.
+    monkeypatch.setenv("PCC_BACKEND", "llvm")
+    def run(argv, **options):
+        s.native.append((argv, options))
+        assert argv[:2] == [str(s.compiler), "--pcc-python-multi-ir-worker"]
+        request = Path(argv[2]).read_bytes()
+        assert json.loads(request) == {
+            "schema": "pcc.python-multi-ir-request.v1", "src_paths": sources,
+            "out_path": str(output), "module_names": modules, "entry_module": "pkg.first",
+            "emit_llvm_only": True, "verbose": True, "ir_scaffold_mode": "off",
+            "backend": "self", "target_triple": TARGETS[0],
+            "recursive_stdlib": True, "runtime_archive": str(s.runtime),
+        }
+        assert options["env"]["PCC_HOST_PYTHON"] == "/usr/bin/false"
+        output.write_text("; actual child output seam, not native qualification")
+        Path(argv[3]).write_text(json.dumps({
+            "schema": "pcc.python-multi-ir-response.v1",
+            "request_sha256": route.hashlib.sha256(request).hexdigest(),
+            "outcome": "passed",
+        }))
+        return SimpleNamespace(returncode=0, stdout="multi stdout", stderr="multi stderr")
+    # This finite argv test deliberately intercepts the process, not the compiler.
+    from unittest.mock import patch
+    with patch.object(route.subprocess, "run", run):
+        s.multiple(sources, str(output), module_names=modules, entry_module="pkg.first",
+                   emit_llvm_only=True, verbose=True, ir_scaffold_mode="off",
+                   backend="self", target_triple=TARGETS[0], recursive_stdlib=True,
+                   runtime_archive=str(s.runtime))
+    attempt, complete = _rows(s)
+    assert attempt["kind"] == complete["kind"] == "compile_python_multi"
+    assert attempt["route"] == complete["route"] == "native"
+    assert attempt["request_sha256"] == complete["request_sha256"]
+    assert complete["outcome"] == "passed" and output.exists()
+    assert not s.host and not s.multi and len(s.native) == 1
+    captured = capsys.readouterr()
+    assert captured.out == "multi stdout" and captured.err == "multi stderr"
+
+
+def test_strict_multi_ir_rejects_unrepresented_options_and_stale_receipt(bound_route, monkeypatch):
+    s = bound_route
+    output = s.compiler.parent / "multi.ll"
+    for options in ({"profile": {}}, {"object_inputs": ("x.o",)}, {"link_args": ("-lm",)},
+                    {"backend": "llvm"}, {"module_names": "one"}, {"verbose": 1}):
+        with pytest.raises(pipeline.PyPipelineError, match="strict pcc1 route unsupported"):
+            s.multiple(["one.py", "two.py"], str(output), emit_llvm_only=True, **options)
+    monkeypatch.setenv("PCC_BACKEND", "llvm")
+    with pytest.raises(pipeline.PyPipelineError, match="strict pcc1 route unsupported"):
+        s.multiple(["one.py", "two.py"], str(output), emit_llvm_only=True)
+    assert len(_rows(s)) == 7 and all(row["route"] == "unsupported" for row in _rows(s))
+    assert not s.host and not s.multi and not s.native
+    # The default alias normalizes through the same owned pipeline predicate.
+    monkeypatch.setenv("PCC_BACKEND", " SeLf ")
+    output.write_text("old output cannot qualify a new call")
+    with pytest.raises(pipeline.PyPipelineError, match="existing output path unsupported"):
+        s.multiple(["one.py", "two.py"], str(output), emit_llvm_only=True)
+    assert output.read_text() == "old output cannot qualify a new call"
+    assert not s.native and _rows(s)[-1]["route"] == "unsupported"
+    output.unlink()
+    with pytest.raises(pipeline.PyPipelineError, match="native Python multi IR unavailable or invalid"):
+        s.multiple(["one.py", "two.py"], str(output), emit_llvm_only=True)
+    assert len(s.native) == 1 and _rows(s)[-1]["outcome"] == "invalid_artifact"
+    assert not s.host and not s.multi
+
+
+def test_multi_ir_worker_rejects_host_cli_and_invalid_contract(tmp_path, monkeypatch):
+    from pcc.driver import cli_bootstrap
+    from pcc.frontends.python import native_multi_artifact as worker
+
+    output = tmp_path / "out.ll"
+    req = route._multi_ir_request(["two.py", "one.py"], output, emit_llvm_only=True,
+                                  module_names=["b", "a"], entry_module="a")
+    src, receipt = tmp_path / "request.json", tmp_path / "response.json"
+    src.write_text(json.dumps(req))
+    assert cli_bootstrap._bootstrap_cli_main_impl(
+        ["--pcc-python-multi-ir-worker", str(src), str(receipt)]
+    ) == 2
+    assert not output.exists() and not receipt.exists()
+
+    seen = []
+    def compile_multi(paths, path, **options):
+        seen.append((paths, path, options))
+        Path(path).write_text("; mock compiled IR")
+    monkeypatch.setattr(pipeline, "compile_python_multi", compile_multi)
+    for invalid in (dict(req, schema="other"), dict(req, extra=True),
+                    dict(req, emit_llvm_only=False), dict(req, backend="llvm"),
+                    dict(req, module_names="bad"), dict(req, verbose=1)):
+        src.write_text(json.dumps(invalid))
+        with pytest.raises(ValueError):
+            worker.run_native_multi_ir(str(src), str(receipt))
+        assert not seen and not receipt.exists() and not output.exists()
+    src.write_text(json.dumps(req))
+    output.write_text("old IR")
+    with pytest.raises(ValueError, match="output already exists"):
+        worker.run_native_multi_ir(str(src), str(receipt))
+    assert output.read_text() == "old IR" and not seen and not receipt.exists()
+    output.unlink()
+    with monkeypatch.context() as patch:
+        patch.setattr(pipeline, "compile_python_multi", lambda *args, **kwargs: None)
+        with pytest.raises(ValueError, match="emitted no IR output"):
+            worker.run_native_multi_ir(str(src), str(receipt))
+    assert not output.exists() and not receipt.exists()
+    assert worker.run_native_multi_ir(str(src), str(receipt)) == 0
+    assert seen == [(["two.py", "one.py"], str(output), {
+        "verbose": False, "emit_llvm_only": True, "entry_module": "a",
+        "module_names": ["b", "a"], "ir_scaffold_mode": None, "backend": "self",
+        "target_triple": None, "recursive_stdlib": False, "runtime_archive": None,
+    })]
+    assert json.loads(receipt.read_text()) == {
+        "schema": worker.RESPONSE_SCHEMA,
+        "request_sha256": route.hashlib.sha256(src.read_bytes()).hexdigest(),
+        "outcome": "passed",
+    }
+    with pytest.raises(ValueError, match="already exists"):
+        worker.run_native_multi_ir(str(src), str(receipt))
+    assert len(seen) == 1
+
+
 def test_strict_multi_is_visible_gap_not_host_fallback(bound_route):
     s = bound_route
     with pytest.raises(pipeline.PyPipelineError, match="multi-module API route"):

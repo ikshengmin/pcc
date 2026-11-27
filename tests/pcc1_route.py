@@ -7,7 +7,7 @@ instead of host CPython pcc, and ``pcc.driver.cli_launcher`` (``uv run pcc``,
 the same way it checks the host one.
 
 A call the native CLI cannot express (the LLVM backend,
-``recursive_stdlib``, ``profile=`` or multi-module compiles) is rejected before
+``recursive_stdlib``, ``profile=`` or unsupported multi-module options) is rejected before
 host compilation in strict mode. Non-strict use retains the host fallback.
 Every compile -- routed or not -- is appended to
 ``PCC_TEST_COMPILER_LOG`` (a per-session default is created when it is unset),
@@ -261,6 +261,38 @@ def compile_c_artifact(
         raise RuntimeError("native C " + kind + ": " + response["error_message"])
 
 
+def _multi_ir_request(src_paths, out_path, *, verbose=False, emit_llvm_only=False,
+                      entry_module=None, module_names=None, ir_scaffold_mode=None,
+                      backend=None, target_triple=None, recursive_stdlib=False,
+                      runtime_archive=None, link_args=(), object_inputs=(), profile=None):
+    from pcc.frontends.python.native_multi_artifact import REQUEST_SCHEMA, validate_request
+    from pcc.frontends.python.pipeline_modes import normalize_native_backend_name
+
+    if emit_llvm_only is not True:
+        raise ValueError("multi-module API route supports only IR output")
+    if ((backend is not None and not isinstance(backend, str))
+            or normalize_native_backend_name(backend) != "self"):
+        raise ValueError("multi-module IR backend differs")
+    if profile is not None:
+        raise ValueError("multi-module IR profile cannot preserve mutable API state")
+    if not isinstance(link_args, (tuple, list)) or link_args:
+        raise ValueError("multi-module IR link_args unsupported")
+    if not isinstance(object_inputs, (tuple, list)) or object_inputs:
+        raise ValueError("multi-module IR object_inputs unsupported")
+    if not isinstance(src_paths, (tuple, list)):
+        raise ValueError("multi-module IR source container unsupported")
+    if module_names is not None and not isinstance(module_names, (tuple, list)):
+        raise ValueError("multi-module IR names container unsupported")
+    return validate_request({
+        "schema": REQUEST_SCHEMA, "src_paths": [os.fspath(p) for p in src_paths],
+        "out_path": os.fspath(out_path), "module_names": None if module_names is None else list(module_names),
+        "entry_module": entry_module, "emit_llvm_only": emit_llvm_only, "verbose": verbose,
+        "ir_scaffold_mode": ir_scaffold_mode, "backend": "self", "target_triple": target_triple,
+        "recursive_stdlib": recursive_stdlib,
+        "runtime_archive": None if runtime_archive is None else os.fspath(runtime_archive),
+    })
+
+
 def install() -> None:
     compiler = os.environ["PCC_TEST_COMPILER"]
     if not os.path.isfile(compiler):
@@ -414,12 +446,64 @@ def install() -> None:
         return None
 
     def compile_python_multi(*args, **kwargs):
-        if os.environ.get(STRICT_ENV) == "1":
-            reason = "no equivalent native multi-module API route"
-            _record("unsupported", "compile_python_multi", reason)
-            raise pipeline.PyPipelineError("strict pcc1 route unsupported: " + reason)
-        log_unrouted("compile_python_multi", "no native multi-module CLI")
-        return host_multi(*args, **kwargs)
+        import tempfile
+        from pcc.frontends.python.native_multi_artifact import RESPONSE_SCHEMA
+
+        try:
+            request = _multi_ir_request(*args, **kwargs)
+            if os.path.lexists(request["out_path"]):
+                raise ValueError("multi-module IR existing output path unsupported")
+        except (TypeError, ValueError) as error:
+            reason = str(error)
+            if os.environ.get(STRICT_ENV) == "1":
+                _record("unsupported", "compile_python_multi", reason)
+                raise pipeline.PyPipelineError("strict pcc1 route unsupported: " + reason)
+            log_unrouted("compile_python_multi", reason)
+            return host_multi(*args, **kwargs)
+
+        env = native_env(request["runtime_archive"])
+        raw = json.dumps(request, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+        request_sha = hashlib.sha256(raw).hexdigest()
+        identity = {"compiler": compiler, "runtime_archive": env.get("PCC_RUNTIME_ARCHIVE"),
+                    "target_triple": request["target_triple"], "request_sha256": request_sha,
+                    "invocation": str(os.getpid()) + ":" + str(next(_CALL_IDS))}
+        with tempfile.TemporaryDirectory(prefix="pcc_native_multi_ir_") as directory:
+            request_path = os.path.join(directory, "request.json")
+            response_path = os.path.join(directory, "response.json")
+            with open(request_path, "xb") as stream:
+                stream.write(raw)
+            argv = [compiler, "--pcc-python-multi-ir-worker", request_path, response_path]
+            _record("native", "compile_python_multi", "", event="attempt", **identity)
+            try:
+                completed = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=900)
+            except subprocess.TimeoutExpired:
+                _record("native", "compile_python_multi", "", event="complete", outcome="timeout", **identity)
+                raise
+            except BaseException as error:
+                _record("native", "compile_python_multi", type(error).__name__,
+                        event="complete", outcome="invocation_error", **identity)
+                raise
+            if completed.returncode != 0:
+                _record("native", "compile_python_multi", "", event="complete",
+                        outcome="failed", returncode=completed.returncode, **identity)
+                raise pipeline.PyPipelineError(f"{compiler} exited {completed.returncode}:\n"
+                                              + completed.stdout[-4000:] + completed.stderr[-8000:])
+            try:
+                with open(response_path, encoding="utf-8") as stream:
+                    response = json.load(stream)
+                if response != {"schema": RESPONSE_SCHEMA, "request_sha256": request_sha,
+                                "outcome": "passed"} or not os.path.isfile(request["out_path"]):
+                    raise ValueError("native Python multi IR response differs")
+            except (OSError, ValueError, TypeError) as error:
+                _record("native", "compile_python_multi", str(error), event="complete",
+                        outcome="invalid_artifact", returncode=completed.returncode, **identity)
+                raise pipeline.PyPipelineError("native Python multi IR unavailable or invalid: " + str(error))
+            _record("native", "compile_python_multi", "", event="complete", outcome="passed",
+                    returncode=completed.returncode, **identity)
+            if request["verbose"]:
+                sys.stdout.write(completed.stdout)
+                sys.stderr.write(completed.stderr)
+            return None
 
 
     pipeline.compile_python = compile_python
