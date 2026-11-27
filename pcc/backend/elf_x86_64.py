@@ -1246,6 +1246,7 @@ def _link_static_executable_image(
     _input_store=None,
     coordinator_timing=None,
     export_symbols: tuple[str, ...] = (),
+    function_ranges: list[tuple] | None = None,
 ) -> bytearray:
     """Build a private mutable image, fully validated before publication."""
     image_phase_started = 0
@@ -2027,6 +2028,36 @@ def _link_static_executable_image(
         phoff += _PROGRAM_HEADER.size
     if coordinator_timing is not None:
         coordinator_timing.complete("elf_image_finalize", image_phase_started)
+    if function_ranges is not None:
+        # Only the final link still owns both the physical placement and the
+        # original symbol tables. Never resolve a losing weak definition to
+        # a different object or infer a size from its neighboring symbol.
+        from .owned_elf_inputs import _InputSection
+        for object_index, obj in enumerate(objects):
+            for symbol_index, symbol in enumerate(obj.symbols[1:], start=1):
+                if (symbol.type != STT_FUNC or not symbol.name or symbol.size <= 0
+                        or not 1 <= symbol.section_index <= len(obj.sections)):
+                    continue
+                section_index = symbol.section_index
+                section = obj.sections[section_index - 1]
+                if (not section.flags & SHF_ALLOC or not section.flags & SHF_EXECINSTR
+                        or section.type == SHT_NOBITS):
+                    continue
+                placement = placements[(object_index, section_index)]
+                file_offset = placement.file_offset + symbol.value
+                if (symbol.value < 0 or symbol.value + symbol.size > section.size
+                        or file_offset < 0 or file_offset + symbol.size > rx_file_end):
+                    raise ElfError("function map range outside executable placement")
+                source_index = -1
+                if type(section) is _InputSection:
+                    if section.store is not _input_store:
+                        raise ElfError("function map staged source owner mismatch")
+                    source_index = section.source_index
+                address = placement.address + symbol.value
+                function_ranges.append((address, object_index, symbol_index,
+                                        address + symbol.size, file_offset,
+                                        section_index, symbol.binding, symbol.name,
+                                        section.name, source_index))
     return image
 
 

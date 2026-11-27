@@ -79,10 +79,48 @@ pcc_linux_set_thread_pointer:
     return assemble(text, target)
 
 
+def _write_function_map(stream, image: bytearray, target: str,
+                        ranges: list[tuple], store: ElfInputStore,
+                        explicit_count: int) -> None:
+    # Stream individual rows rather than keeping a second giant JSON tree or
+    # text copy alive with the executable. Sorting scalar rows is diagnostic
+    # only. Equal or overlapping physical ranges remain separate identities.
+    import json
+    stream.write(json.dumps({
+        "schema": "pcc.owned-elf-function-map.v1", "target": target,
+        "image_sha256": _image_sha256(image), "image_bytes": len(image),
+        "function_count": len(ranges),
+    }) + "\n")
+    ranges.sort()
+    for (start, object_index, symbol_index, end, file_offset, section_index,
+         binding, name, section_name, source_index) in ranges:
+        origin_sha256 = ""
+        origin_offset = 0
+        if 0 <= source_index < len(store.sources):
+            source = store.sources[source_index]
+            origin_label = source.label
+            origin_sha256 = source.sha256
+            origin_offset = source.offset
+        elif source_index == -1 and object_index == explicit_count:
+            origin_label = "linker-synthesized:thread-pointer"
+        elif source_index == -1 and object_index == explicit_count + 1:
+            origin_label = "linker-synthesized:thread-intrinsics"
+        else:
+            raise ElfError("function map has unknown physical source owner")
+        stream.write(json.dumps({
+            "start": start, "end": end, "file_offset": file_offset,
+            "object_index": object_index, "symbol_index": symbol_index,
+            "section_index": section_index, "section_name": section_name,
+            "binding": binding, "name": name, "origin_label": origin_label,
+            "origin_sha256": origin_sha256, "origin_offset": origin_offset,
+        }) + "\n")
+
+
 def link_inputs(*, target: str, output: str, assembly=(), objects=(),
                 archives=(), manifest: str = "", entry: str = "_start",
                 map_path: str = "", coordinator_timing=None,
-                export_symbols=(), expected_archive_identity=()) -> None:
+                export_symbols=(), expected_archive_identity=(),
+                function_map_path: str = "") -> None:
     if not (is_aarch64_linux_triple(target) or is_x86_64_linux_triple(target)):
         raise ElfError("unsupported owned ELF target: " + target)
     if not isinstance(export_symbols, (list, tuple)):
@@ -110,6 +148,22 @@ def link_inputs(*, target: str, output: str, assembly=(), objects=(),
                for candidate in (map_path, map_path + ".pcc-link.tmp")
                for path in protected):
             raise ElfError("link map output aliases an input or executable")
+    if function_map_path:
+        # Native os.path does not provide samefile. Requiring fresh names
+        # rejects pre-existing hardlinks and dangling symlinks without an
+        # identity API; realpath protects future output/temporary names.
+        if not is_x86_64_linux_triple(target):
+            raise ElfError("function map requires owned x86-64 Linux")
+        function_temporary = function_map_path + ".pcc-link.tmp"
+        function_protected = [output, output + ".pcc-link.tmp", manifest]
+        function_protected += [path for _kind, path in ordered] + archives
+        if map_path:
+            function_protected += [map_path, map_path + ".pcc-link.tmp"]
+        if any(os.path.lexists(candidate) or any(
+                path and os.path.realpath(candidate) == os.path.realpath(path)
+                for path in function_protected)
+                for candidate in (function_map_path, function_temporary)):
+            raise ElfError("function map requires fresh non-aliasing output paths")
     protected_inputs = [manifest] + [path for _kind, path in ordered] + archives
     if any(path and os.path.realpath(candidate) == os.path.realpath(path)
            for candidate in (output, output + ".pcc-link.tmp")
@@ -134,8 +188,15 @@ def link_inputs(*, target: str, output: str, assembly=(), objects=(),
     image_started = 0
     if coordinator_timing is not None:
         image_started = coordinator_timing.begin("elf_link_image")
+    function_ranges = [] if function_map_path else None
     try:
-        if export_symbols:
+        if function_ranges is not None:
+            image = _link_static_executable_image(
+                inputs, entry=entry, archive_selections=selections, _input_store=store,
+                coordinator_timing=coordinator_timing, export_symbols=export_symbols,
+                function_ranges=function_ranges,
+            )
+        elif export_symbols:
             image = _link_static_executable_image(
                 inputs, entry=entry, archive_selections=selections, _input_store=store,
                 coordinator_timing=coordinator_timing, export_symbols=export_symbols,
@@ -189,7 +250,13 @@ def link_inputs(*, target: str, output: str, assembly=(), objects=(),
     write_started = 0
     if coordinator_timing is not None:
         write_started = coordinator_timing.begin("elf_write_image")
+    function_temporary_owned = False
     try:
+        if function_ranges is not None:
+            with open(function_temporary, "x", encoding="utf-8") as stream:
+                function_temporary_owned = True
+                _write_function_map(stream, image, target, function_ranges,
+                                    store, len(ordered))
         with open(temporary, "wb") as stream:
             _write_image_chunks(stream, image)
         os.chmod(temporary, 0o755)
@@ -203,7 +270,14 @@ def link_inputs(*, target: str, output: str, assembly=(), objects=(),
             finally:
                 if os.path.exists(map_temporary):
                     os.unlink(map_temporary)
+        if function_ranges is not None:
+            if os.path.lexists(function_map_path):
+                raise ElfError("function map output appeared during link")
+            os.replace(function_temporary, function_map_path)
+            function_temporary_owned = False
     finally:
+        if function_temporary_owned:
+            os.unlink(function_temporary)
         if os.path.exists(temporary):
             os.unlink(temporary)
     if coordinator_timing is not None:
