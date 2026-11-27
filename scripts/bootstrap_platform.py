@@ -293,8 +293,15 @@ def _runtime_identity_matches(runtime, identity):
     return True
 
 
-def _stage_compiler_environment(environment, out_dir, stage, gc_backend, *, stage1_worker_traceback=False):
+def _stage_compiler_environment(environment, out_dir, stage, gc_backend, *, stage1_worker_traceback=False,
+                                stage1_function_map_output=None):
     stage_env = environment.copy()
+    # The low-level request names one actual final output. Never inherit a
+    # previous diagnostic's path into a different stage or its canary.
+    stage_env.pop("PCC_OWNED_ELF_FUNCTION_MAP_FOR", None)
+    stage_env.pop("PCC_BOOTSTRAP_STAGE1_FUNCTION_MAP", None)
+    if stage == 1 and stage1_function_map_output is not None:
+        stage_env["PCC_OWNED_ELF_FUNCTION_MAP_FOR"] = str(stage1_function_map_output)
     if stage == 1 and stage1_worker_traceback:
         stage_env["PCC_DEBUG_WORKER_RERAISE"] = "1"
     stage_env.pop("PCC_STAGE2_EXPORT_EVIDENCE_DIR", None)
@@ -353,6 +360,9 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400, stage1_timeou
     configuration = build_configuration(target)
     environment = _stage_environment(gc_backend, jobs, rss_limit)
     stage1_worker_traceback = environment.pop("PCC_BOOTSTRAP_STAGE1_WORKER_TRACEBACK", "") == "1"
+    stage1_function_map = (environment.pop("PCC_BOOTSTRAP_STAGE1_FUNCTION_MAP", "") == "1"
+                           and target == "x86_64-unknown-linux-gnu" and shared is None)
+    environment.pop("PCC_OWNED_ELF_FUNCTION_MAP_FOR", None)
     suffix = ".exe" if os.name == "nt" else ""
     records = []
     incomplete_stage = None
@@ -416,6 +426,7 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400, stage1_timeou
                 stage_env = _stage_compiler_environment(
                     environment, out_dir, stage, gc_backend,
                     stage1_worker_traceback=stage1_worker_traceback,
+                    stage1_function_map_output=output if stage == 1 and stage1_function_map else None,
                 )
                 command = compiler + ["--backend", "self",
                                       "--ir-scaffold=on", str(ROOT / "pcc" / "__main__.py"), "-o", str(output)]
@@ -520,6 +531,15 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400, stage1_timeou
                                     "dependencies": dependency_receipt(executable),
                                     "compile": canary_compile, "run": canary_run,
                                     "output_sha256": _digest(log)}
+                if stage == 1 and stage1_function_map:
+                    # Only the successful actual stage and native canary own
+                    # this optional attestation. Validation failure is not a
+                    # qualification pass, nor does it redefine any gate.
+                    try:
+                        from scripts.ci_stage1_function_map import stage_map_receipt
+                        record["function_map"] = stage_map_receipt(output, record["sha256"])
+                    except Exception as exc:
+                        record["function_map"] = {"status": "UNQUALIFIED", "reason": str(exc)}
                 records.append(record)
                 incomplete_stage = None
                 (out_dir / "progress.json").write_text(json.dumps(records, indent=2), encoding="utf-8")

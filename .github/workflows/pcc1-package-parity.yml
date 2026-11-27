@@ -1462,6 +1462,10 @@ jobs:
           PCC_HOST_ASSEMBLY_PROFILE: "0"
           PCC_HOST_ELF_STAGE_PROFILE: "0"
           PCC_HOST_ARM_BACKEND_PROFILE: ${{ github.event_name == 'push' && matrix.platform == 'linux-aarch64' && contains(github.event.head_commit.message, '[stage1-arm-backend-profile]') && '1' || '0' }}
+          # One explicit normal checkpoint can collect the exact x64 image's
+          # function map. Never inherit a low-level path into runtime/canary.
+          PCC_OWNED_ELF_FUNCTION_MAP_FOR: ""
+          PCC_BOOTSTRAP_STAGE1_FUNCTION_MAP: ${{ github.event_name == 'push' && matrix.platform == 'linux-x86_64' && contains(github.event.head_commit.message, '[stage1-x64-function-map]') && '1' || '0' }}
         run: uv run --frozen --no-sync python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-gate --phase stage1${{ inputs.full_chain && ' --full-chain' || '' }}
 
       - name: Admit this gate's existing runtime for the platform provider probe
@@ -1568,6 +1572,27 @@ jobs:
           path: |
             build/stage1-native-export/stage1-native.tar.gz
             build/stage1-native-export/manifest.json
+
+      # Independent diagnostic transport: the existing Stage1 bundle remains
+      # authoritative and its schema, ordinary gate outcomes and bytes stay
+      # unchanged. Do not upload a guessed or failed map, or duplicate pcc1.
+      - name: Validate optional exact Stage1 x64 function map
+        id: stage1_function_map
+        if: ${{ !cancelled() && steps.stage1_bundle.outcome == 'success' && github.event_name == 'push' && matrix.platform == 'linux-x86_64' && contains(github.event.head_commit.message, '[stage1-x64-function-map]') }}
+        continue-on-error: true
+        run: uv run --frozen --no-sync python scripts/ci_stage1_function_map.py
+
+      - name: Preserve optional exact Stage1 x64 function map
+        if: ${{ !cancelled() && steps.stage1_function_map.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v6
+        with:
+          name: stage1-function-map-linux-x86_64-${{ github.sha }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            build/stage1-function-map-export/function-map.jsonl
+            build/stage1-function-map-export/receipt.json
 
       - name: Produce the separately bound Java GC0 ABI object
         id: java_managed_product
@@ -1722,6 +1747,8 @@ jobs:
             build/platform-qualification/**/*.log
             build/platform-qualification/**/*.json
             build/platform-qualification/**/*.jsonl
+            !build/platform-qualification/shared/pcc1.functions.jsonl
+            !build/platform-qualification/shared/pcc1.tmp.functions.jsonl
             build/platform-qualification/gc0/stage2-export-evidence/selected.manifest
             build/platform-qualification/gc0/stage2-export-evidence/result.tsv
             build/worker-prior-gate/**/*.json
