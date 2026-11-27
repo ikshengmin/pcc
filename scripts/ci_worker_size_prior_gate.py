@@ -775,7 +775,7 @@ def run(out, phase, *, strict_closure_timeout=300, full_chain=False):
                            + "::test_linux_aarch64_transport_executes_tls_varargs_and_managed_reload"],
                            env, integration=True)
             if sys.platform.startswith("linux"):
-                run_pytest(out, "linux-elf-format", [ELF_FORMAT_TEST], env, counts=(67,))
+                run_pytest(out, "linux-elf-format", [ELF_FORMAT_TEST], env, counts=(71,))
                 # Match the staging test's actual pcc_gate predicate exactly.
                 # ARM deselects two x86 executable probes at collection; skips
                 # in any selected case still fail verify_pytest.

@@ -2323,7 +2323,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
             assert env["PCC_TEST_NO_NATIVE_PROVISIONING"] == "1"
             assert "runtime-identity" in events
             if name == "linux-elf-format":
-                assert nodes == [gate.ELF_FORMAT_TEST] and counts == (67,)
+                assert nodes == [gate.ELF_FORMAT_TEST] and counts == (71,)
             elif name == "linux-elf-staging":
                 assert nodes == [gate.ELF_STAGING_TEST]
                 assert counts == ((69,) if machine in ("x86_64", "amd64") else (67,))
@@ -2757,7 +2757,7 @@ def test_elf_input_sources_strict_modules_and_workflow_are_bound():
         assert workflow.count('      - "' + path + '"') == 2, path
     # This control reads the final test source; it neither imports the ELF
     # test modules nor calls their object emitters or native probes.
-    for path, expected, native_count in ((gate.ELF_FORMAT_TEST, 67, 0),
+    for path, expected, native_count in ((gate.ELF_FORMAT_TEST, 71, 0),
                                           (gate.ELF_STAGING_TEST, 69, 2),
                                           (gate.ELF_RELOCATION_CONTEXT_TEST, 16, 0),
                                           (gate.ARM_CALL_VENEERS_TEST, 55, 0),
@@ -2793,7 +2793,7 @@ def test_elf_input_sources_strict_modules_and_workflow_are_bound():
 
 
 @pytest.mark.parametrize("name,nodes,counts", [
-    ("linux-elf-format", [gate.ELF_FORMAT_TEST], (67,)),
+    ("linux-elf-format", [gate.ELF_FORMAT_TEST], (71,)),
     ("linux-elf-staging", [gate.ELF_STAGING_TEST], (69,)),
     ("linux-elf-staging", [gate.ELF_STAGING_TEST], (67,)),
     ("linux-elf-owner", [gate.ELF_OWNER_NODE], None),
