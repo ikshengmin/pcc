@@ -615,7 +615,7 @@ def drop_unreferenced_empty_local_labels(fragments, semantics, span, metadata_la
 
 def run_aarch64_typed_cfg_passes(
     fragments, semantics, span, metadata_labels, cold_fallthrough_edges,
-    *, phase_timing=None,
+    *, phase_timing=None, _midpoint_retirement=None,
 ):
     """Final six passes in the original order, over the whole module, then
     the loop-separator ``nop`` cleanup, which needs the final instructions.
@@ -626,46 +626,97 @@ def run_aarch64_typed_cfg_passes(
     """
     from .self_backend_aarch64_typed_tlv import elide_dead_tlv_resolver_saves
     from .self_backend_aarch64_typed_pair import pair_adjacent_aarch64_64bit_memory_ops
-    if phase_timing is not None:
-        started = phase_timing.begin_backend_finalize("typed_cfg_proofs")
-    metadata_ids = set()
-    for name in metadata_labels:
-        if name in fragments.symbol_ids:
-            metadata_ids.add(fragments.symbol_ids[name])
-    source_edge_index = {}
-    for source, error, success in cold_fallthrough_edges:
-        source_id = fragments.symbol_ids[source] if source in fragments.symbol_ids else -1
-        error_id = fragments.symbol_ids[error] if error in fragments.symbol_ids else -1
-        success_id = fragments.symbol_ids[success] if success in fragments.symbol_ids else -1
-        # The previous ordered search chose the first matching source, even
-        # when its target was missing. Preserve that proof exactly, rather
-        # than substituting a later and possibly different proof.
-        if source_id not in source_edge_index:
-            source_edge_index[source_id] = (error_id, success_id)
-    if phase_timing is not None:
-        phase_timing.complete_backend_finalize("typed_cfg_proofs", started)
-    if phase_timing is not None:
-        started = phase_timing.begin_backend_finalize("typed_thread_trampoline_branches")
-    result = thread_trampoline_branches(fragments, semantics, span, metadata_ids)
-    if phase_timing is not None:
-        phase_timing.complete_backend_finalize("typed_thread_trampoline_branches", started)
-    if phase_timing is not None:
-        started = phase_timing.begin_backend_finalize("typed_fold_cond_branch_to_fallthrough")
-    result = fold_cond_branch_to_fallthrough(
-        fragments, semantics, result, (), source_edge_index=source_edge_index,
+    from .self_backend_aarch64_typed_peepholes import (
+        _observe_peephole_boundary_permission, _retire_owned_peephole_span,
     )
-    if phase_timing is not None:
-        phase_timing.complete_backend_finalize("typed_fold_cond_branch_to_fallthrough", started)
-    if phase_timing is not None:
-        started = phase_timing.begin_backend_finalize("typed_drop_fallthrough_uncond_branches")
-    result = drop_fallthrough_uncond_branches(fragments, semantics, result)
-    if phase_timing is not None:
-        phase_timing.complete_backend_finalize("typed_drop_fallthrough_uncond_branches", started)
-    if phase_timing is not None:
-        started = phase_timing.begin_backend_finalize("typed_drop_unreferenced_empty_local_labels")
-    result = drop_unreferenced_empty_local_labels(fragments, semantics, result, metadata_ids)
-    if phase_timing is not None:
-        phase_timing.complete_backend_finalize("typed_drop_unreferenced_empty_local_labels", started)
+    try:
+        if phase_timing is not None:
+            if _midpoint_retirement is not None:
+                _observe_peephole_boundary_permission(_midpoint_retirement, phase_timing)
+            started = phase_timing.begin_backend_finalize("typed_cfg_proofs")
+            if _midpoint_retirement is not None:
+                _observe_peephole_boundary_permission(_midpoint_retirement, phase_timing)
+        metadata_ids = set()
+        for name in metadata_labels:
+            if name in fragments.symbol_ids:
+                metadata_ids.add(fragments.symbol_ids[name])
+        source_edge_index = {}
+        for source, error, success in cold_fallthrough_edges:
+            source_id = fragments.symbol_ids[source] if source in fragments.symbol_ids else -1
+            error_id = fragments.symbol_ids[error] if error in fragments.symbol_ids else -1
+            success_id = fragments.symbol_ids[success] if success in fragments.symbol_ids else -1
+            # The previous ordered search chose the first matching source, even
+            # when its target was missing. Preserve that proof exactly, rather
+            # than substituting a later and possibly different proof.
+            if source_id not in source_edge_index:
+                source_edge_index[source_id] = (error_id, success_id)
+        if phase_timing is not None:
+            if _midpoint_retirement is not None:
+                _observe_peephole_boundary_permission(_midpoint_retirement, phase_timing)
+            phase_timing.complete_backend_finalize("typed_cfg_proofs", started)
+            if _midpoint_retirement is not None:
+                _observe_peephole_boundary_permission(_midpoint_retirement, phase_timing)
+        if phase_timing is not None:
+            if _midpoint_retirement is not None:
+                _observe_peephole_boundary_permission(_midpoint_retirement, phase_timing)
+            started = phase_timing.begin_backend_finalize("typed_thread_trampoline_branches")
+            if _midpoint_retirement is not None:
+                _observe_peephole_boundary_permission(_midpoint_retirement, phase_timing)
+        result = thread_trampoline_branches(fragments, semantics, span, metadata_ids)
+        if phase_timing is not None:
+            if _midpoint_retirement is not None:
+                _observe_peephole_boundary_permission(_midpoint_retirement, phase_timing)
+            phase_timing.complete_backend_finalize("typed_thread_trampoline_branches", started)
+            if _midpoint_retirement is not None:
+                _observe_peephole_boundary_permission(_midpoint_retirement, phase_timing)
+        if phase_timing is not None:
+            if _midpoint_retirement is not None:
+                _observe_peephole_boundary_permission(_midpoint_retirement, phase_timing)
+            started = phase_timing.begin_backend_finalize("typed_fold_cond_branch_to_fallthrough")
+            if _midpoint_retirement is not None:
+                _observe_peephole_boundary_permission(_midpoint_retirement, phase_timing)
+        result = fold_cond_branch_to_fallthrough(
+            fragments, semantics, result, (), source_edge_index=source_edge_index,
+        )
+        if phase_timing is not None:
+            if _midpoint_retirement is not None:
+                _observe_peephole_boundary_permission(_midpoint_retirement, phase_timing)
+            phase_timing.complete_backend_finalize("typed_fold_cond_branch_to_fallthrough", started)
+            if _midpoint_retirement is not None:
+                _observe_peephole_boundary_permission(_midpoint_retirement, phase_timing)
+        if phase_timing is not None:
+            if _midpoint_retirement is not None:
+                _observe_peephole_boundary_permission(_midpoint_retirement, phase_timing)
+            started = phase_timing.begin_backend_finalize("typed_drop_fallthrough_uncond_branches")
+            if _midpoint_retirement is not None:
+                _observe_peephole_boundary_permission(_midpoint_retirement, phase_timing)
+        result = drop_fallthrough_uncond_branches(fragments, semantics, result)
+        if phase_timing is not None:
+            if _midpoint_retirement is not None:
+                _observe_peephole_boundary_permission(_midpoint_retirement, phase_timing)
+            phase_timing.complete_backend_finalize("typed_drop_fallthrough_uncond_branches", started)
+            if _midpoint_retirement is not None:
+                _observe_peephole_boundary_permission(_midpoint_retirement, phase_timing)
+        if phase_timing is not None:
+            if _midpoint_retirement is not None:
+                _observe_peephole_boundary_permission(_midpoint_retirement, phase_timing)
+            started = phase_timing.begin_backend_finalize("typed_drop_unreferenced_empty_local_labels")
+            if _midpoint_retirement is not None:
+                _observe_peephole_boundary_permission(_midpoint_retirement, phase_timing)
+        result = drop_unreferenced_empty_local_labels(fragments, semantics, result, metadata_ids)
+        if phase_timing is not None:
+            if _midpoint_retirement is not None:
+                _observe_peephole_boundary_permission(_midpoint_retirement, phase_timing)
+            phase_timing.complete_backend_finalize("typed_drop_unreferenced_empty_local_labels", started)
+            if _midpoint_retirement is not None:
+                _observe_peephole_boundary_permission(_midpoint_retirement, phase_timing)
+        if _midpoint_retirement is not None:
+            result = _retire_owned_peephole_span(
+                fragments, result, _midpoint_retirement, phase_timing, -2,
+            )
+    finally:
+        if _midpoint_retirement is not None:
+            _midpoint_retirement.revoke()
     if phase_timing is not None:
         started = phase_timing.begin_backend_finalize("typed_elide_dead_tlv_resolver_saves")
     result = elide_dead_tlv_resolver_saves(fragments, semantics, result)

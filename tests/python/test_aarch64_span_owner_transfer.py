@@ -333,3 +333,164 @@ def test_private_boundary_timer_mutation_then_restoration_revokes(monkeypatch):
         with pytest.raises(RuntimeError, match='^after fourteen$'):
             sink.finish_optimized_instructions([], [], timer)
     factory(monkeypatch, stack.items(1, 'basic'), action, timer)
+
+
+def test_private_cfg_midpoint_retires_unchecked_history_keeps_old_cursor(monkeypatch):
+    from pcc.backend import self_backend_aarch64_typed_cfg as cfg
+    from pcc.backend import self_backend_aarch64_typed_tlv as tlv
+    observed = []
+    original = p._run_aarch64_typed_peepholes
+    def peepholes(*args, **kwargs):
+        result = original(*args, **kwargs)
+        old = args[0].spans; scratch = CompilerIntArena()
+        try:
+            scratch.extend_list(ids(old, result)); old.append_ids(old.new_span(), scratch, True)
+        finally: scratch.close()
+        return result
+    monkeypatch.setattr(p, '_run_aarch64_typed_peepholes', peepholes)
+    labels = cfg.drop_unreferenced_empty_local_labels
+    def midpoint(f, s, span, *args, **kwargs):
+        result = labels(f, s, span, *args, **kwargs)
+        old = f.spans; before = ids(old, result)
+        assert old.generation == 3 and not old.is_checked_run(result)
+        assert old.runs._length > len(before)
+        cursor = CompilerIntArena(); old.start_cursor(result, cursor)
+        observed.append((old, result, cursor, before))
+        return result
+    monkeypatch.setattr(cfg, 'drop_unreferenced_empty_local_labels', midpoint)
+    def stop(f, s, span, *args, **kwargs):
+        old, original_span, cursor, before = observed[0]
+        try:
+            assert f.spans is not old, 'private CFG midpoint must retire history'
+            assert f.spans.generation == old.generation + 1
+            assert ids(f.spans, span) == before
+            assert f.spans.runs._length == len(before)
+            assert not f.spans.is_checked_run(span), 'unchecked CFG proof must stay unchecked'
+            assert f.spans.nodes.get3_unchecked(f.spans._root(span).first).first == -2
+            assert ids(old, original_span) == before
+            assert stack.read_cursor(old, cursor) == before
+        finally: cursor.close(); old.close()
+        raise RuntimeError('after midpoint')
+    monkeypatch.setattr(tlv, 'elide_dead_tlv_resolver_saves', stop)
+    def action(sink, cap):
+        previous = sink.module_span; sink.module_span = sink.fragments.new_fragment()
+        sink.append_code_directive(EMISSION_DIRECTIVE_TEXT_SECTION)
+        sink.fragments.extend_fragment(sink.module_span, previous)
+        with pytest.raises(RuntimeError, match='^after midpoint$'):
+            sink.finish_optimized_instructions([], [])
+    factory(monkeypatch, stack.items(1, 'basic'), action)
+
+
+def test_cfg_midpoint_no_public_or_prior_fallback_grant(monkeypatch):
+    from pcc.backend import self_backend_aarch64_typed_cfg as cfg
+    observed = []
+    def fallback(f, span, permission, timer, run_kind=-3):
+        if permission is not None: permission.revoke()
+        return span
+    monkeypatch.setattr(p, '_retire_owned_peephole_span', fallback)
+    def stop(f, s, span, *args, **kwargs):
+        observed.append(kwargs.get('_midpoint_retirement'))
+        raise RuntimeError('before cfg')
+    monkeypatch.setattr(cfg, 'run_aarch64_typed_cfg_passes', stop)
+    def action(sink, cap):
+        with pytest.raises(RuntimeError, match='^before cfg$'):
+            sink.finish_optimized_instructions([], [])
+        public = darwin._NativeAArch64Emission(optimize=True, owned_stack_windows=True)
+        try:
+            populate(public, stack.items(1, 'basic'))
+            with pytest.raises(RuntimeError, match='^before cfg$'):
+                public.finish_optimized_instructions([], [])
+        finally: public.close()
+    factory(monkeypatch, stack.items(1, 'basic'), action)
+    assert observed == [None, None]
+
+
+def test_cfg_midpoint_timer_mutation_then_restore_revokes(monkeypatch):
+    from pcc.backend import self_backend_aarch64_typed_cfg as cfg
+    from pcc.backend import self_backend_aarch64_typed_tlv as tlv
+    timer = timing.ModulePhaseTiming('cfg-midpoint-revoke'); observed = []
+    original = p._run_aarch64_typed_peepholes
+    def peepholes(*args, **kwargs):
+        result = original(*args, **kwargs)
+        old = args[0].spans; scratch = CompilerIntArena()
+        try:
+            scratch.extend_list(ids(old, result)); old.append_ids(old.new_span(), scratch, True)
+        finally: scratch.close()
+        return result
+    monkeypatch.setattr(p, '_run_aarch64_typed_peepholes', peepholes)
+    saved = timer.start
+    def event(*args):
+        if args[1] == 'typed_fold_cond_branch_to_fallthrough':
+            if args[3] == 'begin': timer.start = lambda: 0
+            if args[3] == 'complete': timer.start = saved
+    monkeypatch.setattr(timing, '_write_event', event)
+    original_cfg = cfg.run_aarch64_typed_cfg_passes
+    def inspect(f, *args, **kwargs):
+        cap = kwargs['_midpoint_retirement']; observed.append((f.spans, cap))
+        assert cap.valid
+        return original_cfg(f, *args, **kwargs)
+    monkeypatch.setattr(cfg, 'run_aarch64_typed_cfg_passes', inspect)
+    def stop(f, *args, **kwargs):
+        old, cap = observed[0]
+        assert f.spans is old and not cap.valid and cap.fragments is None
+        raise RuntimeError('after midpoint')
+    monkeypatch.setattr(tlv, 'elide_dead_tlv_resolver_saves', stop)
+    def action(sink, cap):
+        with pytest.raises(RuntimeError, match='^after midpoint$'):
+            sink.finish_optimized_instructions([], [], timer)
+    factory(monkeypatch, stack.items(1, 'basic'), action, timer)
+
+
+@pytest.mark.parametrize('damage', ['wrong_marker', 'bad_record', 'allocation'])
+def test_cfg_midpoint_unchecked_failure_keeps_old_owner(monkeypatch, damage):
+    def action(sink, initial):
+        f = sink.fragments; old = f.spans
+        original = ids(old, sink.module_span); scratch = CompilerIntArena()
+        try:
+            scratch.extend_list(original)
+            first = old.new_span(); old.append_ids(first, scratch, False)
+            last = old.new_span(); old.append_ids(last, scratch, damage=='wrong_marker')
+            cap = sink._peephole_boundary_retirement
+            if damage=='bad_record':
+                root = old._root(last); node = old.nodes.get3_unchecked(root.first)
+                old.runs._values[node.second] = len(f.records) // 4
+            if damage=='allocation':
+                def fail(self): raise MemoryError('cfg owner failed')
+                with monkeypatch.context() as patch:
+                    patch.setattr(CompilerRecordSpanArena, '__init__', fail)
+                    with pytest.raises(MemoryError, match='cfg owner failed'):
+                        p._retire_owned_peephole_span(f, last, cap, None, -2)
+            else:
+                assert p._retire_owned_peephole_span(f, last, cap, None, -2) == last
+            assert f.spans is old and not cap.valid and cap.fragments is None
+            assert ids(old, first) == original
+            if damage=='bad_record': old.runs._values[node.second] = original[0]
+            assert ids(old, last) == original
+        finally: scratch.close()
+    factory(monkeypatch, stack.items(1, 'basic'), action)
+
+
+def test_cfg_midpoint_custom_prior_owner_does_not_observe_generation(monkeypatch):
+    from pcc.backend import self_backend_aarch64_typed_cfg as cfg
+    retained = []
+    class CustomOwner:
+        @property
+        def generation(self): raise AssertionError('custom generation observed')
+    original = p._run_aarch64_typed_peepholes
+    def substitute(*args, **kwargs):
+        result = original(*args, **kwargs)
+        f = args[0]; retained.append(f.spans); f.spans = CustomOwner()
+        return result
+    monkeypatch.setattr(p, '_run_aarch64_typed_peepholes', substitute)
+    def stop(f, s, span, *args, **kwargs):
+        assert type(f.spans) is CustomOwner
+        assert kwargs.get('_midpoint_retirement') is None
+        raise RuntimeError('custom owner fallback')
+    monkeypatch.setattr(cfg, 'run_aarch64_typed_cfg_passes', stop)
+    def action(sink, cap):
+        try:
+            with pytest.raises(RuntimeError, match='^custom owner fallback$'):
+                sink.finish_optimized_instructions([], [])
+        finally:
+            sink.fragments.spans = retained[0]
+    factory(monkeypatch, stack.items(1, 'basic'), action)

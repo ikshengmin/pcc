@@ -182,8 +182,11 @@ def _observe_peephole_boundary_permission(permission, phase_timing) -> None:
         permission.revoke()
 
 
-def _retire_owned_peephole_span(fragments, span, permission, phase_timing):
-    """Copy only the latest checked private run into a fresh owner once.
+def _retire_owned_peephole_span(fragments, span, permission, phase_timing, run_kind: int = -3):
+    """Copy only the latest private run into a fresh owner once.
+
+    Keep the expected marker: a CFG run is unchecked (-2), unlike a
+    checked peephole run (-3), and its next consumer still validates it.
 
     Never mutate or close the previous owner: independently retained roots and
     cursors retain their original generation and sequence. Public/custom paths
@@ -196,6 +199,8 @@ def _retire_owned_peephole_span(fragments, span, permission, phase_timing):
         permission.revoke()
         return span
     permission.revoke()
+    if type(run_kind) is not int or run_kind not in (-3, -2):
+        return span
     old: CompilerRecordSpanArena = fragments.spans
     if (type(fragments) is not AArch64EmissionFragments
             or type(old) is not CompilerRecordSpanArena
@@ -220,12 +225,12 @@ def _retire_owned_peephole_span(fragments, span, permission, phase_timing):
     start = node.second
     count = node.third
     if (type(node.first) is not int or type(start) is not int or type(count) is not int
-            or node.first != -3 or count != root.second or count <= 0
+            or node.first != run_kind or count != root.second or count <= 0
             or start < 0 or start + count > old.runs._length
             or count >= old.runs._length):
         return span
-    # The preceding owned pass certified this run. Still exclude malformed
-    # records or subclass hooks rather than change their validation order.
+    # Exclude malformed IDs or subclass hooks rather than change their
+    # validation order. Do not certify an unchecked CFG run here.
     record_count = fragments.records._length // 4
     index = start
     while index < start + count:
@@ -238,7 +243,7 @@ def _retire_owned_peephole_span(fragments, span, permission, phase_timing):
         pending.generation = old.generation + 1
         result = pending.new_span()
         pending.runs.extend_from(old.runs, start, count)
-        pending._publish_run(result, pending._root(result), 0, count, -3)
+        pending._publish_run(result, pending._root(result), 0, count, run_kind)
     except BaseException:
         try:
             pending.close()

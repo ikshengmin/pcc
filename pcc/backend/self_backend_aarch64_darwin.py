@@ -503,6 +503,7 @@ class _NativeAArch64Emission:
     def finish_optimized_instructions(self, metadata_labels, cold_fallthrough_edges, phase_timing=None) -> None:
         from .self_backend_aarch64_typed_peepholes import _run_aarch64_typed_peepholes, run_aarch64_typed_peepholes, _owned_timer_is_canonical, _observe_peephole_boundary_permission, _retire_owned_peephole_span
         from .self_backend_aarch64_typed_cfg import run_aarch64_typed_cfg_passes
+        cfg_midpoint_retirement: _PeepholeBoundaryRetirement | None = None
         try:
             boundary_retirement = self._peephole_boundary_retirement
             _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
@@ -536,13 +537,34 @@ class _NativeAArch64Emission:
                     self.fragments, self.fragments.semantics, self.module_span,
                     phase_timing=phase_timing,
                 )
+            prior_generation = -1
+            if (boundary_retirement is not None and boundary_retirement.valid
+                    and type(self.fragments.spans) is CompilerRecordSpanArena):
+                current_generation = self.fragments.spans.generation
+                if type(current_generation) is int:
+                    prior_generation = current_generation
             span = _retire_owned_peephole_span(
                 self.fragments, span, boundary_retirement, phase_timing,
             )
-            span = run_aarch64_typed_cfg_passes(
-                self.fragments, self.fragments.semantics, span, metadata_labels,
-                cold_fallthrough_edges, phase_timing=phase_timing,
-            )
+            # Only a successful private peephole retirement can grant the
+            # next boundary. Public sinks, an earlier observer revocation,
+            # and malformed/no-history fallbacks receive no CFG authority.
+            if (prior_generation >= 1
+                    and type(self.fragments.spans) is CompilerRecordSpanArena
+                    and self.fragments.spans.generation == prior_generation + 1
+                    and _owned_timer_is_canonical(phase_timing)):
+                cfg_midpoint_retirement = _PeepholeBoundaryRetirement(self.fragments)
+            if cfg_midpoint_retirement is None:
+                span = run_aarch64_typed_cfg_passes(
+                    self.fragments, self.fragments.semantics, span, metadata_labels,
+                    cold_fallthrough_edges, phase_timing=phase_timing,
+                )
+            else:
+                span = run_aarch64_typed_cfg_passes(
+                    self.fragments, self.fragments.semantics, span, metadata_labels,
+                    cold_fallthrough_edges, phase_timing=phase_timing,
+                    _midpoint_retirement=cfg_midpoint_retirement,
+                )
             if phase_timing is not None:
                 started = phase_timing.begin_backend_finalize("typed_publish")
             self.collecting_optimized = False
@@ -557,6 +579,8 @@ class _NativeAArch64Emission:
             if phase_timing is not None:
                 phase_timing.complete_backend_finalize("typed_publish", started)
         finally:
+            if cfg_midpoint_retirement is not None:
+                cfg_midpoint_retirement.revoke()
             if self._peephole_boundary_retirement is not None:
                 self._peephole_boundary_retirement.revoke()
             if self._span_owner_transfer is not None:
