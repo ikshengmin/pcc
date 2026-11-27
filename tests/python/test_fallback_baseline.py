@@ -765,7 +765,7 @@ def test_layer1_constants_cross_module_static_imports_stay_native():
     ``layer1.py`` intentionally keeps the literal policy tables in
     ``layer1_constants.py`` and re-exports them as class-local attributes on
     ``L1CodeGen``. Raw single-module codegen must still see those imports as
-    native module-global slots; otherwise the split silently reintroduces
+    native module bindings; otherwise the split silently reintroduces
     ``py_cpy_import`` / ``py_cpy_getattr`` for static tables.
     """
     from pcc.frontends.python.py_lift import parse_and_lift
@@ -793,32 +793,132 @@ def test_layer1_constants_cross_module_static_imports_stay_native():
         if "layer1_constants" in line and "@py_cpy_" in line
     ]
     assert layer1_constant_fallbacks == []
-    # Follow the expected imported literal into the live class namespace.
-    # A declaration of the retired fast-slot alone does not publish its value.
+    provider_name = "pcc.frontends.python.codegen.layer1_constants"
+    consumer_name = "pcc.frontends.python.codegen.layer1"
+    provider = src.with_name("layer1_constants.py")
+    provider_typed = infer_module(parse_and_lift(
+        provider.read_text(encoding="utf-8"), str(provider), provider_name,
+    ))
+    provider_ir = str(L1CodeGen(
+        provider_typed, emit_cpy_main_exitcode=False, ir_scaffold_mode="on",
+    ).generate(provider_typed))
     from pcc.frontends.python.codegen.layer1_constants import IR_RUNTIME_COMPAT_MODULE
 
-    encoded = "".join(chr(92) + format(byte, "02X")
-                      for byte in IR_RUNTIME_COMPAT_MODULE.encode() + bytes((0,)))
-    literals = {
-        line.split(" =", 1)[0]
-        for line in ir_text.splitlines()
-        if line.startswith("@.pystr.obj.") and 'c"' + encoded + '"' in line
-    }
-    names = re.findall(
-        r"(?m)^  (%[^ ]+) = getelementptr[^\n]*"
-        r"@\.class_name\._IR_RUNTIME_COMPAT_MODULE\.\d+,", ir_text,
+    def encoded(value):
+        return "".join(chr(92) + format(byte, "02X")
+                       for byte in value.encode() + bytes((0,)))
+
+    def strings(ir, value, prefix=""):
+        return {
+            line.split(" =", 1)[0]
+            for line in ir.splitlines()
+            if line.startswith("@" + prefix) and 'c"' + encoded(value) + '"' in line
+        }
+
+    def main(ir):
+        return re.search(r"(?ms)^define i32 @main\([^\n]*\) \{\n(.*?)^\}", ir).group(1)
+
+    def alternatives(values):
+        assert values
+        return "(?:" + "|".join(map(re.escape, sorted(values))) + ")"
+
+    provider_main = main(provider_ir)
+    key = "IR_RUNTIME_COMPAT_MODULE"
+    provider_root = "@.modvar." + provider_name.replace(".", "_") + "." + key
+    consumer_root = "@.modvar." + consumer_name.replace(".", "_") + "." + key
+    # Prove the literal is actually published by the native provider, not
+    # merely present in its IR as a declaration or unrelated constant.
+    literal = alternatives(strings(provider_ir, IR_RUNTIME_COMPAT_MODULE, ".pystr.obj."))
+    provider_module = alternatives(strings(provider_ir, provider_name))
+    provider_key = alternatives(strings(provider_ir, key))
+    provider_publish = (
+        r"@pcc_gc_frame_enter\(ptr [^,\n]+, ptr " + re.escape(provider_root) + r"\).*?"
+        r"@pcc_gc_store_root\(ptr " + re.escape(provider_root) + r", ptr (?P<literal>"
+        + literal + r")\).*?"
+        r"@py_module_attr_set\(ptr " + provider_module
+        + r", ptr getelementptr[^\n]*" + provider_key + r",[^\n]*\), ptr (?P=literal)\)"
     )
-    published = False
-    for literal in literals:
-        slots = re.findall(r"store ptr " + re.escape(literal) + r", ptr (%[^,\n]+)", ir_text)
-        for slot in slots:
-            values = re.findall(r"(?m)^  (%[^ ]+) = load ptr, ptr " + re.escape(slot) + r"$", ir_text)
-            for name in names:
-                for value in values:
-                    if re.search(r"@py_class_setattr_raw\(ptr [^,]+, ptr " + re.escape(name)
-                                 + r", ptr " + re.escape(value) + r"\)", ir_text):
-                        published = True
+    assert re.search(provider_publish, provider_main, re.S), "provider did not publish the literal"
+
+    # Follow a live native import and its registered operand roots into the
+    # authoritative consumer module table, then into L1CodeGen's class body.
+    # The old standalone literal-in-consumer expectation incorrectly rejected
+    # this native dynamic namespace route.
+    consumer_main = main(ir_text)
+    provider_names = alternatives(strings(ir_text, provider_name))
+    consumer_names = alternatives(strings(ir_text, consumer_name))
+    consumer_keys = alternatives(strings(ir_text, key))
+    class_keys = alternatives(strings(ir_text, "_" + key))
+    class_names = alternatives(strings(ir_text, "L1CodeGen", ".class_name."))
+    ssa = r"%[^,\s()]+"
+    def capture(name):
+        return "(?P<" + name + ">" + ssa + ")"
+    def ref(name):
+        return "(?P=" + name + ")"
+    def enter(slot):
+        return r"@pcc_gc_frame_enter_lifo_local\(ptr [^,\n]+, ptr " + capture(slot) + r"\)"
+    def call(result, name, args):
+        return capture(result) + r" = call [^\n]*@" + name + r"\(" + args + r"\)"
+    def store(value, slot):
+        return r"store ptr " + ref(value) + ", ptr " + ref(slot) + r"\n"
+    def load(value, slot):
+        return capture(value) + r" = load ptr, ptr " + ref(slot) + r"\n"
+    def gep(value, names):
+        return capture(value) + r" = getelementptr[^\n]*ptr " + names + r",[^\n]*\n"
+
+    import_pattern = ".*?".join((
+        gep("provider_name", provider_names),
+        enter("module_slot"),
+        call("module", "py_compiled_module_import_by_name", "ptr " + ref("provider_name")),
+        store("module", "module_slot"),
+        enter("member_slot"),
+        load("current_module", "module_slot"),
+        call("member", "py_obj_getattr", "ptr " + ref("current_module")
+             + r", ptr getelementptr[^\n]*" + consumer_keys + r",[^\n]*\)"),
+        store("member", "member_slot"),
+        load("current_member", "member_slot"),
+        r"@pcc_gc_store_root\(ptr " + re.escape(consumer_root) + ", ptr " + ref("current_member") + r"\)",
+        r"@py_module_attr_set\(ptr " + consumer_names + r", ptr getelementptr[^\n]*"
+        + consumer_keys + r",[^\n]*\), ptr " + ref("current_member") + r"\)",
+    ))
+    imported = re.search(import_pattern, consumer_main, re.S)
+    assert imported, "native import did not publish the provider member"
+
+    class_pattern = ".*?".join((
+        gep("class_name", class_names),
+        call("class_object", "py_class_new", "ptr " + ref("class_name") + r",[^\n]*"),
+        r"@pcc_gc_store_root\(ptr " + capture("class_slot") + ", ptr " + ref("class_object") + r"\)",
+        r"@pcc_gc_frame_enter_lifo_local\(ptr [^,\n]+, ptr " + ref("class_slot") + r"\)",
+        enter("value_slot"),
+        gep("consumer_name", consumer_names),
+        call("current_value", "py_module_attr_get", "ptr " + ref("consumer_name") + ", ptr " + consumer_keys),
+        store("current_value", "value_slot"),
+        gep("class_key", class_keys),
+        load("class_receiver", "class_slot"),
+        load("class_value", "value_slot"),
+        r"@py_class_setattr_raw\(ptr " + ref("class_receiver") + ", ptr " + ref("class_key")
+        + ", ptr " + ref("class_value") + r"\)",
+    ))
+    published = re.search(class_pattern, consumer_main[imported.end():], re.S)
     assert published, "imported native constant did not reach the class namespace"
+
+    # Negative witnesses: unrelated provider/key/root/value cannot satisfy the
+    # same native data-flow assertions just by leaving declarations intact.
+    assert not re.search(provider_publish, provider_main.replace(
+        "ptr " + provider_root + ", ptr ", "ptr @unrelated.root, ptr ",
+    ), re.S)
+    assert not re.search(import_pattern, consumer_main.replace(
+        "ptr " + imported["provider_name"] + ")", "ptr null)",
+    ), re.S)
+    assert not re.search(import_pattern, consumer_main.replace(
+        "ptr " + imported["current_member"] + ")", "ptr null)",
+    ), re.S)
+    assert not re.search(class_pattern, consumer_main[imported.end():].replace(
+        "ptr " + published["class_value"] + ")", "ptr null)",
+    ), re.S)
+    assert not re.search(class_pattern, consumer_main[imported.end():].replace(
+        "ptr " + published["class_key"] + ",", "ptr null,",
+    ), re.S)
 
 
 def test_native_module_constant_bindings_are_contextual_host_state():
