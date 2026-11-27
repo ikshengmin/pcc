@@ -5197,6 +5197,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend toward LLVM parity: locate the LLVM step the self passes lack (pcc_perf reference ablations, scripts/pcc_perf.py), then implement it in pcc's own AArch64 passes (shrink-wrapping, allocation or selection, whichever the ablation ranks first); IR-pass changes are target-neutral and reach x64; avoids the typed x64 MIR files: Claude, macOS, 2026-11-27T06:46Z, area backend
+   - Stage1 direct-indexed capture full-record traversal attribution (actual source-clean c_codegen 629 closure, direct_indexed_kernel.py and focused traversal tests only; preserve fallback/dead records/early unreachable/PHI diagnostics, no edit before measured stage-relevant ceiling): Codex, Linux, 2026-11-27T08:53Z, area runtime-codegen
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
