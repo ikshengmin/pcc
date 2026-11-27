@@ -4299,6 +4299,22 @@ in the relevant section or issue and removes the entry.
        Reject standalone cache, preserve original hash/cycle
        validation; no source change. Next actual general OFF
        function-emission structural attribution, no gate relax.
+       Default MIR-OFF x64 CFG shell/PHI emission attribution
+       (2026-11-27; no production): same frozen actual class_gen
+       PIDXcf4113cc/current owner9f01a770/bfd99a92, complete
+       streamed ELF12661992B SHA122f82e5 exact prior. Guard
+       45.67s/439.83MB; 727 functions/87118 projected block
+       shells+terminators,851 PHIs/1810 incoming;122547 phi
+       edge requests,120737 empty targets98.52%,2871 incoming
+       comparisons. Shell CPU0.7766s, terminator0.5532s inclusive
+       PHI0.1032s; ideal eliminating both only1.33s/40.05s
+       whole streamed backend3.32%, shell alone1.94%; actual
+       direct route still must emit branches/parallel copies.
+       Reject isolated CFG shell rewrite; retain canonical
+       block order, explicit diagnostic/custom/public routes
+       and stackmap label semantics. No native benefit inferred.
+       Next seek dominant indexed instruction/emit structural
+       owner, coordinate separate Stage2 tuple projection.
        Next measure current combined generator/ownership IR
        reduction and packed allocator on the actual giant, then
        sparse live planes/streamed lowering only if measured
@@ -5087,7 +5103,6 @@ in the relevant section or issue and removes the entry.
    - 2026-11-27 rejected native default verifier cold-path allocation unit (747c1dd1/63a53bc0). Actual class_gen OFF PIDX cf4113cc: 86,267 phi-free, 49,055 unconditional, no switch/inline. Candidate only avoids predecessor allocation on phi_count==0 and delays diagnostic repr after mandatory same header/span reads. Source ea575668/test d445451a, intended 2 red then 31 green. Exact native production-body projection with real arena c0bb2701 and 135,322 ordered eligible rows, checksum188041627; ordinary site missing arena failure retained, corrected explicit source and same strict runtime d4520c69. CPU0 20-repeat A/B/control 10.754→4.053→10.467s (normalized −61.80%), peak57728→55072→56072KiB, exact output. Scoped saving ~0.328s/class replay, entire projected baseline ~0.531s/repeat including load, not full native verifier bound. Stage-level payoff too low; no formal native full owner/ELF qualification; no source/test merged. Release claim. No CI.
 
    Claims:
-   - Actual default MIR-OFF indexed x64 CFG-shell/PHI emission attribution (self_backend_x86_64_linux.py + self_backend_emit.py, exact branch/PHI projection and per-edge scan upper bound, no source edit before evidence; verifier/CI disjoint): Codex, Linux, 2026-11-27T06:42Z, area backend
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
    - Direct indexed packed operand projection repeated-work attribution (actual class_gen OFF PIDX counts, duplicate call-argument reads and top-level intern identities; pcc/backend/self_backend_ir.py and self_backend_kernel.py plus focused bridge tests only; no emitter/CFG/CSR or persistent cache): Codex, Linux, 2026-11-27T06:17Z, area runtime-codegen
 4. **Source-language frontends**, in parallel with item 2 (different files;
