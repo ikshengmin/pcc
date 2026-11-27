@@ -36,6 +36,8 @@ from .self_backend_aarch64_darwin_slots import (
     zero_address,
 )
 from .self_backend_ir import (
+    PARSED_INSTRUCTION_KIND_BR,
+    PARSED_INSTRUCTION_KIND_BR_COND,
     PARSED_INSTRUCTION_KINDS,
     ParsedBlock,
     ParsedFunction,
@@ -231,12 +233,171 @@ def _canonical_post_call_error_edge(
     return error_target, success_target
 
 
+def _rotate_top_tested_loops(kernel: IndexedFunctionKernel, order: list[int]) -> bool:
+    """Lay each top-tested loop out as its other blocks, header, then exit.
+
+    LLVM's MachineBlockPlacement rotation: the latch falls through into the
+    header, whose conditional branch returns to the loop (one taken branch
+    per iteration instead of a not-taken exit test plus ``b header``). A
+    header qualifies when it ends in a conditional branch with exactly one
+    successor in its natural loop, every backedge comes from a block laid
+    out after it, and the loop's blocks all lie between the header and its
+    last backedge. The latch is the last unconditional backedge, or a
+    conditional one whose other successor is a slow block entered only from
+    it that branches straight back (the safepoint poll on pcc-Python
+    backedges: ``br %need, %slow, %head``). Blocks in that range outside the
+    loop and the slow block move before it; then the loop's blocks with the
+    latch last, the header, and the header's exit when in the range (an
+    exit right after the range follows the header as it is). Inner
+    loops rotate first. Only the layout changes: every terminator still
+    names its targets, so this is never a correctness question, only a
+    branch count one. ``order`` is updated in place; the entry block stays
+    first.
+    """
+    block_count = len(order)
+    predecessors: list[list[int]] = []
+    block = 0
+    while block < block_count:
+        predecessors.append([])
+        block += 1
+    block = 0
+    while block < block_count:
+        successor_count = kernel.cfg_successor_count(block)
+        successor_index = 0
+        while successor_index < successor_count:
+            target = kernel.cfg_successor_id(block, successor_index)
+            if 0 <= target < block_count:
+                predecessors[target].append(block)
+            successor_index += 1
+        block += 1
+    position: list[int] = [0] * block_count
+    index = 0
+    while index < block_count:
+        position[order[index]] = index
+        index += 1
+    candidates: list[int] = []
+    index = 0
+    while index < block_count:
+        candidates.append(order[index])
+        index += 1
+    in_loop: list[int] = [0] * block_count
+    stamp = 0
+    changed = False
+    candidate_index = block_count - 1
+    while candidate_index > 0:
+        header = candidates[candidate_index]
+        candidate_index -= 1
+        if header == order[0]:
+            continue
+        if kernel.terminator_header(header).first != PARSED_INSTRUCTION_KIND_BR_COND:
+            continue
+        header_position = position[header]
+        latch = -1
+        conditional_latch = -1
+        slow_block = -1
+        range_end = -1
+        valid = True
+        for predecessor in predecessors[header]:
+            if position[predecessor] < header_position:
+                continue
+            if predecessor == header:
+                valid = False
+                break
+            if position[predecessor] > range_end:
+                range_end = position[predecessor]
+            kind = kernel.terminator_header(predecessor).first
+            successors = kernel.cfg_successor_count(predecessor)
+            if kind == PARSED_INSTRUCTION_KIND_BR and successors == 1:
+                if latch < 0 or position[predecessor] > position[latch]:
+                    latch = predecessor
+            elif kind == PARSED_INSTRUCTION_KIND_BR_COND and successors == 2 and conditional_latch < 0:
+                conditional_latch = predecessor
+            else:
+                valid = False
+                break
+        if not valid or (latch < 0 and conditional_latch < 0):
+            continue
+        if conditional_latch >= 0:
+            other = kernel.terminator_header(conditional_latch).fourth
+            if other == header:
+                other = kernel.terminator_span(conditional_latch).first
+            if other == header:
+                continue
+            if latch >= 0:
+                # The unconditional backedge must be the slow block: entered
+                # only from the conditional latch, branching straight back.
+                if (other != latch or len(predecessors[latch]) != 1
+                        or predecessors[latch][0] != conditional_latch):
+                    continue
+                slow_block = latch
+            latch = conditional_latch
+        latch_position = range_end
+        # The natural loop: blocks reaching a backedge without the header.
+        stamp += 1
+        in_loop[header] = stamp
+        pending: list[int] = []
+        for predecessor in predecessors[header]:
+            if position[predecessor] >= header_position and in_loop[predecessor] != stamp:
+                in_loop[predecessor] = stamp
+                pending.append(predecessor)
+        while valid and pending:
+            member = pending.pop()
+            if not header_position < position[member] <= latch_position:
+                valid = False
+                break
+            for predecessor in predecessors[member]:
+                if in_loop[predecessor] != stamp:
+                    in_loop[predecessor] = stamp
+                    pending.append(predecessor)
+        if not valid:
+            continue
+        true_target = kernel.terminator_header(header).fourth
+        false_target = kernel.terminator_span(header).first
+        if not (0 <= true_target < block_count and 0 <= false_target < block_count):
+            continue
+        true_inside = in_loop[true_target] == stamp
+        if true_inside == (in_loop[false_target] == stamp):
+            continue
+        exit_block = false_target if true_inside else true_target
+        rotated: list[int] = []
+        index = header_position + 1
+        while index <= latch_position:
+            member = order[index]
+            if in_loop[member] != stamp and member != exit_block:
+                rotated.append(member)
+            index += 1
+        if slow_block >= 0:
+            rotated.append(slow_block)
+        loop_start = len(rotated)
+        index = header_position + 1
+        while index <= latch_position:
+            member = order[index]
+            if in_loop[member] == stamp and member != slow_block:
+                rotated.append(member)
+            index += 1
+        # The latch must end the loop's blocks to fall into the header.
+        if rotated[len(rotated) - 1] != latch or len(rotated) == loop_start:
+            continue
+        rotated.append(header)
+        if header_position < position[exit_block] <= latch_position:
+            rotated.append(exit_block)
+        index = 0
+        while index < len(rotated):
+            member = rotated[index]
+            order[header_position + index] = member
+            position[member] = header_position + index
+            index += 1
+        changed = True
+    return changed
+
+
 def plan_aarch64_canonical_error_fallthroughs(
     func: ParsedFunction,
     *,
     enabled: bool,
 ) -> None:
-    """Place only canonical post-call success blocks after their checks."""
+    """Rotate top-tested loops, then place canonical post-call success
+    blocks after their checks."""
     func.aarch64_block_layout = []
     func.aarch64_cold_fallthrough_edges = []
     if not enabled:
@@ -248,15 +409,21 @@ def plan_aarch64_canonical_error_fallthroughs(
     if block_count == 0:
         return
 
-    next_indices: list[int] = []
-    previous_indices: list[int] = []
+    order: list[int] = []
+    block_index = 0
+    while block_index < block_count:
+        order.append(block_index)
+        block_index += 1
+    rotated = _rotate_top_tested_loops(kernel, order)
+    next_indices: list[int] = [-1] * block_count
+    previous_indices: list[int] = [-1] * block_count
     processed: list[int] = [0] * block_count
     block_index = 0
     while block_index < block_count:
-        next_indices.append(
-            block_index + 1 if block_index + 1 < block_count else -1
-        )
-        previous_indices.append(block_index - 1)
+        if block_index + 1 < block_count:
+            next_indices[order[block_index]] = order[block_index + 1]
+        if block_index > 0:
+            previous_indices[order[block_index]] = order[block_index - 1]
         block_index += 1
 
     current_index = 0
@@ -304,7 +471,7 @@ def plan_aarch64_canonical_error_fallthroughs(
         processed[current_index] = 1
         current_index = next_indices[current_index]
 
-    if func.aarch64_cold_fallthrough_edges:
+    if rotated or func.aarch64_cold_fallthrough_edges:
         block_index = 0
         while block_index >= 0:
             kernel.block_layout_ids.append(block_index)

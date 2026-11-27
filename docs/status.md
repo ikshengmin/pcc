@@ -3258,6 +3258,26 @@ in the relevant section or issue and removes the entry.
    (expects `pcc_gc_note_slot_write_barrier` in `py_tls_exc_set`, which
    has none); `test_self_backend_no_host_gate.py::test_self_backend_no_host_no_silent_fallback`
    needs a pcc1 binary (run with `PCC_NO_AUTO_PCC1=1`).
+   (s) Merged (Claude, 2026-11-27): loop rotation in the AArch64 block
+   layout (LLVM MachineBlockPlacement's top-tested loop rotation,
+   `_rotate_top_tested_loops` before the canonical error fallthroughs):
+   the latch falls into the header and the header's one conditional branch
+   returns to the loop. pcc-Python loops poll a thread safepoint on the
+   backedge (`br %need, %slow, %head`); the polling block is the latch and
+   the slow block moves before the loop. The rc-base step record executed
+   7927 backedge `b` per 600000 instructions; a loop entered k times per
+   iteration count n saves n-1 per entry, so short loops gain little. Arm
+   h10-rot2 against clean HEAD h10-base (five repeats each, runs within
+   0.47%): instructions 213800 -> 212841 (-0.45%); an earlier draft that
+   skipped polled loops (h10-rot) gave -0.32%. Cycles varied 5-11% under
+   load 10 and are not a result. Tests: `test_aarch64_loop_rotation.py`
+   checks while, early-return, nested, exit-first and polled loops,
+   bottom-tested and unoptimized ones unchanged, typed/text agreement and
+   native runs under both allocators; the backend files 8225 passed with
+   the four nodes named in (r) deselected (the archive one passed alone
+   with the h10-rot2 runtime). Remaining hot backward branches: loops
+   whose latch has other backedges (`continue`), slow-path `b` in rotated
+   loops (cold), and loops with a header outside the rotation shape.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2
