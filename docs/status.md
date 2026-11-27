@@ -4569,6 +4569,69 @@ in the relevant section or issue and removes the entry.
    whole-function structural ownership proof only if evidence warrants;
    do not repeat tiny local clears or weaken audit/root semantics.
 
+   Ordinary-object atomic RC single-op cost and nonmoving-root audit
+   (Linux x86_64, Codex, 2026-11-27). User redirected from isolated
+   protocol patches to measured atomic count tax. Exact relevant current
+   source c9120f18: py_obj d10b88ae and native kernel74ef7882 match the
+   verified owned e129de08 archive (not entire current compiler).
+   Exclusive ordinary nonimmortal float, one real outer counted owner;
+   5M increments or nonterminal decrements separately timed with Linux
+   process CPU clock (owned syscall228 clock-id2), reciprocal synthetic
+   owners balanced outside timer. Source-copied atomic reference uses
+   exact ordinary admitted checks/atomic RMW or release CAS, identical
+   plain reference replaces only the count operation for this unshared
+   fixture; unsupported checked/terminal paths are not represented.
+   Self-owned reference objects20362a1a/4f3f35b2, native ELF
+   49bcc0158da72e0ab94f763ebf724b4d4276df0de8a5eaaa90bb51515396ad4d.
+   Machine audit: one lock instruction per atomic reference, zero per
+   plain reference; native timer syscall228/id2. Five alternating
+   actual/atomic-reference/plain/unchanged-actual blocks per mode,
+   80 formal +12 smoke all exact counts, allocator/telemetry balance,
+   no errors/double frees.
+   CPU ns/op median actual, matched atomic reference, plain, unchanged
+   control; paired reference atomic tax, wins and max control drift:
+   public incref13.2408/13.3011/5.9692/13.4792;7.3921ns,5/5,0.620ns.
+   public nonterminal decref CAS13.7164/13.7436/6.0115/13.9194;
+   7.6897ns,5/5,1.670ns. Kernel incref RMW11.3086/11.3250/3.6687/
+   11.3495;7.8349ns,5/5,1.242ns. Kernel decref RMW11.8022/11.1102/
+   3.5039/11.3350;7.6078ns,5/5,4.824ns. Final guard13.045s/
+   99,942,400B, unchanged1GiB/2GiB. Earlier diagnostic-only standalone
+   reference compile failures were typed literal/import boundary and
+   clock intrinsic only admits realtime/monotonic; corrected without
+   production changes. Prior actual handler public entries118.2525
+   inc/230.75 dec include NULL/tagged/immortal and checked tails.
+   Confirmed nonoverlapping ordinary fast atomic inc46.75 + CAS dec38.6,
+   known direct kernel inc5.15 + nonterminal dec29.2 (default known
+   checks off, no public fallback). Weighted matched tax0.905us/req
+   (~1.60% of56.4us). Deliberately generous all checked-tail entries
+   37.1/71.55 and known terminal1 as one extra RMW each gives
+   1.748us (~3.10%), NOT an eligible biased/local RC proof: includes
+   terminal, nonordinary, uncertain/no-op counts and no exclusive
+   ownership proof. Inline root/field atomic updates not attributed by
+   these prior API counters. No whole-handler speed or total atomic-tax
+   claim; no biased/non-atomic production RC.
+   Exact root-slot audit on same current source (11 relevant runtime
+   blobs matched): single collector config hardcodes backend0 and
+   frame-registry-inactive=1 after initialization. pcc_gc_load_ptr,
+   load_borrowed_ptr and resolve_owned_ptr are identity reads;
+   oldify_copy returns NULL. Active GC0 root mark calls
+   pcc_gc_visit_native_root_frames(6,0), mode6 and registered/global/
+   continuation/scheduler visitors only load root then mark reachable.
+   No active relocation or forwarding producer; stale checked resolver
+   mode3 could write only if forwarding existed, mode2 oldify stub,
+   forwarding_index_insert has no definition/caller (stale extern).
+   Safepoint parks/updates thread metadata, not live stack root values.
+   Cycle clear walks heap referents, not root slots; queued weakrefs and
+   __del__ run with world resumed/table unlocked, then re-stop and
+   recompute reachability; explicit start/stop callbacks also mutator
+   code. Thus GC itself does not rewrite live stack-root pointers, but
+   ordinary explicit root move/store/take, escaped address, C callback,
+   global rebinding/reentrant mutation CAN change program slots. A
+   compiler reload-elision proof must preserve actual owning lifetime,
+   alias/non-rebinding and callback/audit/error semantics; never infer
+   all roots immutable or all references safe merely from nonmoving GC.
+   No source/runtime changes; support backend/Stage1 alias proof only.
+
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
    - Actual same post-pass Linux runtime IR x64 vs AArch64 static hot-function comparison (GC/allocator/JSON/scheduler; no allocator edit): Codex, Linux, 2026-11-27T01:44Z, area backend (read-only owned emit attribution, Stage2 complementary container/TLS; CI metric tool disjoint)
