@@ -5758,6 +5758,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend toward LLVM parity: locate the LLVM step the self passes lack (pcc_perf reference ablations, scripts/pcc_perf.py), then implement it in pcc's own AArch64 passes (shrink-wrapping, allocation or selection, whichever the ablation ranks first); IR-pass changes are target-neutral and reach x64; avoids the typed x64 MIR files: Claude, macOS, 2026-11-27T15:16Z, area backend
+   - Stage1 x64 opt-in MIR shared packed call/fixed scalar numeric operand adapter (actual class_gen/c_codegen projection census; self_backend_x86_mir_emit.py private exact canonical lowering and existing test_x86_typed_mir.py only, lazy function-local byte proof, no constant cache/legacy allocator/default/ABI/GC changes): Codex, Linux, 2026-11-27T21:13Z, area backend
 
 
 
