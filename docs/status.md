@@ -3144,6 +3144,22 @@ in the relevant section or issue and removes the entry.
    relaxation), register-offset addressing; the structural alternative is
    an AArch64 machine IR with selection and allocation, as the typed x86-64
    MIR did (-22% static instructions, Linux w1 +36%).
+   (l) Not merged, no gain (Claude, 2026-11-27): LLVM's inliner remarks on
+   ten hot runtime modules list 663 call sites it inlines that pcc's
+   leaves; 380 are refused only because a multi-block callee returns or
+   merges a pointer (a rule for frame-registering callers, 14 of the 429
+   callers) and 210 sit in the pthread kernel, which skipped the runtime
+   pass list. Gating that rule on callers with `pcc_gc_frame_enter*` and
+   running the pass list on the kernel cut the LLVM-inlinable sites to 213,
+   but arms h3-base/h3-base2 (8e5e7906e) and h3-inl measured instructions
+   -0.17% (control +0.18%) and w1 +0.6% (floor 1.4%). The same inlining is
+   worth +5.2% under LLVM code generation and nothing under the self
+   backend: inlined bodies are emitted with the same per-instruction
+   selection, so IR-level gains wait on code generation. Patch and test
+   kept outside the repository (`p0-inline-pointer-merge-and-kernel-passes.diff`).
+   Next: the AArch64 instruction-selection layer (machine IR with
+   pattern-based selection after LLVM's AArch64 patterns, then block
+   placement), measured by executed instructions against arm ra-cg.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2
