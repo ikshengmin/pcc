@@ -3205,6 +3205,20 @@ in the relevant section or issue and removes the entry.
    order; `test_aarch64_cmpxchg_operands.py` executes success and failure
    paths natively and caught it. Legacy tuple payloads make the same choices
    so both payload forms emit the same code.
+   (q) Merged (Claude, 2026-11-27): single-bit masked tests select as
+   `tbz`/`tbnz` (LLVM's AArch64 selection). The encoders gained the 14-bit
+   test branch (`STRUCTURED_FIXUP_BRANCH14`, text, direct capture and
+   semantic re-encoding; words checked against clang 20), branch relaxation
+   per branch kind (+/-32 KiB for tbz: the opposite test over `b`), and the
+   typed and text CFG passes treat tbz/tbnz as conditional branches (label
+   references, retargeting, inversion). Arm h8-tbz against a clean HEAD
+   build h8-base: instructions 220176 -> 216147 (-1.83%). Tests: the fusion
+   file executes every branch natively, a relaxed native tbz across a
+   44 KiB block, and far/near relaxation words. AArch64, arm64 encoder,
+   atomic, Mach-O and TLS files 7348 passed. Two regressions found and
+   fixed before merge: CFG passes dropped labels only tbz referenced (the
+   runtime failed to build), and the relaxation threshold must use the
+   smaller reach so patched limits still relax.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2

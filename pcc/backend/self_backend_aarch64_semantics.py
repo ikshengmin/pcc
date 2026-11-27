@@ -591,7 +591,7 @@ def append_semantic_instruction(
         raise EncodeError("AArch64 provenance record IDs do not match encoded records")
     if encoded.first < 0 or encoded.first > 0xFFFFFFFF or encoded.second not in (1, 2, 3, 4):
         raise EncodeError("AArch64 semantic replacement is not an encoded instruction")
-    if encoded.third not in (0, -1, -19, -26, 1, 2, 3, 4, 5):
+    if encoded.third not in (0, -1, -14, -19, -26, 1, 2, 3, 4, 5):
         raise EncodeError("AArch64 semantic replacement relocation is invalid")
     if encoded.third < 0:
         _validate_text_fixup_word(encoded.first, encoded.third)
@@ -639,7 +639,7 @@ def append_copied_semantic_instruction(
         raise EncodeError("AArch64 provenance record IDs do not match encoded records")
     if encoded.first < 0 or encoded.first > 0xFFFFFFFF or encoded.second not in (1, 2, 3, 4):
         raise EncodeError("AArch64 semantic replacement is not an encoded instruction")
-    if encoded.third not in (0, -1, -19, -26, 1, 2, 3, 4, 5):
+    if encoded.third not in (0, -1, -14, -19, -26, 1, 2, 3, 4, 5):
         raise EncodeError("AArch64 semantic replacement relocation is invalid")
     if encoded.third < 0:
         _validate_text_fixup_word(encoded.first, encoded.third)

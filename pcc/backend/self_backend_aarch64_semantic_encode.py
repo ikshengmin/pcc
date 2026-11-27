@@ -50,6 +50,16 @@ def encode_semantic_instruction(opcode_id: int, operands: list[CompilerInt4]) ->
     family = encoder.EMITTED_INSTRUCTION_SCALAR
     kind = 0
     symbol = -1
+    if mnemonic in ("tbz", "tbnz"):
+        if count != 3:
+            raise encoder.EncodeError("typed test branch operands are invalid")
+        target = operands[2]
+        if target.first != TOKEN_SYMBOL or target.third != SYMBOL_PLAIN or target.fourth != 0:
+            raise encoder.EncodeError("typed branch target is invalid")
+        word = encoder.encode_emitted_test_branch_base_parts(
+            mnemonic, _register(operands[0]), semantic_immediate_value(operands[1]),
+        )
+        return CompilerInt4(word, family, encoder.STRUCTURED_FIXUP_BRANCH14, target.second)
     if mnemonic in ("b", "bl") or mnemonic.startswith("b.") or mnemonic in ("cbz", "cbnz"):
         register = ""
         if mnemonic in ("cbz", "cbnz"):

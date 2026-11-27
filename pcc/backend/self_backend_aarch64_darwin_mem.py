@@ -16,6 +16,7 @@ from .arm64_encode import (
     encode_emitted_addsub_immediate_parts,
     encode_emitted_addsub_register_parts,
     encode_emitted_branch_base_parts,
+    encode_emitted_test_branch_base_parts,
     encode_emitted_compare_immediate_parts,
     encode_emitted_compare_register_parts,
     encode_emitted_cset_parts,
@@ -378,6 +379,25 @@ def emitted_branch_line(
     if mnemonic == "b" or mnemonic.startswith("b."):
         return "  " + mnemonic + " " + target
     return "  " + mnemonic + " " + register + ", " + target
+
+
+def emitted_test_branch_line(mnemonic: str, target: str, register: str, bit: int) -> str:
+    """``tbz``/``tbnz register, #bit, target``: a 14-bit (+/-32 KiB) branch;
+    the encoder relaxes a farther target to the opposite test over ``b``."""
+    records = _DIRECT_INSTRUCTION_RECORDS
+    if records is not None:
+        target_id = _capture_direct_symbol(target)
+        _capture_direct_instruction(
+            encode_emitted_test_branch_base_parts(mnemonic, register, bit),
+            EMITTED_INSTRUCTION_SCALAR,
+            -14,
+            target_id,
+            mnemonic,
+            [_semantic_register(register), _semantic_immediate(bit),
+             CompilerInt4(semantics.TOKEN_SYMBOL, target_id, semantics.SYMBOL_PLAIN, 0)],
+        )
+        return DIRECT_INSTRUCTION_PLACEHOLDER
+    return "  " + mnemonic + " " + register + ", #" + str(bit) + ", " + target
 
 
 def emitted_fixed_instruction_line(mnemonic: str) -> str:

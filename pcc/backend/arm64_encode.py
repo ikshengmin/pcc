@@ -45,6 +45,8 @@ STRUCTURED_RELOCATION_GOT_LOAD_PAGEOFF12 = 5
 STRUCTURED_FIXUP_CALL = -1
 STRUCTURED_FIXUP_BRANCH26 = -26
 STRUCTURED_FIXUP_BRANCH19 = -19
+# tbz/tbnz: a 14-bit word displacement (+/-32 KiB) at bits 18:5.
+STRUCTURED_FIXUP_BRANCH14 = -14
 
 EMITTED_INSTRUCTION_FALLBACK = 0
 EMITTED_INSTRUCTION_UNSCALED = 1
@@ -949,6 +951,23 @@ def encode_emitted_branch_base_parts(
             word |= 0x80000000
         return word
     raise EncodeError("unsupported emitted branch mnemonic " + mnemonic)
+
+
+def encode_emitted_test_branch_base_parts(mnemonic: str, register: str, bit: int) -> int:
+    """tbz/tbnz with a zero displacement: the BRANCH14 fixup fills bits 18:5."""
+    if mnemonic not in ("tbz", "tbnz"):
+        raise EncodeError("unsupported emitted test-branch mnemonic " + mnemonic)
+    register_code = _emitted_register_code(register)
+    if register in ("sp", "wsp") or register_code < 0 or register_code >> 6 not in (
+        _EMITTED_REG_X,
+        _EMITTED_REG_W,
+    ):
+        raise EncodeError("bad emitted test-branch register")
+    width = 64 if register_code >> 6 == _EMITTED_REG_X else 32
+    if not 0 <= bit < width:
+        raise EncodeError("emitted test-branch bit out of range")
+    return ((0x37000000 if mnemonic == "tbnz" else 0x36000000)
+            | ((bit >> 5) << 31) | ((bit & 31) << 19) | (register_code & 63))
 
 
 def emitted_direct_call_target(line: str) -> str | None:
@@ -2455,6 +2474,8 @@ def _validate_text_fixup_word(word: int, kind: int) -> None:
         valid = (word & 0xFFFFFFF0) == 0x54000000 or (
             (word & 0x7FFFFFE0) in (0x34000000, 0x35000000)
         )
+    elif kind == STRUCTURED_FIXUP_BRANCH14:
+        valid = (word & 0x7E07FFE0) == 0x36000000
     else:
         raise EncodeError("structured fixup kind is not proven")
     if not valid:
@@ -2508,6 +2529,7 @@ class PackedAArch64TextBuilder:
             STRUCTURED_FIXUP_CALL,
             STRUCTURED_FIXUP_BRANCH26,
             STRUCTURED_FIXUP_BRANCH19,
+            STRUCTURED_FIXUP_BRANCH14,
         ):
             if symbol_id < 0 or symbol_id >= len(self.structured_symbol_names):
                 raise EncodeError("structured instruction symbol id is out of range")
@@ -2845,6 +2867,8 @@ def _validate_native_text_entries(
 
 # b.cond, cbz and cbnz carry a 19-bit word displacement: +/-1 MiB.
 _CONDITIONAL_BRANCH_LIMIT = 1 << 18
+# tbz and tbnz carry a 14-bit one: +/-32 KiB.
+_TEST_BRANCH_LIMIT = 1 << 13
 
 
 def _conditional_branch_target(line: str) -> str:
@@ -2853,12 +2877,20 @@ def _conditional_branch_target(line: str) -> str:
         if line.find(" ") != 4:
             return ""
         return line[5:].strip()
-    if line.startswith("cbz ") or line.startswith("cbnz "):
+    if (line.startswith("cbz ") or line.startswith("cbnz ")
+            or line.startswith("tbz ") or line.startswith("tbnz ")):
         comma = line.rfind(",")
         if comma < 0:
             return ""
         return line[comma + 1:].strip()
     return ""
+
+
+def _conditional_branch_limit(line: str) -> int:
+    """Reach in words of a textual conditional branch."""
+    if line.startswith("tbz ") or line.startswith("tbnz "):
+        return _TEST_BRANCH_LIMIT
+    return _CONDITIONAL_BRANCH_LIMIT
 
 
 def _reject_weak_conditional_targets(
@@ -2874,7 +2906,9 @@ def _reject_weak_conditional_targets(
             raise EncodeError("weak definition branch requires a linker relocation")
     index = 0
     while index < len(structured_relocations):
-        if structured_relocations.get_unchecked(index + 1) == STRUCTURED_FIXUP_BRANCH19:
+        if structured_relocations.get_unchecked(index + 1) in (
+            STRUCTURED_FIXUP_BRANCH19, STRUCTURED_FIXUP_BRANCH14,
+        ):
             symbol_id = structured_relocations.get_unchecked(index + 2)
             if not 0 <= symbol_id < len(structured_symbol_names):
                 raise EncodeError("text relocation symbol is outside its owner")
@@ -2890,6 +2924,11 @@ def _inverted_skip_word(line: str) -> int:
     if mnemonic.startswith("b."):
         return 0x54000000 | (2 << 5) | (_cond(mnemonic[2:]) ^ 1)
     operands = _split_operands(parts[1] if len(parts) > 1 else "")
+    if mnemonic in ("tbz", "tbnz"):
+        register, _wide = _reg(operands[0])
+        bit = _imm(operands[1])
+        return ((0x36000000 if mnemonic == "tbnz" else 0x37000000)
+                | ((bit >> 5) << 31) | ((bit & 31) << 19) | (2 << 5) | register)
     register, wide = _reg(operands[0])
     if operands[0].strip().lower().rstrip(",") in ("sp", "wsp"):
         raise EncodeError("bad emitted zero-branch register")
@@ -2900,7 +2939,8 @@ def _inverted_skip_word(line: str) -> int:
 
 
 def _inverted_skip_fixup_word(word: int) -> int:
-    """Invert a BRANCH19 fixup's base word and aim it over the next word."""
+    """Invert a BRANCH19 or BRANCH14 fixup's base word (b.cond condition,
+    cbz/cbnz or tbz/tbnz bit 24) and aim it over the next word."""
     if (word & 0xFF000010) == 0x54000000:
         return (word & 0xFFFFFFF0) | ((word & 0xF) ^ 1) | (2 << 5)
     return (word ^ 0x01000000) | (2 << 5)
@@ -2942,12 +2982,14 @@ def _relax_conditional_branches(
     size_bound = 4 * entry_count
     for chunk in data_chunks:
         size_bound += len(chunk)
-    if size_bound < 4 * _CONDITIONAL_BRANCH_LIMIT:
+    # The shortest reach any conditional branch kind has (tbz/tbnz).
+    if size_bound < 4 * min(_CONDITIONAL_BRANCH_LIMIT, _TEST_BRANCH_LIMIT):
         return None
     relocation_count = len(structured_relocations) // 3
     branch_entries: list[int] = []
     branch_offsets: list[int] = []
     target_offsets: list[int] = []
+    branch_limits: list[int] = []
     offset = 0
     relocation_index = 0
     entry_index = 0
@@ -2959,8 +3001,10 @@ def _relax_conditional_branches(
             entry_index += 1
             continue
         target = ""
+        limit = _CONDITIONAL_BRANCH_LIMIT
         if kind == 0:
             target = _conditional_branch_target(instruction_lines[payload])
+            limit = _conditional_branch_limit(instruction_lines[payload])
         else:
             while (
                 relocation_index < relocation_count
@@ -2973,7 +3017,7 @@ def _relax_conditional_branches(
                 and structured_relocations.get_unchecked(relocation_index * 3)
                 == entry_index
                 and structured_relocations.get_unchecked(relocation_index * 3 + 1)
-                == STRUCTURED_FIXUP_BRANCH19
+                in (STRUCTURED_FIXUP_BRANCH19, STRUCTURED_FIXUP_BRANCH14)
                 and not (
                     (payload & 0xFF000010) == 0x54000000 and (payload & 0xF) >= 14
                 )
@@ -2981,12 +3025,15 @@ def _relax_conditional_branches(
                 target = structured_symbol_names[
                     structured_relocations.get_unchecked(relocation_index * 3 + 2)
                 ]
+                if structured_relocations.get_unchecked(relocation_index * 3 + 1) == STRUCTURED_FIXUP_BRANCH14:
+                    limit = _TEST_BRANCH_LIMIT
         if target and target in labels:
             if (labels[target] - offset) % 4:
                 raise EncodeError("misaligned branch target")
             branch_entries.append(entry_index)
             branch_offsets.append(offset)
             target_offsets.append(labels[target])
+            branch_limits.append(limit)
         offset += 4
         entry_index += 1
 
@@ -3004,7 +3051,7 @@ def _relax_conditional_branches(
                 target_at = target_offsets[index]
                 target_at += 4 * _count_below(relaxed_offsets, target_at)
                 words = (target_at - at) >> 2
-                if words < -_CONDITIONAL_BRANCH_LIMIT or words >= _CONDITIONAL_BRANCH_LIMIT:
+                if words < -branch_limits[index] or words >= branch_limits[index]:
                     relaxed[index] = 1
                     changed = True
             index += 1
@@ -3196,6 +3243,7 @@ def _encode_text_entries_active(
                         _validate_text_fixup_word(payload_index, relocation_kind)
                     if relocation_kind in (
                         STRUCTURED_FIXUP_BRANCH26, STRUCTURED_FIXUP_BRANCH19,
+                        STRUCTURED_FIXUP_BRANCH14,
                     ):
                         width = -relocation_kind
                         if width == 26 and not symbol.startswith("L") and not same_atom(symbol, code_len):
@@ -3605,6 +3653,17 @@ def _encode_one(line, at, labels, resolve_branch, relocations, undefined,
         if t64:
             word |= 0x80000000
         return word
+
+    if mn in ("tbz", "tbnz"):
+        rt, t64 = _reg(ops[0])
+        if _is_sp_token(ops[0]):
+            raise EncodeError("bad emitted test-branch register")
+        bit = _imm(ops[1])
+        if not 0 <= bit < (64 if t64 else 32):
+            raise EncodeError(f"test-branch bit out of range: {line!r}")
+        return ((0x37000000 if mn == "tbnz" else 0x36000000)
+                | ((bit >> 5) << 31) | ((bit & 31) << 19)
+                | (resolve_branch(ops[2], 14, at) << 5) | rt)
 
     if mn == "csel":
         rd, d64 = _reg(ops[0])

@@ -1490,9 +1490,14 @@ def emit_compute_instruction_by_id(
                         value_type_id, test_register, module_symbols,
                         value_id=test_source,
                     )
+                    test_mask = func.aarch64_test_masks[indexed_dest_id]
+                    if (test_mask & (test_mask - 1)) == 0:
+                        # One bit: the terminator branches with tbz/tbnz on
+                        # the register the value is in now.
+                        return test_lines
                     test_lines.append(emitted_scalar_immediate_line(
                         "tst", reg_name_indexed(indexed_kernel, value_type_id, test_register),
-                        "", func.aarch64_test_masks[indexed_dest_id],
+                        "", test_mask,
                     ))
                     return test_lines
                 if indexed_dest_id in func.aarch64_fused_branch_values:

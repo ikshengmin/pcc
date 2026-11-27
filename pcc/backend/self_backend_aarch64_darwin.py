@@ -35,6 +35,7 @@ from .arm64_encode import (
     EMITTED_INSTRUCTION_UNSCALED,
     EncodeError,
     STRUCTURED_FIXUP_BRANCH19,
+    STRUCTURED_FIXUP_BRANCH14,
     STRUCTURED_FIXUP_BRANCH26,
     STRUCTURED_FIXUP_CALL,
     STRUCTURED_RELOCATION_PAGE21,
@@ -641,6 +642,7 @@ class _NativeAArch64Emission:
                 else:
                     if kind not in (
                         STRUCTURED_FIXUP_BRANCH19, STRUCTURED_FIXUP_BRANCH26,
+                        STRUCTURED_FIXUP_BRANCH14,
                         STRUCTURED_FIXUP_CALL, 1, 2, 3, 4, 5,
                     ):
                         raise BackendUnavailable("emission fragment relocation is unsupported")
@@ -2601,10 +2603,29 @@ def _parse_uncond_branch(line: str) -> str | None:
     return target
 
 
+def _parse_test_branch(line: str) -> tuple[str, str, str, str] | None:
+    """``  tbz|tbnz reg, #bit, target`` -> (opcode, reg, bit, target)."""
+    if line.startswith("  tbz "):
+        opcode = "tbz"
+        rest = line[len("  tbz "):]
+    elif line.startswith("  tbnz "):
+        opcode = "tbnz"
+        rest = line[len("  tbnz "):]
+    else:
+        return None
+    parts = rest.split(", ")
+    if len(parts) != 3 or not parts[0].startswith(("w", "x")) or not parts[1].startswith("#"):
+        return None
+    return opcode, parts[0], parts[1], parts[2]
+
+
 def _branch_target(line: str) -> str | None:
     zero_branch = _parse_cond_zero_branch(line)
     if zero_branch is not None:
         return zero_branch[2]
+    test_branch = _parse_test_branch(line)
+    if test_branch is not None:
+        return test_branch[3]
     target = _parse_uncond_branch(line)
     if target is not None:
         return target
@@ -2622,6 +2643,10 @@ def _retarget_branch(line: str, target: str) -> str:
         opcode_text = str(zero_branch[0])
         reg_text = str(zero_branch[1])
         return "  " + opcode_text + " " + reg_text + ", " + target_text
+    test_branch = _parse_test_branch(line)
+    if test_branch is not None:
+        return ("  " + str(test_branch[0]) + " " + str(test_branch[1]) + ", "
+                + str(test_branch[2]) + ", " + target_text)
     if _parse_uncond_branch(line) is not None:
         return "  b " + target_text
     parsed_cond = _parse_direct_cond_branch(line)
@@ -2963,9 +2988,11 @@ def _fold_cond_branch_to_fallthrough(
             else_target = _parse_uncond_branch(lines[index + 1])
             direct_branch = _parse_direct_cond_branch(lines[index])
             zero_branch = _parse_cond_zero_branch(lines[index])
+            test_branch = _parse_test_branch(lines[index])
             if (
                 else_target is not None
-                and (direct_branch is not None or zero_branch is not None)
+                and (direct_branch is not None or zero_branch is not None
+                     or test_branch is not None)
             ):
                 then_target = ""
                 replacement = ""
@@ -2980,6 +3007,13 @@ def _fold_cond_branch_to_fallthrough(
                     opcode, reg, then_target = zero_branch
                     inverse_opcode = "cbnz" if opcode == "cbz" else "cbz"
                     replacement = f"  {inverse_opcode} {reg}, {else_target}"
+                    range_limit = 200000
+                elif test_branch is not None:
+                    # Same guard as the typed pass; the encoder relaxes a
+                    # tbz/tbnz beyond +/-32 KiB.
+                    opcode, reg, bit_text, then_target = test_branch
+                    inverse_opcode = "tbnz" if opcode == "tbz" else "tbz"
+                    replacement = f"  {inverse_opcode} {reg}, {bit_text}, {else_target}"
                     range_limit = 200000
                 j = index + 2
                 while j < len(lines) and not lines[j]:

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from .self_backend_aarch64_fragments import EMISSION_RECORD_LABEL
 from .self_backend_aarch64_semantics import (
-    TOKEN_REGISTER, TOKEN_SYMBOL, OPCODE_NAMES,
+    TOKEN_IMMEDIATE, TOKEN_REGISTER, TOKEN_SYMBOL, OPCODE_NAMES,
     REGISTER_WSP, REGISTER_XZR, REGISTER_WZR,
 )
 
@@ -29,7 +29,7 @@ def _branch(ctx, record_id):
 def _decode_branch(ctx, record_id):
     opcode = ctx.opcode(record_id)
     # opcode() has validated this record; only branch operands are read.
-    if opcode != "b" and not opcode.startswith("b.") and opcode not in ("cbz", "cbnz"):
+    if opcode != "b" and not opcode.startswith("b.") and opcode not in ("cbz", "cbnz", "tbz", "tbnz"):
         return None
     tokens = ctx.operands(record_id)
     if opcode == "b" or opcode.startswith("b."):
@@ -40,6 +40,12 @@ def _decode_branch(ctx, record_id):
         if (reg[0] == TOKEN_REGISTER and
                 (0 <= reg[1] <= 30 or 32 <= reg[1] <= 62 or reg[1] in (REGISTER_WSP, REGISTER_XZR, REGISTER_WZR)) and
                 target[0] == TOKEN_SYMBOL and target[2:] == (0, 0)):
+            return opcode, target[1]
+    if opcode in ("tbz", "tbnz") and len(tokens) == 3:
+        reg, bit, target = tokens
+        if (reg[0] == TOKEN_REGISTER and (0 <= reg[1] <= 30 or 32 <= reg[1] <= 62)
+                and bit[0] == TOKEN_IMMEDIATE
+                and target[0] == TOKEN_SYMBOL and target[2:] == (0, 0)):
             return opcode, target[1]
     return None
 
@@ -96,7 +102,7 @@ def _retarget(ctx, record_id, target, opcode=None):
 # same spelling predicate as _decode_branch.
 _CFG_BRANCH_OPCODE_IDS = frozenset(
     index for index, name in enumerate(OPCODE_NAMES)
-    if name == "b" or name.startswith("b.") or name in ("cbz", "cbnz")
+    if name == "b" or name.startswith("b.") or name in ("cbz", "cbnz", "tbz", "tbnz")
 )
 
 
@@ -174,7 +180,7 @@ def thread_trampoline_branches_records(ctx, records, metadata_labels=()):
         while resolved in trampolines and resolved not in seen:
             seen.add(resolved)
             resolved = trampolines[resolved]
-        limit = 6000 if opcode in ("cbz", "cbnz") else (200000 if opcode.startswith("b.") else 0)
+        limit = 6000 if opcode in ("cbz", "cbnz", "tbz", "tbnz") else (200000 if opcode.startswith("b.") else 0)
         if (resolved == target or (limit and
                 (resolved not in label_index or abs(label_index[resolved] - index) > limit))):
             rewritten.append(record_id)
@@ -247,7 +253,7 @@ def _thread_trampoline_branches_host(ctx, records, metadata_labels, candidates):
         while resolved in trampolines and resolved not in seen:
             seen.add(resolved)
             resolved = trampolines[resolved]
-        limit = 6000 if opcode in ("cbz", "cbnz") else (200000 if opcode.startswith("b.") else 0)
+        limit = 6000 if opcode in ("cbz", "cbnz", "tbz", "tbnz") else (200000 if opcode.startswith("b.") else 0)
         if not (resolved == target or (limit and
                 (resolved not in label_index or abs(label_index[resolved] - index) > limit))):
             rewritten[index] = _retarget(ctx, record_id, resolved)
@@ -329,6 +335,8 @@ def fold_cond_branch_to_fallthrough_records(
                 inverse = ""
                 if opcode in ("cbz", "cbnz"):
                     inverse = "cbnz" if opcode == "cbz" else "cbz"
+                elif opcode in ("tbz", "tbnz"):
+                    inverse = "tbnz" if opcode == "tbz" else "tbz"
                 elif opcode.startswith("b.") and opcode[2:] in _INVERSE:
                     inverse = "b." + _INVERSE[opcode[2:]]
                 following = index + 2
@@ -379,6 +387,8 @@ def _fold_cond_branch_to_fallthrough_host(ctx, records, source_edge_index, candi
                 inverse = ""
                 if opcode in ("cbz", "cbnz"):
                     inverse = "cbnz" if opcode == "cbz" else "cbz"
+                elif opcode in ("tbz", "tbnz"):
+                    inverse = "tbnz" if opcode == "tbz" else "tbz"
                 elif opcode.startswith("b.") and opcode[2:] in _INVERSE:
                     inverse = "b." + _INVERSE[opcode[2:]]
                 following = index + 2
