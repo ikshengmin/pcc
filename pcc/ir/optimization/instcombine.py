@@ -29,6 +29,9 @@ canonicalizations that can be expressed textually:
 - ``icmp eq/ne (sext iN x to iM), C`` → ``icmp eq/ne iN x, C`` for a signed
   N-bit ``C``, and ``(zext iN x)`` for ``0 <= C < 2^N`` (InstCombineCompares.cpp)
 - ``trunc/zext/sext`` of an integer constant → the constant (ConstantFolding.cpp)
+- ``trunc (sext/zext iN x to iW) to iM`` → ``x`` (M == N), ``trunc iN x to iM``
+  (M < N) or the same extension of x to iM (N < M) (InstCombineCasts.cpp)
+- ``trunc (and x, C) to iM`` → ``trunc x to iM`` when C keeps all M low bits
 - ``add/mul/and/or/xor C, x`` → ``op x, C``: constants are the right operand
   of a commutative operation (InstructionCombining.cpp,
   SimplifyAssociativeOrCommutative); later rewrites see the swapped line
@@ -88,6 +91,10 @@ _CAST_CONST_RE = re.compile(
 _EXTEND_RE = re.compile(
     r"^(?P<indent>\s*)%(?P<result>[\w.$-]+)\s*=\s*(?P<op>sext|zext)\s+"
     r"(?P<narrow>i\d+)\s+(?P<source>%[\w.$-]+)\s+to\s+(?P<wide>i\d+)\s*$"
+)
+_TRUNC_RE = re.compile(
+    r"^(?P<indent>\s*)%(?P<result>[\w.$-]+)\s*=\s*trunc\s+(?P<wide>i\d+)\s+"
+    r"(?P<source>%[\w.$-]+)\s+to\s+(?P<target>i\d+)\s*$"
 )
 _ICMP_EQ_RE = re.compile(
     r"^(?P<indent>\s*)%(?P<result>[\w.$-]+)\s*=\s*icmp\s+(?P<pred>eq|ne)\s+"
@@ -2064,6 +2071,66 @@ def _combine_and_masked_sext(state: _CombineState, idx: int, info: dict[str, str
     return False
 
 
+def _combine_trunc_of_extend(state: _CombineState, idx: int, match: re.Match) -> bool:
+    """``trunc (sext/zext iN x to iW) to iM`` keeps only x's bits.
+
+    M == N is x itself, M < N truncates x, and N < M extends x the same way
+    (InstCombineCasts.cpp, visitTrunc). pcc-Python reads a byte as
+    ``sext i8`` and writes one as ``trunc ... to i8``.
+    """
+    extend = state.extends.get(match.group("source")[1:])
+    if extend is None or extend["wide"] != match.group("wide"):
+        return _combine_trunc_of_mask(state, idx, match)
+    narrow = _narrow_width(extend["narrow"])
+    target = _narrow_width(match.group("target"))
+    if narrow is None or target is None:
+        return False
+    indent = match.group("indent")
+    result = match.group("result")
+    if target == narrow:
+        state.replacements[result] = extend["source"]
+        state.lines[idx] = ""
+    elif target < narrow:
+        state.lines[idx] = (
+            f"{indent}%{result} = trunc {extend['narrow']} {extend['source']} "
+            f"to {match.group('target')}\n"
+        )
+    else:
+        state.lines[idx] = (
+            f"{indent}%{result} = {extend['op']} {extend['narrow']} {extend['source']} "
+            f"to {match.group('target')}\n"
+        )
+    state.changed = True
+    return True
+
+
+def _combine_trunc_of_mask(state: _CombineState, idx: int, match: re.Match) -> bool:
+    """``trunc (and x, C) to iM`` is ``trunc x to iM`` when C keeps all M low
+    bits (InstCombineCasts.cpp: a demanded-bits simplification). pcc-Python
+    stores a byte it masked with 255."""
+    binop = state.binops.get(match.group("source")[1:])
+    wide = _int_width(match.group("wide"))
+    target = _narrow_width(match.group("target"))
+    if binop is None or binop["op"] != "and" or binop["ty"] != match.group("wide"):
+        return False
+    if wide is None or target is None or target >= wide:
+        return False
+    low = (1 << target) - 1
+    for value, mask in ((binop["lhs"], binop["rhs"]), (binop["rhs"], binop["lhs"])):
+        constant = _try_int(mask)
+        if not value.startswith("%") or not isinstance(constant, int):
+            continue
+        if unsigned_value(constant, wide) & low != low:
+            continue
+        state.lines[idx] = (
+            f"{match.group('indent')}%{match.group('result')} = trunc "
+            f"{match.group('wide')} {value} to {match.group('target')}\n"
+        )
+        state.changed = True
+        return True
+    return False
+
+
 def _combine_icmp_extended(state: _CombineState, idx: int, match: re.Match) -> bool:
     """``icmp eq/ne (ext iN x), C`` compares x itself when C is an N-bit value."""
     ty = match.group("ty")
@@ -2301,6 +2368,11 @@ def _rewrite_function(
         match = _ICMP_EQ_RE.match(stripped)
         if match is not None:
             if _combine_icmp_extended(state, idx, match):
+                continue
+
+        match = _TRUNC_RE.match(stripped)
+        if match is not None:
+            if _combine_trunc_of_extend(state, idx, match):
                 continue
 
         match = _CAST_CONST_RE.match(stripped)

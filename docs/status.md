@@ -3452,6 +3452,21 @@ in the relevant section or issue and removes the entry.
    allocators with typed/text agreement; backend, Mach-O and TLS files
    7259 passed (no-host gate needs pcc1, a stack-map test needs
    PCC_RUNTIME_ARCHIVE: environment prerequisites).
+   (ab) Merged (Claude, 2026-11-28): jump threading knows a phi entry that
+   is the predecessor's own branch condition on that edge (LLVM
+   ComputeValueKnownInPredecessors), which is how the frontend lowers
+   short-circuit `and`/`or`: `(t >= A and t < B) or t == C or ...` lost
+   its i1 phis, csets, byte spills and `eor`. instcombine folds
+   `trunc (sext/zext iN x) to iM` (x, a narrower trunc or the same
+   extension) and `trunc (and x, C) to iM` when C keeps the M low bits
+   (a byte copy was ldrb + sxtb + mov + and + strb). Exact h19-sel ->
+   h20-jt 106848 -> 105721 (-1.05%; the mask fold was not in h20):
+   `pcc_gc_init_admitted_ptr_locked` and `pcc_gc_try_init_ptr_locked`
+   -725 instructions per request. Tests: the frontend's short-circuit
+   shape threads to compares only and runs natively before and after; an
+   unrelated condition stays unknown; each fold and its refusals, and
+   byte copies and fills execute natively before and after; optimizer
+   files 513 passed (3 nodes fail on HEAD too).
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2

@@ -514,3 +514,117 @@ def test_threaded_predicate_module_runs(tmp_path, passes):
     executable.chmod(0o755)
     ran = subprocess.run([str(executable)], capture_output=True, timeout=30)
     assert ran.returncode == _expected_predicate_checksum()
+
+
+def _range_predicate_module() -> str:
+    # The frontend's short-circuit shape: an ``and``/``or`` merge takes the
+    # left compare itself from the edge on which it decided, as in
+    # ``(t >= 0 and t < 29) or t == 32 or (t >= 100 and t < 65536)``
+    # (pcc_gc_init_admitted_ptr_locked's tag check).
+    return """target triple = "arm64-apple-darwin"
+define internal i64 @kind_ok(i64 %t) {
+entry:
+  %ge0 = icmp sge i64 %t, 0
+  br i1 %ge0, label %lt29, label %and1.end
+lt29:
+  %lt = icmp slt i64 %t, 29
+  br label %and1.end
+and1.end:
+  %and1 = phi i1 [ %ge0, %entry ], [ %lt, %lt29 ]
+  br i1 %and1, label %or.end, label %is32
+is32:
+  %eq = icmp eq i64 %t, 32
+  br i1 %eq, label %or2.end, label %ge100
+ge100:
+  %ge = icmp sge i64 %t, 100
+  br i1 %ge, label %lt64k, label %and2.end
+lt64k:
+  %lt2 = icmp slt i64 %t, 65536
+  br label %and2.end
+and2.end:
+  %and2 = phi i1 [ %ge, %ge100 ], [ %lt2, %lt64k ]
+  br label %or2.end
+or2.end:
+  %or2 = phi i1 [ %eq, %is32 ], [ %and2, %and2.end ]
+  br label %or.end
+or.end:
+  %ok = phi i1 [ %and1, %and1.end ], [ %or2, %or2.end ]
+  %not = xor i1 %ok, 1
+  br i1 %not, label %bad, label %good
+bad:
+  ret i64 0
+good:
+  ret i64 1
+}
+@probes = internal constant [10 x i64] [i64 -5, i64 0, i64 28, i64 29, i64 32, i64 33, i64 99, i64 100, i64 65535, i64 65536]
+define i32 @main() {
+entry:
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %entry ], [ %next, %loop ]
+  %acc = phi i64 [ 0, %entry ], [ %acc1, %loop ]
+  %slot = getelementptr [10 x i64], ptr @probes, i64 0, i64 %i
+  %t = load i64, ptr %slot, align 8
+  %r = call i64 @kind_ok(i64 %t)
+  %bit = shl i64 %r, %i
+  %acc1 = or i64 %acc, %bit
+  %next = add i64 %i, 1
+  %done = icmp eq i64 %next, 10
+  br i1 %done, label %out, label %loop
+out:
+  %m = trunc i64 %acc1 to i32
+  %ok = icmp eq i32 %m, 406
+  %status = select i1 %ok, i32 0, i32 61
+  ret i32 %status
+}
+"""
+
+
+def test_a_merge_of_the_deciding_compares_threads_every_known_edge():
+    # Each phi entry is the predecessor's own branch condition, known on the
+    # edge into the merge (LLVM ComputeValueKnownInPredecessors): every
+    # boolean merge goes, and only the compares that decide remain.
+    out, changed = jump_thread_text(_range_predicate_module())
+    assert changed
+    _check_phi_entries(out)
+    body = _function(out, "kind_ok")
+    assert "phi i1" not in body, body
+
+
+def test_a_condition_unrelated_to_the_edge_stays_unknown():
+    text = """define i64 @h(i1 %x, i1 %y, i1 %s) {
+entry:
+  br i1 %s, label %left, label %join
+left:
+  br label %join
+join:
+  %p = phi i1 [ %x, %entry ], [ %y, %left ]
+  br i1 %p, label %yes, label %no
+yes:
+  ret i64 1
+no:
+  ret i64 0
+}
+"""
+    out, _changed = jump_thread_text(text)
+    _check_phi_entries(out)
+    # entry branches on %s, not on %x: %x is unknown on its edge.
+    assert "%p = phi i1" in out and "br i1 %p, label %yes, label %no" in out
+
+
+# native Darwin arm64 execution
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
+@pytest.mark.parametrize("threaded", (False, True))
+def test_range_predicate_runs_before_and_after_threading(tmp_path, threaded):
+    from pcc.backend.macho_exec import link_executable
+    from pcc.backend.owned_object_emit import emit_owned_object
+
+    text = _range_predicate_module()
+    if threaded:
+        text = jump_thread_text(text)[0]
+    executable = tmp_path / "range_predicate"
+    executable.write_bytes(link_executable([emit_owned_object(text, "arm64-apple-darwin")],
+                                           entry="_main"))
+    executable.chmod(0o755)
+    ran = subprocess.run([str(executable)], capture_output=True, timeout=30)
+    assert ran.returncode == 0

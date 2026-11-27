@@ -29,7 +29,10 @@ Subset implemented:
    left without a dominating definition. An edge is skipped when ``P``
    already reaches ``D`` (duplicate phi entries), when ``P``'s terminator
    is not a plain ``br`` or names ``B`` twice, or when any value the
-   decision or ``D``'s phis need is not a known constant.
+   decision or ``D``'s phis need is not a known constant. A phi entry that
+   is ``P``'s own branch condition is known on the edge (1 on ``P``'s true
+   edge, 0 on its false edge; ``ComputeValueKnownInPredecessors``): the
+   frontend's short-circuit merges take the deciding compare itself.
 3. Remove a block left without predecessors, and its phi entries.
 
 Every block keeps exactly one phi entry per predecessor. The predecessor,
@@ -446,6 +449,15 @@ class _State:
                 continue
             if self.succs[pred_name].count(block.name) != 1:
                 continue
+            # A predecessor that branches on a value decided it on each of
+            # its edges (LLVM ComputeValueKnownInPredecessors): a short-
+            # circuit merge takes the deciding compare itself from that edge.
+            edge_known: dict[str, int] = {}
+            pred_branch = _COND_BR_RE.match(pred_term.text.rstrip("\n"))
+            if pred_branch is not None:
+                pred_cond = pred_branch.group("cond").strip()
+                if pred_cond.startswith("%"):
+                    edge_known[pred_cond[1:]] = 1 if pred_branch.group("true") == block.name else 0
             env: dict[str, int] | None = {}
             for inst in phis:
                 parts = _phi_parts(inst)
@@ -458,7 +470,7 @@ class _State:
                     env = None
                     break
                 width = _width(ty)
-                known = None if width is None else _literal(values[0], {}, width)
+                known = None if width is None else _literal(values[0], edge_known, width)
                 if known is not None:
                     env[name] = known
             if env is None:
