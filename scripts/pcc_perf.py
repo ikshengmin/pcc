@@ -260,6 +260,10 @@ REFERENCE_RUNTIMES = {
     "clang-O2": ("-O2",),
     # LLVM code generation without LLVM's IR optimization.
     "clang-codegen": ("-O2", "-Xclang", "-disable-llvm-optzns"),
+    # The same code generation with LLVM's local fast register allocator:
+    # against clang-codegen, what allocation quality is worth on this core.
+    "clang-codegen-fastra": ("-O2", "-Xclang", "-disable-llvm-optzns",
+                             "-mllvm", "-regalloc=fast"),
 }
 REFERENCE_LABEL = "LLVM reference experiment; not a product route or an ownership claim"
 # Deliberately not libpy_runtime_pcc_py.a: nothing may take it for owned output.
@@ -286,13 +290,38 @@ _CAPTURE_STUBS = {
 }
 
 
-def _reference_flags(kind: str | None) -> tuple[str, ...] | None:
+# Beside the named kinds, two forms locate one LLVM step's worth:
+#   opt:PIPELINE   LLVM's IR passes PIPELINE (opt -passes=PIPELINE), then
+#                  LLVM code generation alone, as clang-codegen;
+#   llc:A,B        clang-codegen with each code generation option -mllvm -A,
+#                  for example llc:regalloc=fast or llc:disable-block-placement.
+_CODEGEN_ONLY = REFERENCE_RUNTIMES["clang-codegen"]
+
+
+def _reference_plan(kind: str | None) -> tuple[str | None, tuple[str, ...]] | None:
+    """(opt pipeline or None, clang flags) for a reference kind."""
     if kind is None:
         return None
-    if kind not in REFERENCE_RUNTIMES:
-        raise SystemExit(f"unknown reference runtime {kind!r}; expected one of "
-                         + ", ".join(sorted(REFERENCE_RUNTIMES)))
-    return REFERENCE_RUNTIMES[kind]
+    if kind in REFERENCE_RUNTIMES:
+        return None, REFERENCE_RUNTIMES[kind]
+    form, _, rest = kind.partition(":")
+    if form == "opt" and rest and not rest.startswith("-"):
+        return rest, _CODEGEN_ONLY
+    if form == "llc" and rest:
+        options = rest.split(",")
+        if all(option and not option.startswith("-") for option in options):
+            flags = list(_CODEGEN_ONLY)
+            for option in options:
+                flags.extend(["-mllvm", "-" + option])
+            return None, tuple(flags)
+    raise SystemExit(f"unknown reference runtime {kind!r}; expected one of "
+                     + ", ".join(sorted(REFERENCE_RUNTIMES))
+                     + ", opt:PIPELINE or llc:OPTION[,OPTION...]")
+
+
+def _reference_flags(kind: str | None) -> tuple[str, ...] | None:
+    plan = _reference_plan(kind)
+    return None if plan is None else plan[1]
 
 
 def build_reference_runtime(arm: Path, runtime: Path, kind: str, target: str,
@@ -300,13 +329,16 @@ def build_reference_runtime(arm: Path, runtime: Path, kind: str, target: str,
     """The reference archive for an arm: each member of the owned ``runtime``
     archive compiled from its own IR by clang, plus the capture stub.
     Returns the archive and its receipt; every gap fails explicitly."""
-    flags = _reference_flags(kind)
+    pipeline, flags = _reference_plan(kind)
     stub = _CAPTURE_STUBS.get(target)
     if stub is None:
         raise SystemExit(f"reference runtime: no capture stub for {target}")
     clang, ar = shutil.which("clang"), shutil.which("ar")
     if clang is None or ar is None:
         raise SystemExit("reference runtime needs clang and ar on PATH")
+    opt = shutil.which("opt") if pipeline is not None else None
+    if pipeline is not None and opt is None:
+        raise SystemExit("reference runtime opt:PIPELINE needs LLVM opt on PATH")
     manifest = json.loads(Path(str(runtime) + ".provenance.json").read_text())
     members = [entry["member"] for entry in manifest["members"]]
     ir_dir = Path(str(runtime) + ".objects")
@@ -320,6 +352,14 @@ def build_reference_runtime(arm: Path, runtime: Path, kind: str, target: str,
 
     def compile_one(pair) -> None:
         source, target_object = pair
+        if pipeline is not None:
+            optimized = target_object.with_suffix(".opt.ll")
+            done = run([opt, "-S", "-passes=" + pipeline, str(source), "-o", str(optimized)],
+                       capture_output=True, text=True)
+            if done.returncode != 0:
+                raise SystemExit(f"reference runtime: opt failed on {source.name}: "
+                                 + done.stderr[-400:])
+            source = optimized
         done = run([clang, *flags, "-c", "-x", "ir", "-Wno-override-module",
                     str(source), "-o", str(target_object)], capture_output=True, text=True)
         if done.returncode != 0:
@@ -347,6 +387,7 @@ def build_reference_runtime(arm: Path, runtime: Path, kind: str, target: str,
     version = run([clang, "--version"], capture_output=True, text=True).stdout
     return archive, {
         "label": REFERENCE_LABEL, "kind": kind, "flags": list(flags),
+        "opt_pipeline": pipeline,
         "compiler": version.splitlines()[0] if version else "",
         "members": len(members), "owned_runtime": str(runtime),
         "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
@@ -2390,8 +2431,10 @@ def main(argv: list[str] | None = None) -> int:
                      metavar="PATH", help="take PATH from the working tree, not HEAD")
     arm.add_argument("--gc2-pacer-percent", type=int,
                      help="seal and verify the review runtime GC2 pacer opt-in (0–10000)")
-    arm.add_argument("--reference-runtime", choices=sorted(REFERENCE_RUNTIMES), default=None,
-                     help="labeled LLVM reference experiment: the runtime IR compiled by clang")
+    arm.add_argument("--reference-runtime", default=None, metavar="KIND",
+                     help="labeled LLVM reference experiment: the runtime IR compiled by clang; "
+                          + ", ".join(sorted(REFERENCE_RUNTIMES))
+                          + ", opt:PIPELINE or llc:OPTION[,OPTION...]")
     arm.add_argument("--timeout", type=int, default=900)
     # The handler program's largest module emits in one worker of about
     # 2.4 GiB beside a 1.1 GiB coordinator; the approved build maximum is

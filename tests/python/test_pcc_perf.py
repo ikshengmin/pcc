@@ -1132,6 +1132,8 @@ def _recording_tools(monkeypatch):
 @pytest.mark.parametrize("kind,flags", [
     ("clang-O2", ["-O2"]),
     ("clang-codegen", ["-O2", "-Xclang", "-disable-llvm-optzns"]),
+    ("clang-codegen-fastra", ["-O2", "-Xclang", "-disable-llvm-optzns",
+                              "-mllvm", "-regalloc=fast"]),
 ])
 def test_reference_runtime_compiles_each_owned_member_ir_with_clang(
         tmp_path, monkeypatch, kind, flags):
@@ -1212,3 +1214,42 @@ def test_comparison_labels_rows_that_measure_a_reference_runtime(tmp_path, monke
     assert rows[0]["reference_runtime_by_arm"] == {"base": None, "lab": "clang-O2"}
     rows = PERF.compare("base", "other", 1, (0,), (1,), 10)
     assert "reference_runtime_by_arm" not in rows[0]
+
+
+def test_reference_runtime_runs_one_llvm_ir_pipeline_before_codegen(tmp_path, monkeypatch):
+    runtime = _owned_runtime(tmp_path)
+    arm = tmp_path / "arm"
+    arm.mkdir()
+    commands, run = _recording_tools(monkeypatch)
+    _archive, receipt = PERF.build_reference_runtime(
+        arm, runtime, "opt:cgscc(inline)", "arm64-apple-darwin", run=run)
+    optimized = [argv for argv in commands if argv[0].endswith("/opt")]
+    assert sorted(Path(argv[-1]).name for argv in optimized) == ["py_gen.opt.ll", "py_obj.opt.ll"]
+    for argv in optimized:
+        assert argv[1:3] == ["-S", "-passes=cgscc(inline)"]
+    compiles = [argv for argv in commands if "-x" in argv]
+    for argv in compiles:
+        # Code generation alone, from opt's output.
+        assert argv[1:5] == ["-O2", "-Xclang", "-disable-llvm-optzns", "-c"]
+        assert argv[-3].endswith(".opt.ll")
+    assert receipt["opt_pipeline"] == "cgscc(inline)"
+
+
+def test_reference_runtime_adds_codegen_options(tmp_path, monkeypatch):
+    runtime = _owned_runtime(tmp_path)
+    arm = tmp_path / "arm"
+    arm.mkdir()
+    commands, run = _recording_tools(monkeypatch)
+    _archive, receipt = PERF.build_reference_runtime(
+        arm, runtime, "llc:regalloc=fast,disable-block-placement", "arm64-apple-darwin", run=run)
+    assert not [argv for argv in commands if argv[0].endswith("/opt")]
+    assert receipt["flags"] == ["-O2", "-Xclang", "-disable-llvm-optzns",
+                                "-mllvm", "-regalloc=fast",
+                                "-mllvm", "-disable-block-placement"]
+    assert receipt["opt_pipeline"] is None
+
+
+@pytest.mark.parametrize("kind", ["opt:", "opt:-O2", "llc:", "llc:-regalloc=fast", "llc:a,,b", "gcc"])
+def test_reference_runtime_rejects_malformed_kinds(kind):
+    with pytest.raises(SystemExit, match="opt:PIPELINE"):
+        PERF._reference_plan(kind)
