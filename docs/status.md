@@ -3536,6 +3536,19 @@ in the relevant section or issue and removes the entry.
    request), w4 233558 (89% of four asyncio processes, 17.9 us). Exact
    per request 112527 (h16) -> 99312 (h26), -11.7%. The 2x target needs
    about 6.7 us per request at w1.
+   (ag) Rejected experiment (Claude, 2026-11-28): an EarlyCSE pass
+   (dominator-tree scoped table, memory generations, after jump threading
+   in the runtime list and the cross-module import). Exact against h26
+   (99312): sharing everything dominated, 106926 (+7.7%; a global's
+   address kept in a callee-saved register or a stack slot instead of an
+   `adrp` + `@PAGEOFF` access); leaving constant expressions alone, 105408
+   (+6.1%); sharing pure values only within one call generation, 101071
+   (+1.8%: `str.join` -410, memmove -259 and the release tail -209, but
+   py_obj's release, root copy and store-root-take paths gained more in
+   callee-saved saves and spills); within one block, 99305 (-0.01%). The
+   self allocator neither splits live ranges nor rematerializes, so a
+   longer live range costs more than the recomputation it saves. Retry
+   after the allocator can split or rematerialize.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2
