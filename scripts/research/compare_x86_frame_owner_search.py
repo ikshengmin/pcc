@@ -1,15 +1,16 @@
-"""Compare research-only x86 frame-owner lookup prototypes with current code.
+"""Compare research-only x86 frame-owner lookup prototypes with a historical baseline.
 
 Run: uv run python scripts/research/compare_x86_frame_owner_search.py
 Or pass --input FILE containing exactly {"block_first": [...], "queries": [...]}.
 Queries must be nondecreasing: source ends and selected frame accesses have
 that property, but branch targets do not. This tool does not capture queries.
 
-The bounded hint saves list reads on dense inputs but costs extra reads on
-some sparse inputs; even a previous-owner binary lower bound can cost one
-extra comparison. Neither prototype is enabled in the compiler. List reads
-are not CPU time. Actual query density, owner phase share and native benefit
-remain unknown; synthetic wins do not justify a production optimization.
+The historical binary search predates c570f27e, which replaced the selected
+frame-access lookup with an ordered cursor. Preserve that binary comparison
+and separately model the current ordered-access cursor; neither prototype
+is enabled. List reads are not CPU time. Actual query density, owner phase
+share and native benefit remain unknown; synthetic wins do not justify a
+production optimization.
 No compilation, subprocess, native execution, timing or profiling occurs.
 """
 from __future__ import annotations
@@ -17,17 +18,34 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-import sys
-
-ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-from pcc.backend.x86_64_frame_registers import _block_of as production_owner
 
 MAX_BYTES = 1_048_576
 MAX_BLOCKS = 16_384
 MAX_QUERIES = 65_536
 MAX_LINE = 2_147_483_647
+
+
+# Historical _block_of, removed in c570f27e1bcf979fea3c825d1e89b8a6f3fd122c.
+# Exact binary algorithm from its parent 7d771a77dc2eaf5e665ac45211253116cdedd454.
+def historical_binary_owner(starts, line):
+    low = 0
+    high = len(starts) - 1
+    while low < high:
+        middle = (low + high + 1) // 2
+        if starts[middle] <= line:
+            low = middle
+        else:
+            high = middle - 1
+    return low
+
+
+def ordered_cursor_owner(starts, line, previous):
+    """Model the selected frame-access cursor in keep_frame_slots_in_registers."""
+    owner = previous
+    block_count = len(starts)
+    while owner + 1 < block_count and starts[owner + 1] <= line:
+        owner += 1
+    return owner
 
 
 def lower_bound_owner(starts, line, previous):
@@ -100,16 +118,17 @@ def read_input(path):
 
 def compare(starts, queries):
     starts, queries = validate_input({"block_first": starts, "queries": queries})
-    arrays = [CountedStarts(starts) for _ in range(3)]
-    owners = [0, 0]
+    arrays = [CountedStarts(starts) for _ in range(4)]
+    owners = [0, 0, 0]
     regressions = [0, 0]
     extra = [0, 0]
     for line in queries:
         before = [values.reads for values in arrays]
-        expected = production_owner(arrays[0], line)
+        expected = historical_binary_owner(arrays[0], line)
         owners[0] = lower_bound_owner(arrays[1], line, owners[0])
         owners[1] = bounded_hint_owner(arrays[2], line, owners[1])
-        if owners != [expected, expected]:
+        owners[2] = ordered_cursor_owner(arrays[3], line, owners[2])
+        if owners != [expected, expected, expected]:
             raise AssertionError(f"owner mismatch at line {line}: {owners}, expected {expected}")
         baseline_reads = arrays[0].reads - before[0]
         for index in range(2):
@@ -118,7 +137,8 @@ def compare(starts, queries):
             extra[index] = max(extra[index], delta)
     return {
         "blocks": len(starts), "queries": len(queries), "owners_equal": True,
-        "production_reads": arrays[0].reads,
+        "historical_binary_reads": arrays[0].reads,
+        "ordered_cursor_model_reads": arrays[3].reads,
         "lower_bound": {"reads": arrays[1].reads, "queries_with_more_reads": regressions[0],
                         "max_extra_reads_per_query": extra[0]},
         "bounded_hint": {"reads": arrays[2].reads, "queries_with_more_reads": regressions[1],
@@ -151,8 +171,8 @@ def main(argv=None):
     except (OSError, ValueError, RecursionError) as error:
         parser.error(str(error))
     print(json.dumps({
-        "schema": "pcc.frame-owner-search-experiment.v1",
-        "scope": "host list-read counts and owner equality only; not native speed",
+        "schema": "pcc.frame-owner-search-experiment.v2",
+        "scope": "host historical binary and ordered-cursor model list-read counts and owner equality only; not native speed",
         "production_modified": False,
         "remaining_evidence": ["actual query density", "frame-owner phase share", "native benefit"],
         "experiments": results,
