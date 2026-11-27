@@ -829,3 +829,58 @@ def test_mir_plain_stackmap_custom_layout_observes_uncached_remaps(monkeypatch):
     patched = remap_plain_stack_map(replace(plan, frame_size=80, records=(a, b)), exact_layout)
     assert patched is not None and patched_calls == [24, 24, 32, 24, 24, 32]
     assert patched.records[0].locations is not patched.records[1].locations
+
+def test_mir_packed_clobber_union_deduplicates_repeated_allowed_updates(monkeypatch):
+    from pcc.backend import self_backend_x86_mir as planner
+    source = TRIPLE + "declare void @callee(i64)\ndefine i64 @f(i64 %a, i64 %b) {\nentry:\n"
+    source += "  call void @callee(i64 %b)\n" * 24
+    source += "  %x = add i64 %a, %b\n  ret i64 %x\n}\n"
+    func, plan = _prepare(source)
+    kernel = get_indexed_function_kernel(func)
+    mir = planner.build_x86_mir(func, plan)
+    assert mir is not None
+    # Both integer arguments stay live across each identical call. Every
+    # clobber event used to enumerate this same mask even after its bits
+    # had already been removed from each allowed-register mask.
+    affected = (1 << kernel.value_id("a")) | (1 << kernel.value_id("b"))
+    original = planner._bits
+    visits = []
+    def counted(mask):
+        if mask == affected:
+            visits.append(mask)
+        yield from original(mask)
+    monkeypatch.setattr(planner, "_bits", counted)
+    packed = planner.allocate_x86_mir(mir, force_packed=True)
+    # One visit for the unioned call mask and one for the final add inputs.
+    assert len(visits) == 2
+    monkeypatch.setattr(planner, "_bits", original)
+    dense = planner.allocate_x86_mir(mir)
+    assert packed.allowed == dense.allowed
+    assert packed.interference == dense.interference
+    assert packed.registers == dense.registers and packed.saved == dense.saved
+    for name in ("a", "b"):
+        assert packed.allowed[kernel.value_id(name)] & planner.CALLER_MASK == 0
+
+
+def test_mir_packed_clobber_union_matches_fixed_operand_and_call_masks():
+    from pcc.backend import self_backend_x86_mir as planner
+    source = TRIPLE + """declare void @callee(i64)
+define i64 @f(i64 %a, i64 %b, i64 %c) {
+entry:
+  call void @callee(i64 %a)
+  %shift = shl i64 %a, %b
+  %q = udiv i64 %shift, %b
+  call void @callee(i64 %q)
+  %r = add i64 %q, %c
+  ret i64 %r
+}
+"""
+    func, plan = _prepare(source)
+    mir = planner.build_x86_mir(func, plan)
+    assert mir is not None
+    dense = planner.allocate_x86_mir(mir)
+    packed = planner.allocate_x86_mir(mir, force_packed=True)
+    assert packed.allowed == dense.allowed
+    assert packed.interference == dense.interference
+    assert packed.registers == dense.registers and packed.saved == dense.saved
+    assert packed.instruction_live_after == dense.instruction_live_after

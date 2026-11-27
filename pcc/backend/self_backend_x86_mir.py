@@ -610,6 +610,24 @@ def _fill_packed_interference(mir: X86MIRFunction, candidate_mask: int,
         raise
 
 
+def _merge_packed_clobber_union(unions: dict[int, int], signature: int,
+                                affected: int) -> None:
+    # Repeated machine restrictions are intersections. Union exactly the
+    # affected virtual IDs for each identical clobber mask, then apply the
+    # intersection once; no allowed-mask reader runs before coloring.
+    if signature in unions:
+        unions[signature] |= affected
+    else:
+        unions[signature] = affected
+
+
+def _apply_packed_clobber_unions(allowed: list[int], unions: dict[int, int]) -> None:
+    for signature in unions:
+        restriction = ~signature
+        for value_id in _bits(unions[signature]):
+            allowed[value_id] &= restriction
+
+
 def allocate_x86_mir(mir: X86MIRFunction, *, keep_diagnostics: bool = True,
                      force_packed: bool = False) -> X86MIRAllocation:
     """Color virtual SSA by actual CFG interference and machine clobbers.
@@ -632,6 +650,7 @@ def allocate_x86_mir(mir: X86MIRFunction, *, keep_diagnostics: bool = True,
     edge_events = 0
     allowed = [ALL_REGISTER_MASK if candidate_mask & (1 << value_id) else 0
                for value_id in range(count)]
+    clobber_unions: dict[int, int] = {}
     weights = [0] * count
     aliases: list[list[int]] = [[] for _ in range(count)]
     instruction_live_after: list[list[int | None]] = [[None] * len(block.instructions) for block in mir.blocks]
@@ -682,8 +701,12 @@ def allocate_x86_mir(mir: X86MIRFunction, *, keep_diagnostics: bool = True,
                 affected = live & ~dest_bit
                 if operation.local_fixed_clobber:
                     affected |= _mask(operation.inputs) | dest_bit
-                for value in _bits(affected & candidate_mask):
-                    allowed[value] &= ~operation.clobbers
+                affected &= candidate_mask
+                if packed:
+                    _merge_packed_clobber_union(clobber_unions, operation.clobbers, affected)
+                else:
+                    for value in _bits(affected):
+                        allowed[value] &= ~operation.clobbers
             interfere(dest, live)
             if dest >= 0:
                 weights[dest] += weight
@@ -710,6 +733,8 @@ def allocate_x86_mir(mir: X86MIRFunction, *, keep_diagnostics: bool = True,
         interfere(argument, entry_live)
         weights[argument] += 1
 
+    if packed:
+        _apply_packed_clobber_unions(allowed, clobber_unions)
     registers = [-1] * count
     arena = None
     starts: list[int] = []

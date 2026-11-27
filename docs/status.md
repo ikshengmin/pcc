@@ -4144,14 +4144,38 @@ in the relevant section or issue and removes the entry.
        zero fallback/no libpython. No new runtime QPS claim from
        identical bytes, no whole Stage1/2 claim; #647 snapshot
        precedes this source. Defaults and resource caps unchanged.
-       Next exact large MIR clobber-union owner: actual giant
-       20999 clobber ops (one mask967),3102493 repeated allowed
-       register updates vs16105 union IDs; allocation36.246s
-       remains dominant (CSR fill/dedup15.142s). Preserve exact
-       allowed masks/ranking/colors and PCO; separate unit, then
-       sparse live planes/streamed emission and native allocator
-       qualification before pcc1 mode. Independent generator-suffix
-       IR owner separately claimed.
+       2026-11-27 scoped packed MIR clobber-union follow-up:
+       actual giant20999 machine clobber ops (one mask967),3102493
+       repeated allowed-register intersections vs16105 union IDs.
+       Accumulate exact affected live virtual IDs per signature,
+       apply commutative intersections once before coloring; dense
+       small route unchanged, no early allowed-mask reader. Exact
+       test-first repeated24 call mask visits25->2 and fixed shift/
+       division/call allowed/interference/register/saved parity,
+       21 focused MIR tests. Actual same-current giant clean one
+       pair (old allocator source function vs new): wall59.23->55.98s
+       (-5.48%), peak335.48->330.63MB, allocation39.685->36.105s
+       (-9.02%, CSR phase noise+1.44s); actual register/saved digest
+       and complete owned PCO byte-identical. Confounded initial
+       capture screen retained separately, not used for total gain.
+       Actual frozen allowed-update owner five alternating triples,
+       all15 exact41629 allowed masks and same MIR/CFG: CPU
+       8.4583->0.20137s/control8.3368 norm-97.5845%5/5 beyond
+       max7.67%; wall norm-97.59%5/5; peak+12KiB within controls,
+       all15 pre-owner peak == final peak (zero incremental RSS).
+       Full8 frozen actual IR/source receipts (1150 functions,
+       both MIR+compact ON) all15 exact prior ELF: CPU/wall norm
+       +0.39/+0.36%4/5 within high controls, noninferior; RSS
+       52544->52292KiB norm-0.480%5/5 beyond max0.1445%.
+       All58 static outputs/admission exact; strict contextual
+       planner629 closure/77 functions/41165 IR inst zero fallback,
+       no libpython. No new runtime QPS or whole Stage1/2 claim;
+       #647 snapshot excludes this source, no new CI.
+       Next actual packed interference CSR fill/dedup and repeated
+       wide-mask enumeration (still ~15-17s giant owner), sparse
+       live planes/streamed emission, exact PCO, no gate relax;
+       native allocator qualification before pcc1 mode. Independent
+       generator-suffix IR owner separately claimed.
        (1) ARM typed
        prepare memory: quantify retained prior run history and
        private CFG owner retirement with public snapshot/callback
@@ -4931,7 +4955,6 @@ in the relevant section or issue and removes the entry.
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
    - Shared generator save-suffix prefix spine, exact slot/ownership/state cutoffs (generator_lowering.py + test_generator_shared_frame_save.py; no backend overlap): Codex, Linux, 2026-11-27T03:43Z, area runtime-codegen
-   - MIR large clobber signature union (self_backend_x86_mir.py and test_x86_typed_mir.py; exact allowed masks/rank/colors/PCO, packed route only, independent compiler-cost unit): Codex, Linux, 2026-11-27T04:25Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
