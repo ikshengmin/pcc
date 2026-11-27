@@ -2402,14 +2402,28 @@ def _str_splitlines_impl(s, keepends: int):
     i: int = 0
     while i < byte_len:
         c: int = load_i8(data, i) & 0xFF
-        if c == 13 or c == 10:
+        width: int = 0
+        if c == 13:
+            width = 1
+            # CRLF is one line boundary (and one preserved ending).
+            if i + 1 < byte_len:
+                if (load_i8(data, i + 1) & 0xFF) == 10:
+                    width = 2
+        elif c == 10 or c == 11 or c == 12 or (c >= 28 and c <= 30):
+            width = 1
+        elif c == 0xC2 and i + 1 < byte_len:
+            # U+0085 NEXT LINE, not a generic whitespace test.
+            if (load_i8(data, i + 1) & 0xFF) == 0x85:
+                width = 2
+        elif c == 0xE2 and i + 2 < byte_len:
+            # U+2028 LINE SEPARATOR or U+2029 PARAGRAPH SEPARATOR.
+            if (load_i8(data, i + 1) & 0xFF) == 0x80:
+                last: int = load_i8(data, i + 2) & 0xFF
+                if last == 0xA8 or last == 0xA9:
+                    width = 3
+        if width != 0:
             end: int = i
-            after: int = i + 1
-            if c == 13:
-                if i + 1 < byte_len:
-                    nxt: int = load_i8(data, i + 1) & 0xFF
-                    if nxt == 10:
-                        after = i + 2
+            after: int = i + width
             frag_end: int = end
             if keepends != 0:
                 frag_end = after
