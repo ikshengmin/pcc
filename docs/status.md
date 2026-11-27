@@ -4245,11 +4245,47 @@ in the relevant section or issue and removes the entry.
        No performance or full-CI qualification claim; inventory
        class/projection classification independently owned by CI.
        #647 snapshot unchanged, no new CI.
-       Next actual packed interference CSR fill/dedup and repeated
-       wide-mask enumeration (still ~15-17s giant owner), sparse
-       live planes/streamed emission, exact PCO, no gate relax;
-       native allocator qualification before pcc1 mode. Independent
-       generator-suffix IR owner separately claimed.
+       2026-11-27 scoped packed CSR sparse-wide enumeration:
+       actual frozen giant MIR41629 values/8383 blocks,32216
+       nonempty masks/5034145 ordered undirected edge events per
+       pass,20.10M u64 words but only288119 nonzero. Private
+       nonnegative packed-only 256-bit skip-empty iterator in
+       degree reservation and CSR fill; small masks/dense path
+       unchanged, no extra retained adjacency. Test-first2 reds
+       ->24 pass incl strict ascending/random/high ordinal and
+       wide packed-vs-dense edge/color/allowed parity. Attribution
+       exact ordered digest d9afcaa8; baseline12.738s,64 chunks
+       3.824s,256 byte chunks1.986s,selected skip256 2.089s.
+       Clean same-source giant batch pair (old iterator restored
+       only at two new call sites): complete PCO5f0ed888 exact
+       and register/saved digest76dcdb3e exact; guard wall
+       52.801->31.894s (-39.60%), allocator CPU34.054->10.501
+       (-69.16%), CSR18.183->5.481 (-69.86%). Sampled tree peak
+       330.55->334.50MB directional+1.20%; actual allocator-end
+       process HWM322572->322452KiB, whole process HWM
+       329560->330092KiB (+0.16%), one pair not formal.
+       Actual frozen degree-owner5 alternating triples all15 exact
+       5034145 events and degree digest22f87dca: CPU median
+       13.2778->2.0491s/control14.2948, paired norm-84.83%5/5
+       beyond max13.83%; wall norm-84.82%5/5. RSS187420->
+       187364KiB noninferior, all15 pre-peak=final.
+       Full8 1150 funcs all15 exact previous ELF; original RSS
+       norm+0.354%0/5 within max0.379% prompted hold. Actual
+       invocation count0 (all1150 funcs; no packed path used).
+       Symmetric initialization keeps old/new callable objects
+       and preimage read identical both arms, repeat15 exact:
+       RSS52204->52140/control52256KiB norm-0.222% mixed2/5
+       within max0.523%, original adverse direction absent;
+       CPU/wall norm-4.63/-4.67%3/5 within ~13% controls, no
+       small-module speed claim. All58 static116 rows/34 artifacts
+       exact; strict629 closure/81 funcs/44204 inst fallback0,
+       no libpython. No new runtime QPS/whole Stage1/2 claim;
+       #647 excludes this source, no new CI.
+       Next measure current combined generator/ownership IR
+       reduction and packed allocator on the actual giant, then
+       sparse live planes/streamed lowering only if measured
+       remaining owner warrants; native allocator qualification
+       before pcc1 mode. No gate relax.
        (1) ARM typed
        prepare memory: quantify retained prior run history and
        private CFG owner retirement with public snapshot/callback
@@ -5031,7 +5067,6 @@ in the relevant section or issue and removes the entry.
    - 2026-11-27 rejected cost-aware exact nonescaping i1 mem2reg cutoff (floor 256, ratio >8; claim 0d1d4b55). 19 focused passes, strict 629 closure fallback 0; actual giant PHIs 18,055→281, body 14.39→5.04 MB, single pass/backend CPU −26.56/−50.07%, full same-source handler compile CPU −12.98%, peak RSS −10.82%. Independent w4 fixed-CPU 5 triples: candidate 51,708–52,166 QPS vs unchanged control 53,004–53,490; normalized QPS −1.60%, CPU +1.45%. Latency repeat normalized RSS +0.336% > max control 0.275%; smaps file code RSS +72 KiB (w4), +8 KiB (w1), anonymous/dirty unchanged. Not a GC heap regression, but default runtime gate not met. Candidate source/tests not published; original and repeat raw receipts retained. Hosted direct passes-off bootstrap unaffected; no whole-stage improvement claim. Next: actual native indexed large-module codegen attribution.
 
    Claims:
-   - Actual packed MIR CSR wide-mask event enumeration (private 256-bit skip-empty packed-only iteration, exact edge sequence/rank/PCO and five owner controls, no gate relax): Codex, Linux, 2026-11-27T05:02Z, area backend
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
    - Actual direct-native large-module verifier structural cost attribution (exact phi-free/terminator/edge inventory, pcc/backend/self_backend_verify.py and focused verifier tests only; distinct from CSR and closure, no edits before ceiling or verification weakening): Codex, Linux, 2026-11-27T06:04Z, area runtime-codegen
 4. **Source-language frontends**, in parallel with item 2 (different files;

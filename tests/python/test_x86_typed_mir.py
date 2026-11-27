@@ -884,3 +884,48 @@ entry:
     assert packed.interference == dense.interference
     assert packed.registers == dense.registers and packed.saved == dense.saved
     assert packed.instruction_live_after == dense.instruction_live_after
+
+
+def test_mir_packed_sparse_bits_exact_ascending_and_nonnegative():
+    import random
+    import pytest
+    from pcc.backend import self_backend_x86_mir as planner
+    cases = [0, 1, (1 << 256) - 1, 1 << 256, 1 << 41628,
+             (1 << 255) | (1 << 256) | (1 << 511) | (1 << 512) | 1,
+             (1 << 41628) | (1 << 4095) | (1 << 4096) | (1 << 256) | 1]
+    rng = random.Random(4479)
+    for width, density in [(255, 90), (1025, 100), (41629, 1), (41629, 1650)]:
+        mask = 0
+        for _ in range(density):
+            mask |= 1 << rng.randrange(width)
+        cases.append(mask)
+    for mask in cases:
+        assert tuple(planner._packed_bits(mask)) == tuple(planner._bits(mask))
+    with pytest.raises(ValueError):
+        tuple(planner._packed_bits(-1))
+
+
+def test_mir_sparse_csr_packed_iterator_preserves_dense_color_and_edges(monkeypatch):
+    from pcc.backend import self_backend_x86_mir as planner
+    source = TRIPLE + "define i64 @f(i64 %a, i64 %b) {\nentry:\n"
+    for i in range(300):
+        source += f"  %v{i} = add i64 %a, {i}\n"
+    for i in range(300):
+        source += f"  %s{i} = add i64 " + ("%b" if i == 0 else f"%s{i-1}") + f", %v{i}\n"
+    source += "  ret i64 %s299\n}\n"
+    func, plan = _prepare(source)
+    mir = planner.build_x86_mir(func, plan)
+    assert mir is not None
+    dense = planner.allocate_x86_mir(mir)
+    original = planner._packed_bits
+    wide = []
+    def counted(mask):
+        if mask.bit_length() > 256:
+            wide.append(mask.bit_count())
+        yield from original(mask)
+    monkeypatch.setattr(planner, "_packed_bits", counted)
+    packed = planner.allocate_x86_mir(mir, force_packed=True)
+    assert wide and packed.interference == dense.interference
+    assert packed.allowed == dense.allowed
+    assert packed.registers == dense.registers and packed.saved == dense.saved
+    assert packed.instruction_live_after == dense.instruction_live_after

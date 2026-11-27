@@ -463,6 +463,30 @@ def _bits(mask: int):
         mask ^= bit
 
 
+def _packed_bits(mask: int):
+    """Enumerate large nonnegative CSR masks without per-bit wide arithmetic.
+
+    Skip zero chunks by the lowest remaining set bit. Within a 256-bit
+    chunk, use the same ascending bit walk; do not retain a second row or
+    change edge order, capacities, rank, or physical-register allocation.
+    """
+    if mask < 0:
+        raise ValueError("x64 MIR packed graph requires a nonnegative mask")
+    if mask.bit_length() <= 256:
+        yield from _bits(mask)
+        return
+    chunk_mask = (1 << 256) - 1
+    while mask:
+        low = mask & -mask
+        base = ((low.bit_length() - 1) // 256) * 256
+        word = (mask >> base) & chunk_mask
+        while word:
+            bit = word & -word
+            yield base + bit.bit_length() - 1
+            word ^= bit
+        mask &= ~(chunk_mask << base)
+
+
 def _liveness(mir: X86MIRFunction) -> tuple[list[int], list[int]]:
     count = len(mir.blocks)
     uses = [0] * count
@@ -570,7 +594,7 @@ def _fill_packed_interference(mir: X86MIRFunction, candidate_mask: int,
                 return
             others = live & candidate_mask & ~(1 << value)
             pos = cursor[value]
-            for other in _bits(others):
+            for other in _packed_bits(others):
                 arena.set(pos, other)
                 pos += 1
                 arena.set(cursor[other], value)
@@ -669,7 +693,7 @@ def allocate_x86_mir(mir: X86MIRFunction, *, keep_diagnostics: bool = True,
             if edge_events * 8 > _PACKED_GRAPH_MAX_BYTES:
                 raise MIRAllocationBudgetExceeded("x64 MIR packed interference bound")
             degree[value] += amount
-            for other in _bits(others):
+            for other in _packed_bits(others):
                 degree[other] += 1
         else:
             interference[value] |= others
