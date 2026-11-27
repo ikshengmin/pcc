@@ -44,7 +44,7 @@ from .self_backend_kernel import (
     get_indexed_function_kernel,
 )
 from .self_backend_precise_stackmaps import FunctionStackMapPlan
-from .self_backend_value_arena import CompilerInt4
+from .self_backend_value_arena import CompilerInt2, CompilerInt4
 from .self_backend_x86_dynamic_stack import has_checked_dynamic_stack
 
 from pcc.unsafe import free, int_to_ptr, load_i32, malloc, ptr_to_int, store_i32
@@ -296,7 +296,8 @@ def _ephemeral_cas_pairs(kernel: IndexedFunctionKernel, plan: FunctionStackMapPl
         for index in range(phi_fact.second):
             phi=kernel.phi_record(phi_fact.first+index)
             for j in range(phi.fourth):
-                if kernel.phi_incoming(phi.third+j).first in pair_ids:return None
+                incoming_pair: CompilerInt2 = kernel.phi_incoming(phi.third+j)
+                if incoming_pair.first in pair_ids:return None
         block=kernel.block_fact(block_id)
         for position in range(block.second):
             for index in range(kernel.instruction_use_count(block_id,position)):
@@ -352,7 +353,8 @@ def build_x86_mir(func: ParsedFunction, plan: FunctionStackMapPlan) -> X86MIRFun
     pinned: list[int] = []
     for value_id,(type_id,width,pointer) in enumerate(typed):
         if value_id in pair_ids:
-            width=kernel.type_layout(type_id).first
+            pair_layout: CompilerInt4 = kernel.type_layout(type_id)
+            width=pair_layout.first
         if width <= 0:
             return None
         home = kernel.value_slot_offset(value_id)
