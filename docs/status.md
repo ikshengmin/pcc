@@ -5321,6 +5321,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend toward LLVM parity: locate the LLVM step the self passes lack (pcc_perf reference ablations, scripts/pcc_perf.py), then implement it in pcc's own AArch64 passes (shrink-wrapping, allocation or selection, whichever the ablation ranks first); IR-pass changes are target-neutral and reach x64; avoids the typed x64 MIR files: Claude, macOS, 2026-11-27T06:46Z, area backend
+   - Stage1 common frontend generation actual class_gen owner attribution (read-only exact #650 f2a870a4 full629 closure, profiled _generate_initial_module no-text/direct indexed/inline OFF, exact serialized PIDX/fallback0 and unprofiled fresh-process control, >=15% frontend owner before candidate; no source/backend changes): Codex, Linux, 2026-11-27T12:12Z, area frontend-python
 
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
