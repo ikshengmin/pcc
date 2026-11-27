@@ -396,12 +396,46 @@ def test_live_forecast_pressure_uses_measured_cold_tail_reservations(measured_li
         assert plan["limit_payload"] == plan["available"]
 
 
+# Shared with the generated child, so the readiness witness executes the same
+# publication statements without altering the measured child workload.
+_LIVE_FORECAST_PID_PUBLICATION = (
+    # Publish only a complete PID; peers treat exists() as readiness.
+    "marker=Path({path!r})\n"
+    "pending=marker.with_name('.'+marker.name+'.tmp')\n"
+    "pending.write_text(str(os.getpid()))\n"
+    "pending.replace(marker)\n"
+)
+
+
+def _assert_live_forecast_pid_publication(tmp_path, monkeypatch):
+    marker = tmp_path / "started2"
+
+    def observe_write(path, payload):
+        with path.open("w") as stream:
+            # The kernel has created/truncated the file, but the PID is not
+            # written yet. A peer's exists() must still observe not-ready.
+            assert not marker.exists(), "peer observed an incomplete PID marker"
+            stream.write(payload)
+        return len(payload)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "write_text", observe_write)
+        exec(_LIVE_FORECAST_PID_PUBLICATION.format(path=str(marker)),
+             {"Path": Path, "os": os})
+    assert marker.read_text() == str(os.getpid())
+    assert list(tmp_path.glob("started*")) == [marker]
+
+
 @pytest.mark.pcc_gate(probe=lambda: os.name == "posix")
 @pytest.mark.parametrize("case", (
     "forecast", "calibration", "measured-limit", "no-state", "stale-state",
 ))
-def test_live_forecast_keeps_exclusive_worker_under_real_guard(tmp_path, case):
+def test_live_forecast_keeps_exclusive_worker_under_real_guard(tmp_path, case, monkeypatch):
     """A real allocation may exceed its padded forecast without reaching the cap."""
+    if case == "stale-state":
+        witness = tmp_path / "pid-publication"
+        witness.mkdir()
+        _assert_live_forecast_pid_publication(witness, monkeypatch)
     source = Path(workers.__file__).resolve().parents[3]
     driver = tmp_path / "live_forecast.py"
     driver.write_text('''
@@ -446,7 +480,7 @@ def child_command(index, allocation, target_peak=0):
         )
     code += (
         "Path(" + repr(str(root / ("allocated" + str(index)))) + ").write_text(str(allocated))\\n"
-        + "Path(" + repr(str(root / ("started" + str(index)))) + ").write_text(str(os.getpid()))\\n"
+        + ''' + repr(_LIVE_FORECAST_PID_PUBLICATION) + '''.format(path=str(root / ("started" + str(index))))
         + "report('allocated')\\n"
     )
     if index >= 2:
