@@ -5345,6 +5345,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend toward LLVM parity: locate the LLVM step the self passes lack (pcc_perf reference ablations, scripts/pcc_perf.py), then implement it in pcc's own AArch64 passes (shrink-wrapping, allocation or selection, whichever the ablation ranks first); IR-pass changes are target-neutral and reach x64; avoids the typed x64 MIR files: Claude, macOS, 2026-11-27T06:46Z, area backend
+   - Owned AST V2 compact tape native materializer scratch diagnostic (reuse exact scanner archive; full schema preflight then original constructors; same canonical full decode/output, 1/4 native GC/fallback/error; no production reader/runtime/ABI edits or CI): Codex, Linux, 2026-11-27T13:04Z, area runtime-codegen
 
 
 
