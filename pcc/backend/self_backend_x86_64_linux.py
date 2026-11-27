@@ -20,6 +20,8 @@ Anything outside this slice still raises ``BackendUnavailable`` instead of
 guessing.
 """
 
+import os
+
 from . import BackendUnavailable
 from .indexed_phase_timing import (
     begin_x86_backend_progress, complete_x86_backend_progress,
@@ -88,7 +90,23 @@ _WINDOWS_SCRATCH_BASE = 0
 # Instruction-selection tests read the selector's own text with this off;
 # emission always runs the register, jump and copy passes over it.
 _POST_SELECTION_PASSES = True
+_X86_TYPED_MIR = False
+_X86_TYPED_MIR_COMPACT = False
 _X86_EMISSION_ACTIVE = False
+
+
+def _x86_typed_mir_compiler_name() -> str:
+    import sys
+    return sys.implementation.name
+
+
+def _require_x86_typed_mir_host() -> None:
+    # The owned output and runtime semantics are qualified using the host
+    # compiler. Native pcc1 executing this allocator, including its wide
+    # liveness masks, is not yet qualified. Fail before cache or emission.
+    if _x86_typed_mir_compiler_name() == "pcc":
+        raise BackendUnavailable("x64 typed MIR is currently host compiler only")
+
 
 _MODULE_SYMBOLS = PreparedModuleSymbols(
     internal_prefix="",
@@ -3487,6 +3505,11 @@ def _emit_function(
         _WINDOWS_SCRATCH_BASE = outgoing_size(func)
     kernel = get_indexed_function_kernel(func)
     func.x86_dynamic_stack = not _WINDOWS_ABI and has_checked_dynamic_stack(func, kernel)
+    if _X86_TYPED_MIR and not _X86_TYPED_MIR_COMPACT and not _WINDOWS_ABI:
+        from .self_backend_x86_mir_emit import emit_x86_mir_function
+        typed_lines = emit_x86_mir_function(func, stack_map_plan)
+        if typed_lines is not None:
+            return typed_lines
     symbol = _asm_symbol(func.name)
     from .self_backend_x86_frame import fixed_frame_padding
     lines = _emit_prologue(
@@ -3567,12 +3590,16 @@ def _emit_x86_64_module(
     phase_timing=None,
     builder=None,
 ) -> str:
-    global _WINDOWS_ABI, _X86_EMISSION_ACTIVE
+    global _WINDOWS_ABI, _X86_EMISSION_ACTIVE, _X86_TYPED_MIR, _X86_TYPED_MIR_COMPACT
     if _X86_EMISSION_ACTIVE:
         raise BackendUnavailable("x86 emission is already active")
     _X86_EMISSION_ACTIVE = True
     _WINDOWS_ABI = windows
+    _X86_TYPED_MIR = not windows and str(os.environ.get("PCC_SELF_X86_TYPED_MIR", "") or "").strip().lower() in ("1", "true", "yes", "on")
+    _X86_TYPED_MIR_COMPACT = _X86_TYPED_MIR and str(os.environ.get("PCC_SELF_X86_TYPED_MIR_COMPACT", "") or "").strip().lower() in ("1", "true", "yes", "on")
     try:
+        if _X86_TYPED_MIR:
+            _require_x86_typed_mir_host()
         if module is None:
             prepared = prepare_module_for_target(
                 ir_text,
@@ -3602,6 +3629,8 @@ def _emit_x86_64_module(
             builder=builder,
         )
     finally:
+        _X86_TYPED_MIR = False
+        _X86_TYPED_MIR_COMPACT = False
         _WINDOWS_ABI = False
         _X86_EMISSION_ACTIVE = False
 
@@ -3720,13 +3749,19 @@ def _emit_prepared_x86_64_module(
             stack_map_plans[func.name] = plan
             if phase_timing is not None:
                 phase_start = phase_timing.start()
+            emitted_lines = None
+            if _X86_TYPED_MIR_COMPACT:
+                from .self_backend_x86_mir_emit import emit_x86_mir_compacted
+                compacted = emit_x86_mir_compacted(func, plan, prepared.globals_, globals_index)
+                if compacted is not None:
+                    emitted_lines, plan = compacted
+                    stack_map_plans[func.name] = plan
+            if emitted_lines is None:
+                emitted_lines = _emit_function(func, plan, phase_timing=phase_timing)
             if builder is None:
-                _append_assembly_chunk(
-                    chunks, label_lines,
-                    _emit_function(func, plan, phase_timing=phase_timing),
-                )
+                _append_assembly_chunk(chunks, label_lines, emitted_lines)
             else:
-                builder.append_lines(_emit_function(func, plan, phase_timing=phase_timing))
+                builder.append_lines(emitted_lines)
             # The stack-map plan retains scalar/root metadata, never the IR.
             # Release completed functions before the next body adds assembly.
             get_indexed_function_kernel(func).close_native_tables()

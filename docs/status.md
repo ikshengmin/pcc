@@ -4053,16 +4053,70 @@ in the relevant section or issue and removes the entry.
        12 stores), 4 pointer gens, baseline exact, no allocation
        implementation. Stop retrofits. Raw guarded diagnostic
        receipts/scripts under local stage1-cross-static, old
-       prototypes retained, source restored clean. Latest next
-       coherent opt-in per-function typed x64 MIR: virtual values,
-       register classes, immediate/address/pinned homes, precise
-       machine call+flags+implicit clobbers, CFG interference/live
-       range splitting and parallel PHIs, one allocation owner,
-       exact root writes/reloads/retirement, compact safe spill
-       homes, entire-function legacy fallback for unsupported shape.
-       Same58 real hot static functions >=10% net target before
-       expensive native semantic/handler CPU/RSS controls; no
-       default switch/no production until broad evidence.
+       prototypes retained, source restored clean.
+       2026-11-27 **accepted explicit host-compiler x64 Linux
+       application opt-in** (maintainer directed merge of demonstrated QPS
+       improvement separately from compilation cost). Set both
+       `PCC_SELF_X86_TYPED_MIR=1` and
+       `PCC_SELF_X86_TYPED_MIR_COMPACT=1` for the qualified mode.
+       Default, native self-host/Bootstrap Stage1/2 and Windows routes
+       remain unchanged/OFF. Native `pcc1` executing the allocator is
+       not qualified: explicit MIR requests fail before emission/runtime
+       selection/worker cache, rather than pretending to support it.
+       One per-function typed MIR allocation owner: exact CFG live sets,
+       call/flags/fixed-register constraints, parallel PHI/ABI copies,
+       pinned mapped/reload/alloca homes, compact spill frame, exact
+       root/derived reload remap and pointer retirement; whole-function
+       legacy fallback for unsupported shape or proven packed graph bound.
+       Standard worker-object and runtime archive provenance/cache keys
+       bind both opt-in flags; unset/OFF keys remain unchanged and orphan
+       compact is OFF. Direct object cache already keys PCC settings and
+       is host-only. Actual same receipt-verified IR 58 hot functions
+       15435->12005 static instructions (-22.22%), 71078->53822 code
+       bytes (-24.28%), 52 improvements, six exact fallback, no static
+       regression; this is not a dynamic instruction measurement.
+       Actual giant proxy-resume function 41629 indexed values,8383
+       blocks,44007 operations: sparse pointer-death snapshots and exact
+       uint32 CSR replace dense graph storage; old dense vs packed
+       owned PCO byte-identical, peak1365192704->982167552B (-383MB),
+       one-off76.25->70.57s under unchanged cap. Full8 runtime modules
+       (1150 functions), five alternating base/candidate/unchanged
+       controls, 15 exact deterministic owned ELF: normalized CPU
+       -3.05%, wall -3.20%, RSS -3.53%, each5/5 beyond max control.
+       Actual source-matched native handler archives on source014a plus
+       measured packed MIR codegen0d1bf7d5: all193 post-pass IR/source
+       hashes equal,185 changed owned objects, no host cc; corrected
+       complete30-file gateway fixture. 60 exact formal handler runs
+       (five triples per worker count and separate latency runs),12
+       exact semantic runs (777 synchronous cycle finalizers/weakrefs,
+       four carriers/12000 unique shared list entries), plus targeted
+       ABI/CAS/PHI/root-reload callback/exception tests. w1 C100x2000:
+       QPS16460->23924, control17541, norm+36.39%5/5; CPU61.53->42.10us
+       control57.15, norm-26.35%5/5; RSS36.778->35.541MB norm-3.36%5/5;
+       max STW2175->1647us norm-24.38%5/5. Separate w1 C100x500 p99
+       5.689->3.686ms control5.744, norm-35.83%5/5. w4 main QPS
+       41150->51955 control41777, norm+24.36%5/5 within max control
+       (27.68%, directional); CPU90.18->70.81us control88.95,
+       norm-20.39%5/5 beyond controls; RSS norm-3.25%5/5. Separate
+       w4 latency QPS norm+33.94%5/5 beyond control, p99
+       1.383->1.032ms control1.432 norm-27.93%5/5. w4 STW directional
+       only, high control drift. w1 allocations exact; w4 scheduling
+       counter jitter within controls.
+       **Compile cost remains RED on large real app:** corrected
+       application-only build104.56->168.39s/784531456->1310507008B,
+       one-off +61.0% wall/+67.0% peak, but both under original
+       1.5GiB+2GiB reserve (old dense candidate hit cap). Full Stage1/
+       Stage2 targets not claimed. Final source-only native-local
+       renames/cache-policy guard preserve exact same IR/ELF/PCO;
+       strict closed-world capture629 modules, seven changed production
+       modules all zero fallback/no libpython, 82 focused tests pass;
+       broader151 pass and identical17 preexisting baseline failures.
+       No dedicated CI dispatch. Next independently reduce large
+       compilation cost (actual giant module/worker phases, sparse live
+       planes/streamed emission, exact same output), and qualify native
+       allocator execution before enabling pcc1; do not change defaults
+       or resource limits. The independent generator-suffix IR owner
+       is separately claimed.
        (1) ARM typed
        prepare memory: quantify retained prior run history and
        private CFG owner retirement with public snapshot/callback
@@ -4783,7 +4837,6 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
-   - Opt-in per-function typed x64 machine IR and unified register allocation (large structural design, full-function legacy fallback; real 58-function static >=10% target before native/handler CPU/RSS qualification): Codex, Linux, 2026-11-27T02:19Z, area backend (x64 MIR/selector/register allocation, Stage2 corpus and GC root audit support; CI independent)
    - Shared generator save-suffix prefix spine, exact slot/ownership/state cutoffs (generator_lowering.py + test_generator_shared_frame_save.py; no backend overlap): Codex, Linux, 2026-11-27T03:43Z, area runtime-codegen
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets

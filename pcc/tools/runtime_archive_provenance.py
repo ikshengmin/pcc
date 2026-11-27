@@ -549,11 +549,17 @@ def _load_json_object(path: Path) -> dict[str, object]:
 
 def _validate_runtime_build_config(config: object) -> None:
     required = {"threads", "refcount"}
-    allowed = required | {"boolean_register_lowering", "gc_stress_every"}
+    allowed = required | {"boolean_register_lowering", "gc_stress_every", "x86_typed_mir", "x86_typed_mir_compact"}
     if not isinstance(config, dict) or not required.issubset(config) or not set(config).issubset(allowed):
         raise ProvenanceError("invalid runtime build configuration fields")
     if "boolean_register_lowering" in config and config["boolean_register_lowering"] is not True:
         raise ProvenanceError("runtime boolean lowering override must be true")
+    if "x86_typed_mir" in config and config["x86_typed_mir"] is not True:
+        raise ProvenanceError("runtime x64 MIR override must be true")
+    if "x86_typed_mir_compact" in config and (
+        config["x86_typed_mir_compact"] is not True or config.get("x86_typed_mir") is not True
+    ):
+        raise ProvenanceError("runtime x64 MIR compact override requires MIR")
     if "gc_stress_every" in config:
         interval = config["gc_stress_every"]
         if type(interval) is not int or interval < 1 or interval > 2147483647:

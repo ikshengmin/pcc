@@ -120,22 +120,28 @@ def _effective_backend_configuration() -> str:
     from pcc.backend.precise_stackmap import precise_stackmap_tables_enabled
 
     transport = resolve_self_target_pass_transport()
-    return json.dumps(
-        [
-            # Routing lives outside the backend source identity. Separate
-            # old application objects emitted with the forced O0 policy.
-            ["application-emitter-optimize", True],
-            ["target-pass-transport", transport],
-            ["target-passes", resolve_self_target_pass_names(transport=transport)],
-            ["call-result-registers", call_result_registers_enabled()],
-            ["callee-saved-registers", callee_saved_registers_enabled()],
-            ["boolean-register-lowering", boolean_register_lowering_enabled()],
-            ["function-live-intervals", function_live_intervals_enabled()],
-            ["branch-protection", branch_protection_enabled()],
-            ["precise-stackmap-tables", precise_stackmap_tables_enabled()],
-        ],
-        separators=(",", ":"),
-    )
+    configuration = [
+        # Routing lives outside the backend source identity. Separate
+        # old application objects emitted with the forced O0 policy.
+        ["application-emitter-optimize", True],
+        ["target-pass-transport", transport],
+        ["target-passes", resolve_self_target_pass_names(transport=transport)],
+        ["call-result-registers", call_result_registers_enabled()],
+        ["callee-saved-registers", callee_saved_registers_enabled()],
+        ["boolean-register-lowering", boolean_register_lowering_enabled()],
+        ["function-live-intervals", function_live_intervals_enabled()],
+        ["branch-protection", branch_protection_enabled()],
+        ["precise-stackmap-tables", precise_stackmap_tables_enabled()],
+    ]
+    # Keep the default key byte-identical; only explicit opt-in modes
+    # produce distinct objects. Compact without MIR is semantically OFF.
+    if str(os.environ.get("PCC_SELF_X86_TYPED_MIR", "") or "").strip().lower() in ("1", "true", "yes", "on"):
+        from pcc.backend.self_backend_x86_64_linux import _require_x86_typed_mir_host
+        _require_x86_typed_mir_host()
+        configuration.append(["x86-typed-mir", True])
+        if str(os.environ.get("PCC_SELF_X86_TYPED_MIR_COMPACT", "") or "").strip().lower() in ("1", "true", "yes", "on"):
+            configuration.append(["x86-typed-mir-compact", True])
+    return json.dumps(configuration, separators=(",", ":"))
 
 
 def _plan_enabled(worker_items: list[tuple[str, str, str]], target_id: str,

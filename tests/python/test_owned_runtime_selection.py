@@ -568,3 +568,69 @@ def test_public_runtime_routes_validate_real_archive_config(runtime_root, monkey
     with pytest.raises(pipeline.PyPipelineError, match="target/source configuration"):
         select()
     assert os.environ["PCC_RUNTIME_ARCHIVE"] == previous
+
+
+def test_x64_mir_diagnostic_configuration_separates_receipts(runtime_root,monkeypatch):
+    target="x86_64-unknown-linux-gnu"
+    monkeypatch.delenv("PCC_SELF_X86_TYPED_MIR",raising=False)
+    monkeypatch.delenv("PCC_SELF_X86_TYPED_MIR_COMPACT",raising=False)
+    ordinary=owned.runtime_build_config()
+    receipt=_manifest(runtime_root,target)
+    assert ordinary=={"threads":True,"refcount":"atomic"}
+    monkeypatch.setenv("PCC_SELF_X86_TYPED_MIR","1")
+    mir=owned.runtime_build_config()
+    assert mir=={**ordinary,"x86_typed_mir":True}
+    assert not owned._manifest_matches_config(receipt,str(runtime_root),target,mir)
+    monkeypatch.setenv("PCC_SELF_X86_TYPED_MIR_COMPACT","1")
+    compact=owned.runtime_build_config()
+    assert compact=={**mir,"x86_typed_mir_compact":True}
+    provenance._validate_runtime_build_config(compact)
+    for member in receipt["members"]:member["runtime_build_config"]=dict(compact)
+    assert owned._manifest_matches_config(receipt,str(runtime_root),target,compact)
+    assert not owned._manifest_matches_config(receipt,str(runtime_root),target,mir)
+    assert not owned._manifest_matches_config(receipt,str(runtime_root),target,ordinary)
+    monkeypatch.setenv("PCC_SELF_X86_TYPED_MIR","0")
+    assert owned.runtime_build_config()==ordinary
+
+
+@pytest.mark.parametrize("config",[
+    {"threads":True,"refcount":"atomic","x86_typed_mir":False},
+    {"threads":True,"refcount":"atomic","x86_typed_mir":"1"},
+    {"threads":True,"refcount":"atomic","x86_typed_mir_compact":True},
+    {"threads":True,"refcount":"atomic","x86_typed_mir":True,"x86_typed_mir_compact":False},
+])
+def test_x64_mir_configuration_rejects_false_or_orphan_override(config):
+    with pytest.raises(provenance.ProvenanceError,match="MIR|configuration"):
+        provenance._validate_runtime_build_config(config)
+
+
+def test_x64_mir_runtime_cache_paths_and_explicit_identity(runtime_root,monkeypatch,hermetic_runtime_admission):
+    target="x86_64-unknown-linux-gnu"
+    receipts={};builds=[]
+    monkeypatch.setattr(provenance,"manifest_codegen_staleness_reason",lambda _receipt:"")
+    monkeypatch.setattr(provenance,"verify_runtime_archive_manifest",lambda path,**_kwargs:receipts[str(path)])
+    def build(root,output,selected_target):
+        assert selected_target==target
+        Path(output).write_bytes(b"owned archive")
+        config=owned.runtime_build_config()
+        receipt=_manifest(Path(root),target)
+        for member in receipt["members"]:member["runtime_build_config"]=dict(config)
+        receipts[output]=receipt
+        builds.append(output)
+    monkeypatch.setattr(owned,"build_runtime_archive",build)
+    hermetic_runtime_admission()
+    paths=[]
+    for mir,compact in (("0","0"),("1","0"),("1","1"),("0","0")):
+        monkeypatch.setenv("PCC_SELF_X86_TYPED_MIR",mir)
+        monkeypatch.setenv("PCC_SELF_X86_TYPED_MIR_COMPACT",compact)
+        paths.append(owned.ensure_target_runtime(str(runtime_root),target))
+    assert len(set(paths))==3
+    assert paths[0]==paths[3]
+    assert len(builds)==3
+    assert "threads-atomic" in paths[0] and "x64-mir" not in paths[0]
+    assert "x64-mir" in paths[1] and "compact" not in paths[1]
+    assert "x64-mir-compact" in paths[2]
+    monkeypatch.setenv("PCC_SELF_X86_TYPED_MIR","1")
+    monkeypatch.setenv("PCC_SELF_X86_TYPED_MIR_COMPACT","1")
+    with pytest.raises(ValueError,match="runtime build configuration differs"):
+        owned.ensure_target_runtime(str(runtime_root),target,explicit_archive=paths[0])

@@ -50,6 +50,12 @@ def runtime_build_config() -> dict:
         config["gc_stress_every"] = pressure_every
     if boolean_register_lowering_enabled():
         config["boolean_register_lowering"] = True
+    if str(os.environ.get("PCC_SELF_X86_TYPED_MIR", "") or "").strip().lower() in ("1", "true", "yes", "on"):
+        from pcc.backend.self_backend_x86_64_linux import _require_x86_typed_mir_host
+        _require_x86_typed_mir_host()
+        config["x86_typed_mir"] = True
+        if str(os.environ.get("PCC_SELF_X86_TYPED_MIR_COMPACT", "") or "").strip().lower() in ("1", "true", "yes", "on"):
+            config["x86_typed_mir_compact"] = True
     return config
 
 
@@ -448,6 +454,10 @@ def ensure_target_runtime(runtime_dir: str, target: str, *, packaged_archive: st
     configuration_name = ("threads-" if threads else "single-") + refcount
     if config.get("gc_stress_every", 0):
         configuration_name += "-gc-stress-" + str(config["gc_stress_every"])
+    if config.get("x86_typed_mir", False):
+        configuration_name += "-x64-mir"
+        if config.get("x86_typed_mir_compact", False):
+            configuration_name += "-compact"
     output = os.path.join(runtime_dir, "build_owned", target,
                           configuration_name,
                           "libpy_runtime_pcc_py.a")
