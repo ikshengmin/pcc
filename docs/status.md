@@ -4319,8 +4319,48 @@ in the relevant section or issue and removes the entry.
    cold opt-in live object-family slab size histogram to identify actual
    Stage2 allocator internal padding before any size-class redesign.
 
+   Cold LIVE managed object-family slab size attribution (Linux, Codex,
+   exact production base cf7762a6 plus three diagnostic source files).
+   Previous actual allocation churn requested2658.4/usable3600 B per
+   request is not live memory; prior hosted Stage2 manifests-ready
+   usable459,764,192/mapped825,470,976 B had no live size attribution.
+   Extend existing PCC_PROFILE_COORDINATOR_MEMORY=1 only at manifests-ready:
+   a separate independent stopped-world managed slab histogram (not
+   atomically combined with the prior dictionary-table receipt).
+   37 bins: rounded 16-byte request upper16..512, then current classes
+   1024..16384; count:requested:user-usable:hypothetical min16-aligned
+   payload bytes. Exact LIVE slab enumeration visits one span base once,
+   validates object-family prefix, state, size class and signed aggregation,
+   excludes RESERVED/free/raw/large/index-only/static owners. Includes
+   still-physically-owned terminal LIVE cells. No layout/stat/root mutation,
+   managed allocation, object-list materialization or hot-path work.
+   Explicit aligned output address/exact1184B ABI; on malformed state,
+   overflow or STW admission failure report unavailable, resume only a
+   stop acquired. This is not total heap, mapped bytes, RSS or a proposed
+   new class; adding classes could increase partially occupied slabs.
+   Baseline test-first exact two reds (missing native helper and absent
+   coordinator call). Final 30 six-worker host tests green including
+   previous dict diagnostic, boundaries, multiple batches, empty, null,
+   wrong ABI/prefix, counter overflow, failed and borrowed stop. Actual
+   allocator/GC IR no managed/heap/root operations; add helper only
+   calls exact size class. Fresh exact owned archive
+   e129de088b2f60baa007b328deb9154d644a14d3e19a981c38c92c28b15624bc.
+   Native C ELF cf785b84f119eb45e1a73ee04a5cd71b0a2fffeac5857abcc76a3a1466a56c05
+   default/provenance2 both pass exact tuple class-boundary deltas,
+   canaries, raw/RESERVED/large exclusion, no allocation/stat changes
+   during isolated snapshot, borrowed stop, release and20 snapshots
+   while four native carriers churn. Prior dict C ELF9a3b6046c97b3afd5925f00c8d9dac25e9d0462740fa7f5d31ad0b6a2b50907c both modes pass.
+   Actual native app ELFf2589912d980ee370ada6cb617c1c05fc8136f5c3870ef6b63e3d0653087f4a9
+   flag OFF exact stdout15/stderr empty; ON same stdout, two old dict
+   and two exact managed histogram receipts. Complete guard155.512s
+   peak413,868,032B with unchanged1GiB cap/2GiB reserve.
+   Admit diagnostic only; no speed/RSS gain, no allocator redesign,
+   no hosted Stage2 result yet. Existing workflow already profiles
+   coordinator memory; use natural cumulative CI receipts, no new
+   independent dispatch. Only genuine hosted live histogram and actual
+   same-input RSS can drive a size-class candidate.
+
    Claims:
-   - Actual live managed object-family slab size histogram (cold coordinator manifests-ready diagnostic only): Codex, Linux, 2026-11-26T23:43Z, area runtime-gc-managed-size-attribution
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
    - Actual x86 streamed inline-edge object finalize and verifier attribution (unchanged default OFF, general OFF benefit required where possible): Codex, Linux, 2026-11-27T00:04Z, area backend (x86_64_asm_driver/elf_x86_64/verify attribution, no overlapping CI TLS owner edits)
 4. **Source-language frontends**, in parallel with item 2 (different files;

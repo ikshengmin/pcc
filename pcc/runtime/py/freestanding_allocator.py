@@ -2849,6 +2849,98 @@ def pcc_allocator_object_cells_enumerate_slice(
     return total
 
 
+# Cold histogram of physical LIVE object-family slab cells. The existing
+# size classes are powers of two; preserve exact requested-size attribution
+# below 512 B, then aggregate the five larger classes. The aligned lane is a
+# hypothetical 16-byte-aligned lower bound, not a proposed allocator/RSS.
+_LIVE_OBJECT_SIZE_BINS = 37
+_LIVE_OBJECT_SIZE_BYTES = 1184
+
+
+@c_abi_export("pcc_allocator_live_object_size_snapshot_add_stopped")
+def _live_object_size_snapshot_add(obj, out) -> i64:
+    # Only the exact allocator slab enumerator can supply obj. Verify that
+    # its owned prefix is still a LIVE object-family allocation; never use
+    # this helper for arbitrary pointers or managed-index/static entries.
+    if ptr_is_null(obj) != 0:
+        return -1
+    if (load_i64(obj, GRANULE_MAPPING_SIZE_OFFSET) != -1
+            or atomic_load_i64(obj, GRANULE_STATE_OFFSET, "acquire") != GC_STATE_LIVE):
+        return -1
+    requested: i64 = load_i64(obj, GRANULE_REQUESTED_SIZE_OFFSET)
+    usable: i64 = load_i64(obj, GRANULE_USABLE_SIZE_OFFSET)
+    if requested < 0 or requested > 16384 or usable <= 0 or usable != pcc_allocator_size_class(requested):
+        return -1
+    aligned: i64 = (requested + 15) & -16
+    if aligned < 16:
+        aligned = 16
+    if aligned > usable:
+        return -1
+    lane: i64 = 0
+    if requested <= 512:
+        lane = (aligned >> 4) - 1
+    else:
+        lane = 32
+        upper: i64 = 1024
+        while upper < usable:
+            upper = upper * 2
+            lane = lane + 1
+    if lane < 0 or lane >= _LIVE_OBJECT_SIZE_BINS:
+        return -1
+    offset: i64 = lane * 32
+    count: i64 = load_i64(out, offset)
+    requested_sum: i64 = load_i64(out, offset + 8)
+    usable_sum: i64 = load_i64(out, offset + 16)
+    aligned_sum: i64 = load_i64(out, offset + 24)
+    # Never wrap an aggregate or return a partially valid receipt. The
+    # caller discards every bin if any inconsistency/overflow is seen.
+    if (count < 0 or count == 9223372036854775807
+            or requested_sum < 0 or requested_sum > 9223372036854775807 - requested
+            or usable_sum < 0 or usable_sum > 9223372036854775807 - usable
+            or aligned_sum < 0 or aligned_sum > 9223372036854775807 - aligned):
+        return -1
+    store_i64(out, offset, count + 1)
+    store_i64(out, offset + 8, requested_sum + requested)
+    store_i64(out, offset + 16, usable_sum + usable)
+    store_i64(out, offset + 24, aligned_sum + aligned)
+    return 0
+
+
+@c_abi_export("pcc_allocator_live_object_size_snapshot_stopped")
+def pcc_allocator_live_object_size_snapshot_stopped(out) -> i64:
+    """Allocator-owned cold diagnostic; caller already holds one STW.
+
+    37*32 B output: count, requested bytes, usable bytes and minimum
+    hypothetical 16-byte-aligned payload bytes. Bins are rounded requests
+    16..512, then existing class upper bounds 1024..16384. Unlike Python's
+    tracked-object graph, this physical ledger includes every LIVE slab
+    cell, even one whose semantic object is terminal but not yet retired.
+    RESERVED, free/raw slabs, static/index-only and large mapped objects
+    are outside scope. No managed allocation, heap copy or root retention.
+    """
+    if ptr_is_null(out) != 0:
+        return -1
+    memset(out, 0, _LIVE_OBJECT_SIZE_BYTES)
+    batch = stack_alloc(2048)
+    cursor = stack_alloc(32)
+    memset(cursor, 0, 32)
+    while load_i64(cursor, 24) == 0:
+        # Preserve one stopped world across every cursor continuation.
+        # Only LIVE object-family slab cells are returned, and the owner
+        # enumerator visits each span once. Do not inspect the Python flags.
+        count: i64 = pcc_allocator_object_cells_enumerate_slice(
+            batch, 256, 0, 0, cursor, 4096
+        )
+        if count < 0 or count > 256:
+            return -1
+        index: i64 = 0
+        while index < count:
+            if _live_object_size_snapshot_add(load_ptr(batch, index * 8), out) != 0:
+                return -1
+            index = index + 1
+    return 0
+
+
 @c_abi_export("pcc_allocator_granule_span_cache_set_fill")
 def pcc_allocator_granule_span_cache_set_fill(enabled: i64) -> i64:
     """Measurement control for the span cache: clear it and stop filling.

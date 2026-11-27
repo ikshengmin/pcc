@@ -11,6 +11,7 @@ _live_usable = extern("pcc_allocator_live_usable_bytes", (), c_int64)
 _mapped = extern("pcc_allocator_mapped_bytes", (), c_int64)
 _reclaimable_raw = extern("pcc_allocator_reclaimable_slab_bytes", (), c_int64)
 _dict_storage_snapshot = extern("pcc_gc_live_dict_storage_snapshot", (c_int64,), c_int64)
+_managed_size_snapshot = extern("pcc_gc_live_managed_size_snapshot", (c_int64, c_int64), c_int64)
 
 
 def _coordinator_dict_storage_profile() -> None:
@@ -50,6 +51,47 @@ def _coordinator_dict_storage_profile() -> None:
     print(prefix + " status=unavailable", file=sys.stderr, flush=True)
 
 
+def _coordinator_managed_size_profile() -> None:
+    """Cold allocator LIVE object-slab sizes at manifests-ready.
+
+    Bins: rounded request/class upper bound:count:requested:usable:
+    minimum hypothetical 16-byte-aligned payload bytes. Excludes raw/large
+    mappings, reserved/free cells and slab metadata; not RSS. Independent
+    snapshot from the dictionary table receipt immediately before this.
+    """
+    prefix = "pcc coordinator managed slab sizes phase=manifests-ready"
+    try:
+        out = stack_alloc(1184)
+        status = _managed_size_snapshot(out, 1184)
+        if status == 0:
+            bins = ""
+            upper = 16
+            lane = 0
+            while lane < 37:
+                offset = lane * 32
+                count = load_i64(out, offset)
+                if count != 0:
+                    if bins != "":
+                        bins = bins + ","
+                    bins = bins + (str(upper) + ":" + str(count)
+                                   + ":" + str(load_i64(out, offset + 8))
+                                   + ":" + str(load_i64(out, offset + 16))
+                                   + ":" + str(load_i64(out, offset + 24)))
+                if lane < 31:
+                    upper = upper + 16
+                elif lane == 31:
+                    upper = 1024
+                else:
+                    upper = upper * 2
+                lane = lane + 1
+            print(prefix + " status=ok bins=" + bins, file=sys.stderr, flush=True)
+            return
+    except Exception:
+        # Diagnostic failure must not become compilation failure.
+        pass
+    print(prefix + " status=unavailable", file=sys.stderr, flush=True)
+
+
 def coordinator_memory_phase(phase: str) -> None:
     """Never collect, trim, expose addresses, or replace compilation errors.
 
@@ -83,6 +125,7 @@ def coordinator_memory_phase(phase: str) -> None:
               file=sys.stderr, flush=True)
         if phase == "manifests-ready":
             _coordinator_dict_storage_profile()
+            _coordinator_managed_size_profile()
     except Exception:
         # Ordinary diagnostic failures are nonfatal; cancellation still propagates.
         pass

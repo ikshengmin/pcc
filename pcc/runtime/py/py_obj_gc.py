@@ -80,6 +80,9 @@ pcc_gc_managed_pointer_index_enumerate_slice = extern(
     (c_ptr, c_int64, c_int64, c_int64, c_ptr, c_int64), c_int64,
 )
 malloc_usable_size = extern("malloc_usable_size", (c_ptr,), c_int64)
+pcc_allocator_live_object_size_snapshot_stopped = extern(
+    "pcc_allocator_live_object_size_snapshot_stopped", (c_ptr,), c_int64
+)
 
 
 def _dict_storage_snapshot_add(obj, out) -> int:
@@ -177,6 +180,23 @@ def pcc_gc_live_dict_storage_snapshot(output_address: int) -> int:
         # The managed pointer index enumerates objects outside object slabs,
         # so the two allocator owners are disjoint under the same stop.
         result = _dict_storage_snapshot_walk(out, batch, cursor, 1)
+    if owns_world != 0:
+        pcc_resume_world()
+    return result
+
+
+@c_abi_export("pcc_gc_live_managed_size_snapshot")
+def pcc_gc_live_managed_size_snapshot(output_address: int, output_bytes: int) -> int:
+    """Cold LIVE object-family slab size histogram; not a heap/RSS total."""
+    if output_address == 0 or (output_address & 7) != 0 or output_bytes != 1184:
+        return -1
+    out = int_to_ptr(output_address)
+    owns_world: int = 0
+    if pcc_thread_owns_stopped_world() == 0:
+        if pcc_stop_the_world() != 0:
+            return -1
+        owns_world = 1
+    result: int = pcc_allocator_live_object_size_snapshot_stopped(out)
     if owns_world != 0:
         pcc_resume_world()
     return result
