@@ -55,6 +55,9 @@ class X86MIRFrame:
         _refresh_legacy_slots(func,kernel)
 
 
+_ORIGINAL_X86_MIR_REMAP = X86MIRFrame.remap
+
+
 def plan_x86_mir_frame(func,plan,mir:X86MIRFunction,allocation:X86MIRAllocation,*,retain_original=False)->X86MIRFrame:
     kernel=get_indexed_function_kernel(func)
     old_slots=[kernel.slot_offset(index) for index in range(len(kernel.slot_scalars)//2)] if retain_original else []
@@ -139,40 +142,113 @@ def remapped_mir_values(mir:X86MIRFunction,layout:X86MIRFrame,allocation:X86MIRA
                           mir.pinned,mir.cas_extracts,mir.cas_pairs,mir.root_offsets)
 
 
+def _remap_location_group(layout, original, group_memo, element_memo, memoize):
+    group_id = id(original) if memoize else 0
+    if memoize and group_id in group_memo:
+        group_entry = group_memo[group_id]
+        if group_entry[0] is original:
+            return group_entry[1], group_entry[2]
+    locations = []
+    changed = False
+    for location in original:
+        if type(location) is not PlannedRootLocation or type(location.offset) is not int:
+            return None
+        item_id = id(location) if memoize else 0
+        mapped = None
+        if memoize and item_id in element_memo:
+            item_entry = element_memo[item_id]
+            if item_entry[0] is location:
+                mapped = item_entry[1]
+        if mapped is None:
+            offset = -layout.remap(-location.offset)
+            if not -layout.new_size <= offset <= -8:
+                return None
+            mapped = location if offset == location.offset else PlannedRootLocation(offset, location.owned)
+            if memoize:
+                element_memo[item_id] = (location, mapped)
+        if mapped is not location:
+            changed = True
+        locations.append(mapped)
+    # Exact private plans already intern location tuples. Keep their sharing;
+    # a custom/observed layout retains the original uncached tuple behavior.
+    result = original if memoize and not changed else tuple(locations)
+    if memoize:
+        group_memo[group_id] = (original, result, changed)
+    return result, changed
+
+
+def _remap_reload_group(layout, original, group_memo, element_memo, memoize):
+    group_id = id(original) if memoize else 0
+    if memoize and group_id in group_memo:
+        group_entry = group_memo[group_id]
+        if group_entry[0] is original:
+            return group_entry[1], group_entry[2]
+    reloads = []
+    changed = False
+    for reload in original:
+        if (type(reload) is not PlannedManagedReload or type(reload.source_offset) is not int
+                or type(reload.destination_offset) is not int):
+            return None
+        item_id = id(reload) if memoize else 0
+        mapped = None
+        if memoize and item_id in element_memo:
+            item_entry = element_memo[item_id]
+            if item_entry[0] is reload:
+                mapped = item_entry[1]
+        if mapped is None:
+            source = -layout.remap(-reload.source_offset)
+            destination = -layout.remap(-reload.destination_offset)
+            if not (-layout.new_size <= source <= -8 and -layout.new_size <= destination <= -8):
+                return None
+            if source == reload.source_offset and destination == reload.destination_offset:
+                mapped = reload
+            else:
+                mapped = PlannedManagedReload(source, destination, reload.derived_offset)
+            if memoize:
+                element_memo[item_id] = (reload, mapped)
+        if mapped is not reload:
+            changed = True
+        reloads.append(mapped)
+    result = original if memoize and not changed else tuple(reloads)
+    if memoize:
+        group_memo[group_id] = (original, result, changed)
+    return result, changed
+
+
 def remap_plain_stack_map(plan:FunctionStackMapPlan,layout:X86MIRFrame)->FunctionStackMapPlan|None:
     """Immutable exact x64 plan remap; no frontend/root-state recomputation.
 
     The same layout preserves all complete root/reload spans. Semantic IDs,
     ownership, exception/liveness routes, labels and derived offsets are
     unchanged. Custom/packed records retain the checked rebuild oracle.
+
+    The exact planner shares immutable groups and elements across safepoints.
+    Remap each identity once under this private pure layout, retaining the
+    source identity alongside the answer (no address-reuse or equal-value
+    conflation). Never cache across functions or for an observed layout.
     """
     if (type(plan) is not FunctionStackMapPlan or plan.packed_records is not None
             or type(plan.records) is not tuple):
         return None
     if not layout.moved:return plan
+    memoize = (type(layout) is X86MIRFrame
+               and getattr(X86MIRFrame, "remap", None) is _ORIGINAL_X86_MIR_REMAP)
+    location_groups: dict[int, tuple] = {}
+    location_elements: dict[int, tuple] = {}
+    reload_groups: dict[int, tuple] = {}
+    reload_elements: dict[int, tuple] = {}
     records=[]
     for record in plan.records:
         if (type(record) is not PlannedSafepoint or type(record.locations) is not tuple
                 or type(record.reloads) is not tuple):return None
-        locations=[];reloads=[]
-        changed=False
-        for location in record.locations:
-            if type(location) is not PlannedRootLocation or type(location.offset) is not int:return None
-            offset=-layout.remap(-location.offset)
-            if not -layout.new_size<=offset<=-8:return None
-            if offset==location.offset:locations.append(location)
-            else:
-                locations.append(PlannedRootLocation(offset,location.owned));changed=True
-        for reload in record.reloads:
-            if (type(reload) is not PlannedManagedReload or type(reload.source_offset) is not int
-                    or type(reload.destination_offset) is not int):return None
-            source=-layout.remap(-reload.source_offset)
-            destination=-layout.remap(-reload.destination_offset)
-            if not (-layout.new_size<=source<=-8 and -layout.new_size<=destination<=-8):return None
-            if source==reload.source_offset and destination==reload.destination_offset:reloads.append(reload)
-            else:
-                reloads.append(PlannedManagedReload(source,destination,reload.derived_offset));changed=True
-        records.append(replace(record,locations=tuple(locations),reloads=tuple(reloads)) if changed else record)
+        location_result = _remap_location_group(layout, record.locations, location_groups, location_elements, memoize)
+        if location_result is None:return None
+        reload_result = _remap_reload_group(layout, record.reloads, reload_groups, reload_elements, memoize)
+        if reload_result is None:return None
+        locations, locations_changed = location_result
+        reloads, reloads_changed = reload_result
+        records.append(replace(record, locations=locations, reloads=reloads)
+                       if locations_changed or reloads_changed else record)
     frame_size=plan.frame_size-layout.original_size+layout.new_size
     if frame_size<0:return None
     return replace(plan,frame_size=frame_size,records=tuple(records))

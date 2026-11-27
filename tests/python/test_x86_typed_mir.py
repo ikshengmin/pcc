@@ -756,3 +756,76 @@ def test_unqualified_native_compiler_rejects_explicit_mir_before_cache(monkeypat
     # Rejected explicit native mode cannot poison module-global emitter state.
     monkeypatch.setenv("PCC_SELF_X86_TYPED_MIR", "0")
     assert x64.emit_x86_64_linux_asm(CALL_LOOP) == base
+
+def test_mir_plain_stackmap_remap_preserves_original_tuple_sharing():
+    from pcc.backend.self_backend_x86_mir_frame import X86MIRFrame, remap_plain_stack_map
+    _, plan = _prepare(CALL_LOOP)
+    # One physical span moves by eight bytes; the later root does not move.
+    layout = X86MIRFrame(64, [], [], [(0, 32, 8)], [], 48, True)
+    shared_locations = (PlannedRootLocation(-24, True), PlannedRootLocation(-40, False))
+    shared_reloads = (PlannedManagedReload(-24, -32, 8),)
+    distinct_locations = tuple([PlannedRootLocation(-24, True), PlannedRootLocation(-40, False)])
+    distinct_reloads = tuple([PlannedManagedReload(-24, -32, 8)])
+    assert distinct_locations == shared_locations and distinct_locations is not shared_locations
+    assert distinct_reloads == shared_reloads and distinct_reloads is not shared_reloads
+    a = PlannedSafepoint(1, ".La", 0, shared_locations, 3, "", 11, shared_reloads)
+    b = PlannedSafepoint(2, ".Lb", 1, shared_locations, 4, "err", 12, shared_reloads)
+    c = PlannedSafepoint(3, ".Lc", 0, distinct_locations, 5, "", 13, distinct_reloads)
+    d = PlannedSafepoint(4, ".Ld", 0, (shared_locations[1],), 6, "", 14, ())
+    # Different source tuple identities can still share one exact element.
+    e = PlannedSafepoint(5, ".Le", 0, tuple([shared_locations[0]]), 7, "", 15,
+                         tuple([shared_reloads[0]]))
+    original = replace(plan, frame_size=80, records=(a, b, c, d, e))
+    remapped = remap_plain_stack_map(original, layout)
+    assert remapped is not None and remapped.frame_size == 64
+    aa, bb, cc, dd, ee = remapped.records
+    expected_locations = (PlannedRootLocation(-16, True), PlannedRootLocation(-40, False))
+    expected_reloads = (PlannedManagedReload(-16, -24, 8),)
+    assert aa == replace(a, locations=expected_locations, reloads=expected_reloads)
+    assert bb == replace(b, locations=expected_locations, reloads=expected_reloads)
+    assert cc == replace(c, locations=expected_locations, reloads=expected_reloads)
+    # Preserve only the input plan's exact immutable sharing, never merge
+    # distinct-but-equal tuples or mutate their old offsets.
+    assert aa.locations is bb.locations and aa.reloads is bb.reloads
+    assert aa.locations is not cc.locations and aa.reloads is not cc.reloads
+    assert aa.locations[0] is not cc.locations[0] and aa.reloads[0] is not cc.reloads[0]
+    assert ee.locations is not aa.locations and ee.reloads is not aa.reloads
+    assert ee.locations[0] is aa.locations[0] and ee.reloads[0] is aa.reloads[0]
+    assert aa.locations[1] is shared_locations[1]
+    assert dd is d
+    assert original.records == (a, b, c, d, e)
+    assert a.locations[0].offset == -24 and a.reloads[0].destination_offset == -32
+    malformed = replace(c, locations=(object(),))
+    assert remap_plain_stack_map(replace(original, records=(a, b, malformed)), layout) is None
+
+def test_mir_plain_stackmap_custom_layout_observes_uncached_remaps(monkeypatch):
+    from pcc.backend.self_backend_x86_mir_frame import X86MIRFrame, remap_plain_stack_map
+    class ObservedLayout(X86MIRFrame):
+        def __init__(self):
+            super().__init__(64, [], [], [(0, 32, 8)], [], 48, True)
+            self.calls = []
+        def remap(self, offset):
+            self.calls.append(offset)
+            return super().remap(offset)
+    _, plan = _prepare(CALL_LOOP)
+    locations = (PlannedRootLocation(-24, True),)
+    reloads = (PlannedManagedReload(-24, -32, 8),)
+    a = PlannedSafepoint(1, ".La", 0, locations, reloads=reloads)
+    b = PlannedSafepoint(2, ".Lb", 0, locations, reloads=reloads)
+    layout = ObservedLayout()
+    remapped = remap_plain_stack_map(replace(plan, frame_size=80, records=(a, b)), layout)
+    assert remapped is not None
+    assert layout.calls == [24, 24, 32, 24, 24, 32]
+    assert remapped.records[0].locations is not remapped.records[1].locations
+    assert remapped.records[0].reloads is not remapped.records[1].reloads
+
+    original_remap = X86MIRFrame.remap
+    patched_calls = []
+    def patched_remap(self, offset):
+        patched_calls.append(offset)
+        return original_remap(self, offset)
+    monkeypatch.setattr(X86MIRFrame, "remap", patched_remap)
+    exact_layout = X86MIRFrame(64, [], [], [(0, 32, 8)], [], 48, True)
+    patched = remap_plain_stack_map(replace(plan, frame_size=80, records=(a, b)), exact_layout)
+    assert patched is not None and patched_calls == [24, 24, 32, 24, 24, 32]
+    assert patched.records[0].locations is not patched.records[1].locations

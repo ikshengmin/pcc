@@ -4113,12 +4113,45 @@ in the relevant section or issue and removes the entry.
        strict closed-world capture629 modules, seven changed production
        modules all zero fallback/no libpython, 82 focused tests pass;
        broader151 pass and identical17 preexisting baseline failures.
-       No dedicated CI dispatch. Next independently reduce large
-       compilation cost (actual giant module/worker phases, sparse live
-       planes/streamed emission, exact same output), and qualify native
-       allocator execution before enabling pcc1; do not change defaults
-       or resource limits. The independent generator-suffix IR owner
-       is separately claimed.
+       No dedicated CI dispatch. 2026-11-27 scoped large compile
+       follow-up: preserve the original immutable stackmap location/
+       reload tuple and element identity sharing during compact MIR
+       frame remap (private exact layout only, per-function identity
+       checks retaining sources, no distinct-equal conflation or
+       global cache; subclass/patched layout remains uncached).
+       Actual giant same-IR worker on source81b2: OFF15.35 CPU/
+       16.08s wall, peak286.3MB; old MIR70.64s/979.4MB. Its original
+       plan has21175 records/4996907 location refs, only1316 tuple
+       identities and1109 objects. Naive remap destroys sharing:
+       13.414 CPU seconds and current RSS289.3->929.6MB. New
+       full giant worker53.62s/334.4MB (-24.09% wall/-65.86%
+       peak, one-off), remap0.262s, lowering4.866s vs7.719;
+       owned PCO byte-identical to prior qualified MIR output.
+       Actual frozen plan/layout owner five alternating triples:
+       15/15 exact semantic digest (all21175 records/4996907
+       locations/4721 reloads, original identity roundtrip checked),
+       CPU15.5067->0.1823s/control15.0253, norm-98.787%5/5;
+       peak707044->43488KiB/control707040, norm-93.849%5/5;
+       wall norm-98.794%5/5, all beyond unchanged controls.
+       Full8 same frozen actual runtime IR/source receipts (1150
+       functions, old MIR vs new, both compact ON) five triples:
+       all15 exact previous ELF hashes; CPU/wall norm-1.25/-1.29%
+       5/5 within control drift (noninferior), RSS52244->52012KiB,
+       norm-0.436%5/5 beyond max0.0842%. All58 static assembly/object
+       and admission exact; 19 focused MIR tests incl identity,
+       offsets/reloads, malformed/custom observers, native root
+       semantics; strict closed-world629 frame module35 functions,
+       zero fallback/no libpython. No new runtime QPS claim from
+       identical bytes, no whole Stage1/2 claim; #647 snapshot
+       precedes this source. Defaults and resource caps unchanged.
+       Next exact large MIR clobber-union owner: actual giant
+       20999 clobber ops (one mask967),3102493 repeated allowed
+       register updates vs16105 union IDs; allocation36.246s
+       remains dominant (CSR fill/dedup15.142s). Preserve exact
+       allowed masks/ranking/colors and PCO; separate unit, then
+       sparse live planes/streamed emission and native allocator
+       qualification before pcc1 mode. Independent generator-suffix
+       IR owner separately claimed.
        (1) ARM typed
        prepare memory: quantify retained prior run history and
        private CFG owner retirement with public snapshot/callback
@@ -4898,7 +4931,6 @@ in the relevant section or issue and removes the entry.
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
    - Shared generator save-suffix prefix spine, exact slot/ownership/state cutoffs (generator_lowering.py + test_generator_shared_frame_save.py; no backend overlap): Codex, Linux, 2026-11-27T03:43Z, area runtime-codegen
-   - Post-merge x64 MIR large compilation cost, actual giant same-IR phase attribution and exact sparse live/interference event optimization (self_backend_x86_mir.py/emit/frame, no generator_lowering overlap; preserve exact PCO/runtime wins and unchanged caps/defaults): Codex, Linux, 2026-11-27T03:55Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
