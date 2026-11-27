@@ -63,6 +63,55 @@ def _exit_42_object() -> ElfObject:
     )
 
 
+@pytest.mark.parametrize("compact", [False, True])
+def test_local_file_symbol_metadata_preserves_executable_and_indices(compact):
+    source = _exit_42_object()
+    # ELF STT_FILE is ABI value 4. Keep two independent file-owner rows
+    # including repeated source names, just as a combined relocatable may.
+    files = (ElfSymbol("unit.c", elf.SHN_ABS, 0, 0, elf.STB_LOCAL, 4),) * 2
+    text = source.sections[0]
+    converted = ElfObject(
+        (ElfSection(text.name, text.type, text.flags, text.align, text.data,
+                    relocations=(ElfRelocation(1, 4, R_X86_64_PLT32, -4),)),),
+        (source.symbols[0], *files, *source.symbols[1:]),
+    )
+    encoded = emit_relocatable(converted)
+    parsed = parse_relocatable(encoded, compact_relocations=compact)
+    assert parsed.symbols == converted.symbols
+    assert tuple(parsed.sections[0].relocations) == converted.sections[0].relocations
+    assert emit_relocatable(parsed) == encoded
+    assert elf._object_symbol_sets(parsed) == elf._object_symbol_sets(source)
+    assert link_static_executable([parsed]) == link_static_executable([source])
+
+
+@pytest.mark.parametrize("machine, relocation_type", [
+    (elf.EM_X86_64, R_X86_64_64), (elf.EM_AARCH64, 257),  # R_AARCH64_ABS64
+])
+def test_file_symbol_is_local_absolute_metadata_only(machine, relocation_type):
+    section = ElfSection(".data", SHT_PROGBITS, SHF_ALLOC | SHF_WRITE, 8, bytes(8))
+    file_symbol = ElfSymbol("fixture.c", elf.SHN_ABS, 0, 0, elf.STB_LOCAL, 4)
+    model = ElfObject((section,), (ElfSymbol.null(), file_symbol), machine)
+    encoded = emit_relocatable(model)
+    for compact in (False, True):
+        parsed = parse_relocatable(encoded, compact_relocations=compact)
+        assert parsed.symbols == model.symbols
+        assert emit_relocatable(parsed) == encoded
+        assert elf._object_symbol_sets(parsed) == (frozenset(), frozenset())
+
+    from dataclasses import replace
+    for change in (
+        {"binding": elf.STB_GLOBAL}, {"binding": elf.STB_WEAK},
+        {"section_index": elf.SHN_UNDEF}, {"section_index": 1},
+        {"value": 1}, {"size": 1}, {"visibility": elf.STV_HIDDEN},
+        {"name": ""},
+    ):
+        with pytest.raises(ElfError, match="file symbol"):
+            ElfObject((section,), (ElfSymbol.null(), replace(file_symbol, **change)), machine)
+    with pytest.raises(ElfError, match="relocation.*file symbol"):
+        ElfObject((replace(section, relocations=(ElfRelocation(0, 1, relocation_type, 0),)),),
+                  model.symbols, machine)
+
+
 def _ar_member(name: str, payload: bytes) -> bytes:
     encoded_name = (name + "/").encode("ascii")
     assert len(encoded_name) <= 16

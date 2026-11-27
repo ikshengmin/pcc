@@ -91,6 +91,7 @@ STT_NOTYPE = 0
 STT_OBJECT = 1
 STT_FUNC = 2
 STT_SECTION = 3
+STT_FILE = 4
 STT_TLS = 6
 
 STV_DEFAULT = 0
@@ -367,15 +368,27 @@ def _validate_object(obj: ElfObject) -> None:
                     classification_candidate[0] = None
                 elif relocation.type in (283, 282, 311, 312, 541, 542):
                     classification_candidate[0] = False
+    file_symbol_indices = None
     for index, symbol in enumerate(obj.symbols):
         if index == 0:
             continue
         if symbol.binding not in (STB_LOCAL, STB_GLOBAL, STB_WEAK):
             raise ElfError(f"symbol {symbol.name!r} has unsupported binding")
-        if symbol.type not in (STT_NOTYPE, STT_OBJECT, STT_FUNC, STT_SECTION, STT_TLS):
+        if symbol.type not in (STT_NOTYPE, STT_OBJECT, STT_FUNC, STT_SECTION, STT_FILE, STT_TLS):
             raise ElfError(f"symbol {symbol.name!r} has unsupported type")
         if symbol.visibility not in (STV_DEFAULT, STV_HIDDEN):
             raise ElfError(f"symbol {symbol.name!r} has unsupported visibility")
+        if symbol.type == STT_FILE:
+            # A source-file symbol is local provenance, not an address or
+            # an externally bindable identity. Keep its table index intact.
+            if (symbol.binding != STB_LOCAL or symbol.section_index != SHN_ABS
+                    or symbol.value != 0 or symbol.size != 0
+                    or symbol.visibility != STV_DEFAULT
+                    or not symbol.name or "\0" in symbol.name):
+                raise ElfError(f"invalid local absolute file symbol {symbol.name!r}")
+            if file_symbol_indices is None:
+                file_symbol_indices = set()
+            file_symbol_indices.add(index)
         if symbol.binding == STB_LOCAL:
             if saw_global:
                 raise ElfError("local symbols must precede global symbols")
@@ -395,6 +408,15 @@ def _validate_object(obj: ElfObject) -> None:
                 raise ElfError(f"symbol {symbol.name!r} is outside its section")
             if symbol.type == STT_TLS and not (section.flags & SHF_TLS):
                 raise ElfError(f"TLS symbol {symbol.name!r} is outside a TLS section")
+
+    # The ordinary owned object route emits no FILE symbols; do not add a
+    # second relocation walk there. Reference inputs which do name files
+    # must never resolve them as ordinary local absolute addresses.
+    if file_symbol_indices is not None:
+        for section in obj.sections:
+            for relocation in section.relocations:
+                if relocation.symbol_index in file_symbol_indices:
+                    raise ElfError(f"section {section.name!r} relocation targets file symbol metadata")
 
     for section in obj.sections:
         if section.name in (".eh_frame", ".debug_frame", ".pcc_stackmaps"):
