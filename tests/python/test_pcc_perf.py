@@ -846,3 +846,136 @@ def test_linked_worktree_uses_the_main_checkout_environment(tmp_path):
         assert PERF.main_checkout().resolve() == main.resolve()
     finally:
         PERF.REPO_ROOT = original
+
+
+def test_callgrind_reads_full_ir_without_summing_inclusive_calls():
+    # Callgrind's summary is whole-run cost; totals covers represented
+    # self costs and may be smaller. The call edge contains inclusive cost.
+    profile = """# callgrind format
+version: 1
+part: 1
+positions: line
+events: Dr Ir Dw
+summary: 40 1820000 20
+fn=(1) caller
+2 2 100 1
+cfn=(2) callee
+calls=1 5
+2 20 800 3
+fn=(2)
+5 10 500 9
+totals: 12 600 10
+"""
+    assert PERF.parse_callgrind_counted_run(profile) == (1820000, None)
+    assert PERF.parse_callgrind_counted_run(iter(profile.splitlines())) == (1820000, None)
+
+
+@pytest.mark.parametrize("profile", [
+    "events: Dr\nsummary: 1\n",
+    "events: Ir Ir\nsummary: 1 2\n",
+    "events: Ir\n",
+    "events: Ir\nsummary: <not counted>\n",
+    "events: Ir\nsummary: -1\n",
+    "events: Ir\nsummary: 0\n",
+    "events: Dr Ir\nsummary: 100\n",
+    "events: Ir\nsummary: 1\ntotals: 2\n",
+    "events: Ir\nsummary: 1\nsummary: 1\n",
+    "events: Ir\nsummary: 1\ntotals: 1\ntotals: 1\n",
+    "part: 1\nevents: Ir\nsummary: 1\npart: 2\nevents: Ir\nsummary: 2\n",
+])
+def test_callgrind_invalid_or_ambiguous_counts_fail_closed(profile):
+    with pytest.raises(SystemExit, match="Callgrind"):
+        PERF.parse_callgrind_counted_run(profile)
+
+
+def test_callgrind_instruction_difference_never_estimates_cycles_or_ipc(capsys):
+    first = PERF.per_request((1_000_000, None), (1_800_000, None), 10, 50)
+    second = PERF.per_request((1_000_000, None), (1_792_000, None), 10, 50)
+    assert first == (1000.0, None) and second == (990.0, None)
+    rows = PERF.instruction_rows({"base": [first], "next": [second]}, counter_backend="callgrind")
+    assert rows[0]["instructions"] == 1000
+    assert rows[0]["cycles"] is None and rows[0]["ipc"] is None
+    assert rows[0]["cycle_runs"] is None and rows[0]["cycle_spread"] is None
+    assert rows[1]["instruction_change"] == pytest.approx(-1)
+    assert "cycle_change" not in rows[1]
+    PERF.print_instructions(rows)
+    text = capsys.readouterr().out
+    assert "Callgrind Ir" in text and "cycles unavailable" in text and "IPC unavailable" in text
+    with pytest.raises(SystemExit, match="counter"):
+        PERF.per_request((1_000_000, None), (1_800_000, 3), 10, 50)
+    with pytest.raises(SystemExit, match="counter"):
+        PERF.per_request((1_800_000, None), (1_000_000, None), 10, 50)
+
+
+def test_callgrind_uses_one_all_thread_profile_and_exact_completed_work(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(PERF.sys, "platform", "linux")
+    monkeypatch.setattr(PERF.shutil, "which", lambda name: "/test/valgrind" if name == "valgrind" else None)
+    monkeypatch.setattr(PERF, "_sealed_runtime_env", lambda binary, collector: {"PCC_GC_BACKEND": "0"})
+    flags = []
+    summary = {"requests": 200, "concurrency": 20, "rounds": 10, "warmup_requests": 40}
+    create_second = False
+    def fake_run(command, **kwargs):
+        flags[:] = command
+        path = next(x.partition("=")[2] for x in command if x.startswith("--callgrind-out-file="))
+        assert "%p" in path
+        Path(path.replace("%p", "1234")).write_text("events: Ir\nsummary: 1800000\ntotals: 1800000\n")
+        if create_second:
+            Path(path.replace("%p", "4321")).write_text("events: Ir\nsummary: 1\n")
+        return SimpleNamespace(returncode=0, stdout=json.dumps(summary), stderr="valgrind diagnostic")
+    monkeypatch.setattr(PERF.subprocess, "run", fake_run)
+    binary = tmp_path / "native_stats"
+    assert PERF.counted_run(binary, 10, 1, counter_backend="callgrind") == (1800000, None)
+    assert flags[0] == "/test/valgrind"
+    assert {"--tool=callgrind", "--separate-threads=no", "--trace-children=no",
+            "--collect-atstart=yes", "--instr-atstart=yes", "--cache-sim=no",
+            "--branch-sim=no"} <= set(flags)
+    assert flags[-6:] == [str(binary), "20", "0", "10", "--summary", "1"]
+    assert not Path(next(x.partition("=")[2] for x in flags if x.startswith("--callgrind-out-file="))).parent.exists()
+    summary["requests"] = 199
+    with pytest.raises(SystemExit, match="handler.*requests"):
+        PERF.counted_run(binary, 10, 1, counter_backend="callgrind")
+    summary["requests"] = 200
+    summary["warmup_requests"] = 20
+    with pytest.raises(SystemExit, match="handler.*requests"):
+        PERF.counted_run(binary, 10, 1, counter_backend="callgrind")
+    summary["warmup_requests"] = 40
+    create_second = True
+    with pytest.raises(SystemExit, match="Callgrind.*one"):
+        PERF.counted_run(binary, 10, 1, counter_backend="callgrind")
+
+
+def test_instruction_counter_backend_availability_is_explicit(monkeypatch, tmp_path):
+    monkeypatch.setattr(PERF.sys, "platform", "linux")
+    monkeypatch.setattr(PERF.shutil, "which", lambda name: None)
+    with pytest.raises(SystemExit, match="valgrind"):
+        PERF.counted_run(tmp_path / "native_stats", 10, 1, counter_backend="callgrind")
+    with pytest.raises(SystemExit, match="perf"):
+        PERF.counted_run(tmp_path / "native_stats", 10, 1)
+    monkeypatch.setattr(PERF.sys, "platform", "darwin")
+    with pytest.raises(SystemExit, match="Linux"):
+        PERF.counted_run(tmp_path / "native_stats", 10, 1, counter_backend="callgrind")
+
+
+def test_instr_cli_explicit_callgrind_and_hardware_defaults(monkeypatch, capsys):
+    monkeypatch.setattr(PERF.sys, "platform", "linux")
+    monkeypatch.setattr(PERF.shutil, "which", lambda name: "/test/" + name)
+    calls = []
+    def fake_measure(names, repeats, short_rounds, long_rounds, workers, *, counter_backend):
+        calls.append((names, repeats, short_rounds, long_rounds, workers, counter_backend))
+        cycles = None if counter_backend == "callgrind" else 2_000.0
+        return {name: [(1_000.0, cycles)] for name in names}
+    monkeypatch.setattr(PERF, "measure_instructions", fake_measure)
+    assert PERF.main(["instr", "base", "control", "--counter-backend", "callgrind",
+                      "--repeats", "5"]) == 0
+    assert calls[-1] == (["base", "control"], 5, 10, 50, 1, "callgrind")
+    text = capsys.readouterr().out
+    assert "Callgrind Ir" in text and "cycles unavailable" in text
+    assert PERF.main(["instr", "base"]) == 0
+    assert calls[-1][-1] == "perf"
+    assert "cycles per request" in capsys.readouterr().out
+    monkeypatch.setattr(PERF.sys, "platform", "darwin")
+    assert PERF.main(["instr", "base"]) == 0
+    assert calls[-1][-1] == "darwin"
+    assert "cycles per request" in capsys.readouterr().out

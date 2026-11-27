@@ -12,6 +12,8 @@
     instr BASE ARM...   instructions and cycles one handler request executes
                         (Darwin /usr/bin/time -l, Linux perf stat), the
                         difference of two run lengths, against the first arm;
+                        Linux --counter-backend callgrind measures simulated
+                        user instruction reads (Ir), not cycles or IPC;
                         a control arm shows how far each moves unchanged
     table NAME          one and four workers, against the recorded asyncio
                         figure for the same worker count
@@ -1240,69 +1242,184 @@ def parse_counted_run(stderr: str, darwin: bool) -> tuple[int, int]:
     return int(instructions.group(1)), int(cycles.group(1))
 
 
-def counted_run(binary: Path, rounds: int, workers: int) -> tuple[int, int]:
-    """One handler run under the platform's counters."""
+def parse_callgrind_counted_run(profile) -> tuple[int, None]:
+    """Full-run Callgrind Ir, not hardware-retired instructions.
+
+    The format specifies summary as the whole profile cost. Optional totals
+    represent recorded exclusive/self costs and may be smaller. Never sum
+    ordinary and call-edge costs: edges include inclusive callee costs.
+    We request a single process, combined threads and one final dump.
+    """
+    lines = profile.splitlines() if isinstance(profile, str) else profile
+    fields = {}
+    for line in lines:
+        key, sep, value = line.strip().partition(":")
+        if sep and key in ("events", "summary", "totals", "part"):
+            if key in fields:
+                raise SystemExit("Callgrind profile has ambiguous " + key)
+            fields[key] = value.split()
+    events = fields.get("events", [])
+    if len(set(events)) != len(events) or events.count("Ir") != 1:
+        raise SystemExit("Callgrind profile has no unique Ir event")
+    if "summary" not in fields:
+        raise SystemExit("Callgrind profile has no whole-run summary")
+    def costs(name):
+        values = fields[name]
+        if (len(values) != len(events)
+                or any(re.fullmatch(r"[0-9]+", value) is None for value in values)):
+            raise SystemExit("Callgrind profile has invalid " + name + " costs")
+        return [int(value) for value in values]
+    summary = costs("summary")
+    if "totals" in fields and any(a > b for a, b in zip(costs("totals"), summary)):
+        raise SystemExit("Callgrind profile totals exceed its whole-run summary")
+    ir = summary[events.index("Ir")]
+    if ir <= 0:
+        raise SystemExit("Callgrind profile has no positive Ir count")
+    return ir, None
+
+
+def _counter_backend(requested: str) -> tuple[str, str]:
+    """Auto is the original platform default; no silent backend fallback."""
+    linux = sys.platform.startswith("linux")
     darwin = sys.platform == "darwin"
-    if darwin:
-        prefix = ["/usr/bin/time", "-l"]
-    elif sys.platform.startswith("linux") and shutil.which("perf"):
-        prefix = ["perf", "stat", "-x,", "-e", "instructions,cycles"]
-    else:
-        raise SystemExit("instr needs /usr/bin/time -l (Darwin) or perf (Linux)")
+    backend = requested
+    if backend == "auto":
+        backend = "darwin" if darwin else "perf" if linux else ""
+    if backend == "darwin" and darwin:
+        return backend, "/usr/bin/time"
+    if backend in ("perf", "callgrind"):
+        if not linux:
+            raise SystemExit(backend + " instruction counting requires Linux")
+        tool = "perf" if backend == "perf" else "valgrind"
+        executable = shutil.which(tool)
+        if executable is None:
+            raise SystemExit("instr " + backend + " backend needs " + tool + " on PATH")
+        return backend, executable
+    raise SystemExit("instr needs /usr/bin/time -l (Darwin) or perf (Linux); "
+                     "Callgrind is an explicit Linux alternative")
+
+
+def _validate_callgrind_handler(stdout: str, rounds: int) -> None:
+    """The differential must represent the same completed benchmark work."""
+    try:
+        data = json.loads(stdout)
+    except ValueError as error:
+        raise SystemExit("Callgrind handler did not report completed requests") from error
+    expected = {
+        "concurrency": INSTR_CONCURRENCY, "rounds": rounds,
+        "requests": rounds * INSTR_CONCURRENCY,
+        # native_stats runs exactly two warm-up batches before timed work.
+        "warmup_requests": 2 * INSTR_CONCURRENCY,
+    }
+    if (not isinstance(data, dict)
+            or any(type(data.get(name)) is not int or data[name] != value
+                   for name, value in expected.items())):
+        raise SystemExit("Callgrind handler did not report exact timed and warm-up requests")
+
+
+def counted_run(binary: Path, rounds: int, workers: int, *,
+                counter_backend: str = "auto") -> tuple[int, int | None]:
+    """One handler run under explicitly identified counters."""
+    backend, executable = _counter_backend(counter_backend)
+    argv = [str(binary), str(INSTR_CONCURRENCY), "0", str(rounds), "--summary", str(workers)]
+    if backend == "callgrind":
+        with tempfile.TemporaryDirectory(prefix="pcc-callgrind-") as directory:
+            # %p prevents accidental child-process/profile collisions. The
+            # handler creates threads, not subprocesses; multiple dumps or
+            # files cannot silently become a partial or duplicated count.
+            profile_pattern = str(Path(directory) / "callgrind.out.%p")
+            prefix = [
+                executable, "--tool=callgrind", "--instr-atstart=yes",
+                "--collect-atstart=yes", "--cache-sim=no", "--branch-sim=no",
+                "--separate-threads=no", "--trace-children=no",
+                "--callgrind-out-file=" + profile_pattern,
+            ]
+            process = subprocess.run(
+                prefix + argv, capture_output=True, text=True, timeout=600,
+                env=_sealed_runtime_env(binary, 0),
+            )
+            if process.returncode != 0:
+                raise SystemExit(f"{binary} failed under Callgrind: {process.stderr[-400:]}")
+            _validate_callgrind_handler(process.stdout, rounds)
+            profiles = list(Path(directory).glob("callgrind.out.*"))
+            if (len(profiles) != 1 or not profiles[0].is_file()
+                    or re.fullmatch(r"callgrind\.out\.[0-9]+", profiles[0].name) is None):
+                raise SystemExit("Callgrind did not produce exactly one complete process profile")
+            with profiles[0].open(encoding="utf-8", errors="replace") as profile:
+                return parse_callgrind_counted_run(profile)
+    prefix = ([executable, "-l"] if backend == "darwin"
+              else [executable, "stat", "-x,", "-e", "instructions,cycles"])
     process = subprocess.run(
-        prefix + [str(binary), str(INSTR_CONCURRENCY), "0", str(rounds), "--summary", str(workers)],
-        capture_output=True, text=True, timeout=600, env=_sealed_runtime_env(binary, 0),
+        prefix + argv, capture_output=True, text=True, timeout=600,
+        env=_sealed_runtime_env(binary, 0),
     )
     if process.returncode != 0:
         raise SystemExit(f"{binary} failed under the counters: {process.stderr[-400:]}")
-    return parse_counted_run(process.stderr, darwin)
+    return parse_counted_run(process.stderr, backend == "darwin")
 
 
-def per_request(short: tuple[int, int], long: tuple[int, int],
-                short_rounds: int, long_rounds: int) -> tuple[float, float]:
-    """Instructions and cycles of one request: the difference of two run
-    lengths, so start-up and warm-up cancel."""
+def per_request(short: tuple[int, int | None], long: tuple[int, int | None],
+                short_rounds: int, long_rounds: int) -> tuple[float, float | None]:
+    """Difference of completed run lengths; fixed start-up/warm-up cancel."""
     requests = (long_rounds - short_rounds) * INSTR_CONCURRENCY
-    return (long[0] - short[0]) / requests, (long[1] - short[1]) / requests
+    if requests <= 0 or long[0] <= short[0] or (short[1] is None) != (long[1] is None):
+        raise SystemExit("invalid instruction counter differential")
+    cycles = None
+    if short[1] is not None:
+        if long[1] <= short[1]:
+            raise SystemExit("invalid cycle counter differential")
+        cycles = (long[1] - short[1]) / requests
+    return (long[0] - short[0]) / requests, cycles
 
 
 def measure_instructions(names: list[str], repeats: int, short_rounds: int,
-                         long_rounds: int, workers: int) -> dict[str, list]:
-    """Per-request instructions and cycles of each arm, the arms alternating."""
+                         long_rounds: int, workers: int, *,
+                         counter_backend: str = "auto") -> dict[str, list]:
+    """Per-request instructions (and cycles when available), alternating arms."""
+    backend, _executable = _counter_backend(counter_backend)
     results: dict[str, list] = {name: [] for name in names}
     for _ in range(repeats):
         for name in names:
             binary = binary_of(name)
-            short = counted_run(binary, short_rounds, workers)
-            long = counted_run(binary, long_rounds, workers)
+            short = counted_run(binary, short_rounds, workers, counter_backend=backend)
+            long = counted_run(binary, long_rounds, workers, counter_backend=backend)
             results[name].append(per_request(short, long, short_rounds, long_rounds))
     return results
 
 
-def instruction_rows(results: dict[str, list]) -> list[dict]:
-    """Medians, the spread of the runs, and the change against the first arm.
-
-    The number of instructions a request executes hardly moves with the
-    machine's load; its cycles do. A control arm (a second build of the first
-    arm) shows how far each moves without a change."""
+def instruction_rows(results: dict[str, list], *,
+                     counter_backend: str = "hardware") -> list[dict]:
+    """Medians, spreads, change from base; unavailable metrics stay absent."""
     rows = []
     base = None
     for name, runs in results.items():
+        if not runs or any(run[0] <= 0 for run in runs):
+            raise SystemExit("invalid instruction counter runs")
+        has_cycles = runs[0][1] is not None
+        if any((run[1] is not None) != has_cycles for run in runs):
+            raise SystemExit("mixed instruction counter availability")
+        if base is not None and (base["cycles"] is not None) != has_cycles:
+            raise SystemExit("mixed instruction counter availability across arms")
         instructions = statistics.median(run[0] for run in runs)
-        cycles = statistics.median(run[1] for run in runs)
         spread = 100.0 * (max(run[0] for run in runs) - min(run[0] for run in runs)) / instructions
-        # Cycles move with load and with the core a run lands on; their own
-        # spread says whether a cycle change is outside the noise.
-        cycle_spread = 100.0 * (max(run[1] for run in runs) - min(run[1] for run in runs)) / cycles
-        row = {"arm": name, "instructions": instructions, "cycles": cycles,
+        cycles = cycle_spread = cycle_runs = ipc = None
+        if has_cycles:
+            if any(run[1] <= 0 for run in runs):
+                raise SystemExit("invalid cycle counter runs")
+            cycles = statistics.median(run[1] for run in runs)
+            cycle_spread = 100.0 * (max(run[1] for run in runs) - min(run[1] for run in runs)) / cycles
+            cycle_runs = [round(run[1]) for run in runs]
+            ipc = instructions / cycles
+        row = {"arm": name, "counter_backend": counter_backend,
+               "instructions": instructions, "cycles": cycles, "ipc": ipc,
                "instruction_spread": spread, "cycle_spread": cycle_spread,
-               "runs": [round(run[0]) for run in runs],
-               "cycle_runs": [round(run[1]) for run in runs]}
+               "runs": [round(run[0]) for run in runs], "cycle_runs": cycle_runs}
         if base is None:
             base = row
         else:
             row["instruction_change"] = 100.0 * (instructions / base["instructions"] - 1.0)
-            row["cycle_change"] = 100.0 * (cycles / base["cycles"] - 1.0)
+            if cycles is not None:
+                row["cycle_change"] = 100.0 * (cycles / base["cycles"] - 1.0)
         rows.append(row)
     return rows
 
@@ -1310,13 +1427,19 @@ def instruction_rows(results: dict[str, list]) -> list[dict]:
 def print_instructions(rows: list[dict]) -> None:
     for row in rows:
         change = ""
+        label = ("Callgrind Ir (simulated instruction reads)"
+                 if row.get("counter_backend") == "callgrind" else "instructions")
         if "instruction_change" in row:
-            change = (f"  {row['instruction_change']:+.2f}% instructions"
-                      f"  {row['cycle_change']:+.2f}% cycles")
-        print(f"{row['arm']:14s} {row['instructions']:10.0f} instructions"
+            change = f"  {row['instruction_change']:+.2f}% {label}"
+            if "cycle_change" in row:
+                change += f"  {row['cycle_change']:+.2f}% cycles"
+        cycle_text = " cycles unavailable; IPC unavailable"
+        if row["cycles"] is not None:
+            cycle_text = (f" {row['cycles']:10.0f} cycles per request"
+                          f" (runs within {row['cycle_spread']:.2f}%)")
+        print(f"{row['arm']:14s} {row['instructions']:10.0f} {label}"
               f" (runs within {row['instruction_spread']:.2f}%)"
-              f" {row['cycles']:10.0f} cycles per request"
-              f" (runs within {row['cycle_spread']:.2f}%){change}")
+              f"{cycle_text}{change}")
 
 
 def load_note(load: float) -> str:
@@ -1998,6 +2121,9 @@ def main(argv: list[str] | None = None) -> int:
     instr.add_argument("--short-rounds", type=int, default=10)
     instr.add_argument("--long-rounds", type=int, default=50)
     instr.add_argument("--workers", type=int, default=1)
+    instr.add_argument("--counter-backend", choices=("auto", "darwin", "perf", "callgrind"),
+                       default="auto", help="auto preserves platform hardware counters; "
+                       "callgrind is Linux simulated user Ir only (cycles/IPC unavailable)")
 
     table = commands.add_parser("table")
     table.add_argument("name")
@@ -2120,11 +2246,15 @@ def main(argv: list[str] | None = None) -> int:
         append_ledger(rows)
         return 0
     if args.command == "instr":
-        if args.long_rounds <= args.short_rounds:
-            raise SystemExit("--long-rounds must exceed --short-rounds")
+        if args.short_rounds < 0 or args.long_rounds <= args.short_rounds:
+            raise SystemExit("--long-rounds must exceed nonnegative --short-rounds")
+        if args.repeats <= 0 or args.workers <= 0:
+            raise SystemExit("--repeats and --workers must be positive")
+        backend, _executable = _counter_backend(args.counter_backend)
         print(load_note(os.getloadavg()[0]))
         rows = instruction_rows(measure_instructions(
-            args.names, args.repeats, args.short_rounds, args.long_rounds, args.workers))
+            args.names, args.repeats, args.short_rounds, args.long_rounds, args.workers,
+            counter_backend=backend), counter_backend=backend)
         print_instructions(rows)
         return 0
     if args.command == "table":
