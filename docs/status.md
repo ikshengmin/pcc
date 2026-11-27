@@ -5319,9 +5319,11 @@ in the relevant section or issue and removes the entry.
 
    - 2026-11-27 exact same-ELF 26-module post-release trim diagnostic: 3 outputs canonical f777240c; raw-release RSS157.12→113.87MiB, free raw43.06→0MiB, live requested34.42MiB unchanged, STW680 unchanged; whole diagnostic RSS235660→217512KiB (−7.7%), control234680, CPU6.275552→6.531293 (+4.08%), control6.274442. Artificial canonical dumps own peak; actual summary does not dump AST. HOLD, no production edit. A narrower summary-only threshold >=32MiB and >=1/4 mapped could avoid small batches; needs authentic actual worker five triples, not another unsupported local full build. No Stage2-wide claim, release.
 
+   - 2026-11-27 #650 actual class_gen frontend owner diagnostic: exact f2a870a4 clean full629 context, two guarded arms both rc0, identical CFG727/87118/335663, fallback0 and 90,228,084B serialized digest09438222. CPU21.213→19.870s (host drift, not speed), RSS640660→643796KiB, samples4388 frontend3240/capture1148. Scope correction: old context wrapper omitted hosted PCC_DIRECT_INDEXED_KERNEL_FUSE_USES=1, so capture attribution is FUSE0 and cannot infer hosted duplicate-use cost. IRBuilder.call 813 inclusive, args helper765, publish493; no removable fraction proven. HOLD no production or CI; receipts retained and claim released, no retry.
+
    Claims:
    - Runtime QPS through the self AArch64 backend toward LLVM parity: locate the LLVM step the self passes lack (pcc_perf reference ablations, scripts/pcc_perf.py), then implement it in pcc's own AArch64 passes (shrink-wrapping, allocation or selection, whichever the ablation ranks first); IR-pass changes are target-neutral and reach x64; avoids the typed x64 MIR files: Claude, macOS, 2026-11-27T06:46Z, area backend
-   - Stage1 common frontend generation actual class_gen owner attribution (read-only exact #650 f2a870a4 full629 closure, profiled _generate_initial_module no-text/direct indexed/inline OFF, exact serialized PIDX/fallback0 and unprofiled fresh-process control, >=15% frontend owner before candidate; no source/backend changes): Codex, Linux, 2026-11-27T12:12Z, area frontend-python
+
 
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
