@@ -11,6 +11,8 @@ __pcc_runtime_port__ = True
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     abi_constant,
+    atomic_load_i32,
+    atomic_store_i32,
     cstr,
     define_global_i32,
     define_global_ptr_null,
@@ -32,6 +34,8 @@ from pcc.unsafe import (
 )
 
 define_global_i32("pcc_debug_runtime_enabled_cache", -1)
+# See _publish_store_root_plain; 0 until both inputs are known off.
+define_global_i32("pcc_gc_store_root_plain", 0)
 define_global_ptr_null("pcc_debug_alloc_head")
 
 pcc_platform_getenv = extern("pcc_platform_getenv", (c_ptr,), c_ptr)
@@ -58,7 +62,34 @@ def _enabled() -> int:
     # The default production archive is single-threaded. A benign duplicate
     # environment query is also safe if an embedding host enters concurrently.
     store_i32(global_addr("pcc_debug_runtime_enabled_cache"), 0, value)
+    _publish_store_root_plain()
     return value
+
+
+@c_abi_export("pcc_debug_publish_store_root_plain")
+def _publish_store_root_plain() -> None:
+    """Publish whether ``pcc_gc_store_root`` needs no debug or log work.
+
+    1 exactly when the debug cache and the runtime-log fast state are both
+    known off (0): then a store whose old and new values need no count is a
+    plain slot write, which marked program code inlines (the AArch64 GC short
+    path). Both writers call this after publishing their flag; it repeats
+    until it reads what it stored, so a writer that saw the other flag's old
+    value does not leave a stale 1.
+    """
+    stable = 0
+    while stable == 0:
+        plain = 0
+        if (atomic_load_i32(global_addr("pcc_debug_runtime_enabled_cache"), 0, "seq_cst") == 0
+                and atomic_load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0, "seq_cst") == 0):
+            plain = 1
+        atomic_store_i32(global_addr("pcc_gc_store_root_plain"), 0, plain, "seq_cst")
+        again = 0
+        if (atomic_load_i32(global_addr("pcc_debug_runtime_enabled_cache"), 0, "seq_cst") == 0
+                and atomic_load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0, "seq_cst") == 0):
+            again = 1
+        if again == plain:
+            stable = 1
 
 
 @c_abi_export("pcc_debug_fatal_py")

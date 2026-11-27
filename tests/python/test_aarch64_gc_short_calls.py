@@ -398,7 +398,8 @@ def _check_return_pcs(data):
         if relocation["r_extern"] and relocation["r_type"] == 2:
             target = symbols[relocation["r_symbolnum"]]["name"]
             if target in ("_pcc_gc_load_ptr", "_pcc_gc_load_borrowed_ptr",
-                          "_pcc_gc_note_slot_write_barrier", "_pcc_gc_note_write_barrier"):
+                          "_pcc_gc_note_slot_write_barrier", "_pcc_gc_note_write_barrier",
+                          "_pcc_gc_store_root"):
                 assert relocation["r_address"] + 4 in return_pcs, target
 
 

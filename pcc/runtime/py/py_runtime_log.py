@@ -170,10 +170,37 @@ def _init_once() -> None:
             atomic_store_i32(
                 global_addr("pcc_diagnostics_runtime_log_fast_state"), 0, 1, "release"
             )
+        _publish_store_root_plain()
         atomic_store_i32(state, 0, 2, "release")
         return
     while atomic_load_i32(state, 0, "acquire") != 2:
         thread_safepoint()
+
+
+def _publish_store_root_plain() -> None:
+    """Publish whether ``pcc_gc_store_root`` needs no debug or log work
+    (the same function as freestanding_runtime_debug's).
+
+    1 exactly when the debug cache and the runtime-log fast state are both
+    known off (0): then a store whose old and new values need no count is a
+    plain slot write, which marked program code inlines (the AArch64 GC short
+    path). Both writers call this after publishing their flag; it repeats
+    until it reads what it stored, so a writer that saw the other flag's old
+    value does not leave a stale 1.
+    """
+    stable = 0
+    while stable == 0:
+        plain = 0
+        if (atomic_load_i32(global_addr("pcc_debug_runtime_enabled_cache"), 0, "seq_cst") == 0
+                and atomic_load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0, "seq_cst") == 0):
+            plain = 1
+        atomic_store_i32(global_addr("pcc_gc_store_root_plain"), 0, plain, "seq_cst")
+        again = 0
+        if (atomic_load_i32(global_addr("pcc_debug_runtime_enabled_cache"), 0, "seq_cst") == 0
+                and atomic_load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0, "seq_cst") == 0):
+            again = 1
+        if again == plain:
+            stable = 1
 
 
 def _category_mask(category: c_ptr) -> int:

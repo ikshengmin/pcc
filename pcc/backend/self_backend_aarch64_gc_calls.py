@@ -44,7 +44,9 @@ _FRAME_LEAVES = (
     "pcc_gc_frame_leave_local_mapped", "pcc_gc_frame_leave_lifo_local_mapped",
 )
 _BARRIERS = ("pcc_gc_note_slot_write_barrier", "pcc_gc_note_write_barrier")
-GC_SHORT_CALL_HELPERS = _LOADS + _FRAME_ENTERS + _FRAME_LEAVES + _BARRIERS
+# A root store whose old and new values need no count is a plain slot write.
+_STORES = ("pcc_gc_store_root",)
+GC_SHORT_CALL_HELPERS = _LOADS + _FRAME_ENTERS + _FRAME_LEAVES + _BARRIERS + _STORES
 # Frames of code that carries stack-map records. The precise stack walk roots
 # them on every collector, so their entries register nothing.
 _WALKED_FRAME_CALLS = (
@@ -98,7 +100,8 @@ def gc_short_call_lines(func, callee, label_serial, ret_kind, arg_kinds, module_
     load = callee in _LOADS
     frame = callee in _FRAME_ENTERS or callee in _FRAME_LEAVES
     barrier = callee in _BARRIERS
-    if not load and not frame and not barrier:
+    store = callee in _STORES
+    if not load and not frame and not barrier and not store:
         return None
     count = 2
     if callee in _FRAME_LEAVES:
@@ -113,6 +116,34 @@ def gc_short_call_lines(func, callee, label_serial, ret_kind, arg_kinds, module_
     prefix += ".gc.short." + str(label_serial)
     slow, done, empty = prefix + ".slow", prefix + ".done", prefix + ".empty"
     lines = []
+    if store:
+        # pcc_gc_store_root(slot=x0, value=x1) once the runtime publishes
+        # pcc_gc_store_root_plain (debug cache and runtime-log fast state
+        # both off): a NULL slot returns, an unchanged value returns, and
+        # NULL or tagged (low bit) old and new values are a plain write,
+        # exactly the function's own owner fast path for them. The function
+        # does not poll on these paths. Everything else calls it.
+        new_check, write = prefix + ".new", prefix + ".write"
+        _flag(lines, "pcc_gc_store_root_plain", module_symbols)
+        lines.append(emitted_branch_line('cbz', slow, 'w17'))
+        lines.append(emitted_branch_line('cbz', done, 'x0'))
+        lines.append(emitted_memory_instruction_line('ldr', 'x15', 'x0'))
+        lines.append(emitted_scalar_register_line('eor', 'x17', 'x15', 'x1'))
+        lines.append(emitted_branch_line('cbz', done, 'x17'))
+        lines.append(emitted_branch_line('cbz', new_check, 'x15'))
+        lines.append(emitted_scalar_immediate_line('and', 'x17', 'x15', 1))
+        lines.append(emitted_branch_line('cbz', slow, 'x17'))
+        lines.append(new_check + ":")
+        lines.append(emitted_branch_line('cbz', write, 'x1'))
+        lines.append(emitted_scalar_immediate_line('and', 'x17', 'x1', 1))
+        lines.append(emitted_branch_line('cbz', slow, 'x17'))
+        lines.append(write + ":")
+        lines.append(emitted_memory_instruction_line('str', 'x1', 'x0'))
+        lines.append(emitted_branch_line('b', done))
+        lines.append(slow + ":")
+        lines.append(emitted_direct_call_line(asm_symbol_prevalidated(callee, module_symbols)))
+        lines.append(done + ":")
+        return lines
     if load or frame:
         # These managed runtime entries poll before their bodies. A pending
         # stop must enter the original function, even on its otherwise empty path.
