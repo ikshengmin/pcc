@@ -29,6 +29,9 @@ canonicalizations that can be expressed textually:
 - ``icmp eq/ne (sext iN x to iM), C`` → ``icmp eq/ne iN x, C`` for a signed
   N-bit ``C``, and ``(zext iN x)`` for ``0 <= C < 2^N`` (InstCombineCompares.cpp)
 - ``trunc/zext/sext`` of an integer constant → the constant (ConstantFolding.cpp)
+- ``add/mul/and/or/xor C, x`` → ``op x, C``: constants are the right operand
+  of a commutative operation (InstructionCombining.cpp,
+  SimplifyAssociativeOrCommutative); later rewrites see the swapped line
 
 As in upstream, this pass runs after a simplifier phase and then
 cleans up dead now-unused local instructions. It is still a subset;
@@ -75,6 +78,9 @@ _SEXT_CONST_RE = re.compile(
     r"^(?P<indent>\s*)%(?P<result>[\w.$-]+)\s*=\s*sext\s+i1\s+(?P<cond>true|false)\s+to\s+(?P<ty>i\d+)\s*$"
 )
 _SSA_NAME_RE = re.compile(r"%([\w.$-]+)")
+_INT_LITERAL_RE = re.compile(r"-?\d+")
+_LOCAL_VALUE_RE = re.compile(r"%[\w.$-]+")
+_COMMUTATIVE_OPS = ("add", "mul", "and", "or", "xor")
 _CAST_CONST_RE = re.compile(
     r"^(?P<indent>\s*)%(?P<result>[\w.$-]+)\s*=\s*(?P<op>trunc|zext|sext)\s+"
     r"i(?P<source>\d+)\s+(?P<value>-?\d+)\s+to\s+i(?P<target>\d+)\s*$"
@@ -2190,6 +2196,19 @@ def _rewrite_function(
         match = _BINOP_RE.match(stripped)
         if match is None:
             continue
+        binop_lhs = match.group("lhs").strip()
+        binop_rhs = match.group("rhs").strip()
+        if (match.group("op") in _COMMUTATIVE_OPS and _INT_LITERAL_RE.fullmatch(binop_lhs)
+                and _LOCAL_VALUE_RE.fullmatch(binop_rhs)):
+            # Constants are the right operand of a commutative operation;
+            # every rewrite below sees the canonical line.
+            binop_lhs, binop_rhs = binop_rhs, binop_lhs
+            lines[idx] = _format_line(
+                indent=match.group("indent"), result=match.group("result"),
+                op=match.group("op"), flags=match.group("flags"), ty=match.group("ty"),
+                lhs=binop_lhs, rhs=binop_rhs,
+            )
+            state.changed = True
         binops[match.group("result")] = {
             "line_idx": idx,
             "indent": match.group("indent"),
@@ -2197,8 +2216,8 @@ def _rewrite_function(
             "op": match.group("op"),
             "flags": match.group("flags"),
             "ty": match.group("ty"),
-            "lhs": match.group("lhs").strip(),
-            "rhs": match.group("rhs").strip(),
+            "lhs": binop_lhs,
+            "rhs": binop_rhs,
         }
 
     for idx, line in enumerate(list(lines)):
@@ -2228,6 +2247,7 @@ def _rewrite_function(
                 lines[idx] = ""
                 state.changed = True
                 continue
+
 
             if op == "add" and lhs == rhs:
                 lines[idx] = _format_line(
