@@ -152,6 +152,8 @@ under each item and through Git alone.
     waiting list. Rewriting an item's "Next", claim lines, the checkpoint lines and
     the waiting list is ordinary round work.
 
+**Integrated validation, 2026-11-27 14:31 +0800.** Run #647 (45937924805, source `26d6fb08`) completed with 21 successful, 30 failed, two skipped and one canceled jobs. All four Stage1 builds produced 629/629 modules; all four Stage2 attempts reached compilation deadlines, not memory exhaustion. The entire remote queue was verified empty across all active/pending states before this single integrated push. This snapshot follows source `dd956956`: accepted managed allocation classes, scoped opt-in MIR/CSR and generator suffix changes, plus the exact research-test collection fix for Linux x64/ARM and Windows. macOS separate not-integration RSS failure and Stage2 completion remain open. No second dispatch, rerun, or non-skip push while any CI is active or pending. Subsequent work remains local and `[skip ci]`.
+
 **Checkpoint.** Last checkpoint: `7ce5cf663`, validated by
 [run 44358778171](https://github.com/ikshengmin/pcc/actions/runs/44358778171).
 That run is a red baseline. Prior push-triggered exact-source validation
