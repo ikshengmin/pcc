@@ -4837,6 +4837,64 @@ in the relevant section or issue and removes the entry.
    or repeat noisy throughput-only tests without a new owner rationale.
    No dedicated CI dispatch; all intervening claims preserved.
 
+   2026-11-27 managed-only 80-byte object-slab class (Linux, Codex;
+   independent scoped memory unit after 48-byte production73ae31f4).
+   Actual #646 manifests-ready source500e1ab6 x64 B80=484,225 LIVE
+   cells, requested33,487,978B, usable61,980,800B, aligned38,738,000B;
+   B96/112/128 respectively266,374/254,368/152,377 cells. ARM B80
+   476,208 and Windows444,429 (observed diagnostic counts, not platform
+   qualification). New managed80 only, index12 preserving 0..11,
+   stride128 and512 cells per64KiB slab. Old raw malloc classes and
+   ABI stay unchanged; separate object/raw magazine views, 13-class
+   reverse drain and exact span geometry. On failed private granule
+   registration re-carve the same mapping to existing raw128 and account
+   actual usable; 48/raw64 fallback unchanged. No 96B class in this unit.
+   Test-first intended host red (65->128), then34 PASS/2 integration
+   deselected; separate native baseline intended rc41 twice, candidate
+   OBJECT_MAGAZINES_OK twice, 64..81 raw/managed boundaries, exact LIVE
+   provenance, >2 slabs1100-cell exhaustion/discard/recarve, cross-thread
+   13-class drain and duplicate audit. Both arms raw magazines,
+   four-carrier managed histogram and cycle weakref/finalizer sync under
+   provenance2 green. Exact compiler closure014a6b37 cd5ca8ae; base GC48
+   archive7be09975 allocator recompiled byte-identical f38a031b, candidate
+   archive cc685464115b0264b461345cfb62176796825f738a67e9990acb16afc66731e2
+   only allocator member changed (59b91dd0), CAPI unchanged; optimized
+   alloc_object hot class selector fully inlined. Initial changed peer
+   compiler checksum correctly rejected; exact closure restored.
+   Actual #646 B80/96/112/128 synthetic LIVE replay preserves all four
+   bins, total1,157,344 cells and requested102,389,039B, not actual full
+   Stage2 graph or arrival order. Five alternating triples+2 smoke:
+   usable148,140,032->124,897,232B (-15.69%,5/5), mapped209,354,752->
+   185,958,400B (-11.18%,5/5, control0.016%), peakRSS225,349,632->
+   202,018,816B (-10.35%,22.25MiB,5/5, unchanged0). Process CPU paired
+   -2.714%,4/5, control median abs13.02%, inconclusive. No CPU gain claim.
+   Actual gateway exact25 previously hashed IR modules re-linked;
+   baseline ELF byte-identical to accepted48 6466fc13, candidate8ff6a1e4.
+   Every 100k-request arm asserts expected JSON; w1 five triples
+   QPS16711.1->16581.3 paired+0.041%,3/5 (max control2.153%), CPU
+   76.007->76.593us paired+0.275%,2/5 (max control2.167%), RSS
+   61,923,328->61,800,448B (-120KiB,5/5; max control0.013%), STW
+   2292->2129us, p99 6.191->6.517ms within noisy controls.
+   w4 first five triples inconclusive: paired QPS+0.375%, CPU+0.316%,
+   RSS+0.037%, STW+9.928%, p99+0.768%, max controls QPS11.212%/CPU14.914%.
+   One adverse correlated pair QPS-28.99%, CPU+21.85%, STW+91.38%,
+   p99+94.21% while unchanged control mild; exact allocations and zero
+   graph lock waits. STW difference1.739ms alone cannot explain the
+   wall loss; no proven scheduling cause. Held and ran ONE independent
+   repeat at load0.46->1.77: no correlated extreme reproduced, paired
+   QPS-0.503%, CPU-0.815%4/5, RSS-0.363%, STW+6.021%1/5 (one +57.4%
+   without correlated CPU/QPS/p99 loss), p99-3.854%. Max unchanged QPS
+   9.618%/CPU6.096%, strictly inconclusive AGAIN. Preserve both rounds,
+   all10 combined paired medians QPS-0.064%5/10, CPU-0.736%6/10, RSS
+   +0.031%4/10, STW+7.027%2/10, p99-1.810%6/10; unchanged median abs
+   2.565/1.994/0.156/15.704/4.547% respectively. STW direction/noise
+   remains disclosed; no reproducible correlated collapse, no w4
+   performance qualification or gain. Maintainer approved scoped memory
+   based on exact live replay and real w1 RSS, no further pure-noise retry.
+   No claim of whole Stage2 RSS or Stage2<=Stage1; #647 source snapshot
+   26d6fb08 is already running and excludes this change. All pushes
+   [skip ci], no dedicated CI dispatch; all peer claims preserved.
+
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
    - Shared generator save-suffix prefix spine, exact slot/ownership/state cutoffs (generator_lowering.py + test_generator_shared_frame_save.py; no backend overlap): Codex, Linux, 2026-11-27T03:43Z, area runtime-codegen

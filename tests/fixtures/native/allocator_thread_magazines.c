@@ -18,16 +18,16 @@ extern int64_t pcc_allocator_live_requested_bytes(void);
 extern int64_t pcc_allocator_live_usable_bytes(void);
 extern int64_t pcc_thread_start(void **, void *(*)(void *), void *);
 extern int64_t pcc_thread_join(void *, void **);
-static void *cells[12][32];
+static void *cells[13][32];
 static int64_t published;
 
 static void *producer(void *unused) {
     if (pcc_current_thread_id() <= 0) return (void *)1;
     int64_t size = 16;
-    for (int k = 0; k < 12; k++, size *= 2) {
+    for (int k = 0; k < 13; k++, size *= 2) {
         for (int i = 0; i < 32; i++) {
-            cells[k][i] = pcc_allocator_alloc_object(k == 11 ? 40 : size);
-            if (cells[k][i] && malloc_usable_size(cells[k][i]) != (size_t)(k == 11 ? 48 : size)) return (void *)5;
+            cells[k][i] = pcc_allocator_alloc_object(k == 11 ? 40 : (k == 12 ? 72 : size));
+            if (cells[k][i] && malloc_usable_size(cells[k][i]) != (size_t)(k == 11 ? 48 : (k == 12 ? 80 : size))) return (void *)5;
             if (!cells[k][i]) return (void *)2;
             for (int j = 0; j < i; j++) {
                 if (cells[k][j] == cells[k][i]) return (void *)3;
@@ -41,7 +41,7 @@ static void *producer(void *unused) {
 static void *consumer(void *unused) {
     if (pcc_current_thread_id() <= 0) return (void *)4;
     while (!__atomic_load_n(&published, __ATOMIC_ACQUIRE)) pcc_thread_safepoint();
-    for (int k = 0; k < 12; k++) {
+    for (int k = 0; k < 13; k++) {
         for (int i = 0; i < 32; i++) free(cells[k][i]);
     }
     return 0;
@@ -80,6 +80,29 @@ int main(void) {
     }
     if (pcc_allocator_live_requested_bytes() != requested || pcc_allocator_live_usable_bytes() != usable) return 37;
 
+    for (int n = 64; n <= 81; n++) {
+        void *obj = pcc_allocator_alloc_object(n);
+        void *raw = malloc(n);
+        if (!obj || !raw || ((uintptr_t)obj & 15) || ((uintptr_t)raw & 15)) return 40;
+        size_t expected = n == 64 ? 64 : (n <= 80 ? 80 : 128);
+        if (malloc_usable_size(obj) != expected || malloc_usable_size(raw) != (size_t)(n == 64 ? 64 : 128)) return 41;
+        if (pcc_gc_granule_is_object_start(obj) == 1 || pcc_allocator_object_publish_fresh(obj) != 1) return 42;
+        if (pcc_gc_granule_is_object_start(obj) != 1 || pcc_gc_granule_is_object_start((char *)obj+16) == 1) return 43;
+        free(obj); free(raw);
+    }
+    void *burst80[1100];
+    reused_before = pcc_allocator_object_slab_counter(1);
+    for (int round = 0; round < 2; round++) {
+        for (int i = 0; i < 1100; i++) {
+            burst80[i] = pcc_allocator_alloc_object(80);
+            if (!burst80[i] || malloc_usable_size(burst80[i]) != 80) return 44;
+            for (int j = 0; j < i; j++) if (burst80[i] == burst80[j]) return 45;
+        }
+        if (round == 1 && pcc_allocator_object_slab_counter(1) <= reused_before) return 46;
+        for (int i = 0; i < 1100; i++) free(burst80[i]);
+        if (pcc_allocator_trim_objects() <= 0) return 47;
+    }
+    if (pcc_allocator_live_requested_bytes() != requested || pcc_allocator_live_usable_bytes() != usable) return 48;
     /* trim drained the warm magazines; rewarm before lock-only control. */
     warm = pcc_allocator_alloc_object(64);
     if (!warm) return 38;
@@ -138,6 +161,14 @@ int main(void) {
     free(two);
     if (pcc_allocator_live_requested_bytes() != requested) return 23;
     if (pcc_allocator_live_usable_bytes() != usable) return 24;
+    faults = pcc_gc_telemetry(PCC_GC_COUNTER_ALLOCATOR_DOUBLE_FREES);
+    duplicate = pcc_allocator_alloc_object(80);
+    free(duplicate); free(duplicate);
+    if (pcc_gc_telemetry(PCC_GC_COUNTER_ALLOCATOR_DOUBLE_FREES) != faults + 1) return 49;
+    one = pcc_allocator_alloc_object(80); two = pcc_allocator_alloc_object(80);
+    if (!one || !two || one == two) return 50;
+    free(one); free(two);
+    if (pcc_allocator_live_requested_bytes() != requested || pcc_allocator_live_usable_bytes() != usable) return 51;
     pcc_allocator_thread_cache_drain();
     puts("OBJECT_MAGAZINES_OK");
     return 0;

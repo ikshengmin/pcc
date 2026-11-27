@@ -19,7 +19,7 @@ def test_object_selector_keeps_raw_abi_and_existing_indices():
     raw = ns['pcc_allocator_size_class']
     obj = ns['pcc_allocator_object_size_class']
     for n in range(16386):
-        assert obj(n) == (48 if 32 < n <= 48 else raw(n))
+        assert obj(n) == (48 if 32 < n <= 48 else 80 if 64 < n <= 80 else raw(n))
     assert raw(33) == raw(48) == raw(49) == 64
     for i in range(11):
         size = 16 << i
@@ -29,9 +29,9 @@ def test_object_selector_keeps_raw_abi_and_existing_indices():
     assert ns['_object_magazine_usable'](11) == 48
     assert ns['_granule_stride_count'](96) == 682
     assert ns['_granule_stride_count'](112) == 585
-    assert ns['OBJECT_MAGAZINE_CLASSES'] == 12
-    assert ns['OBJECT_MAGAZINE_COUNTS'] >= 12 * 8
-    assert ns['RAW_MAGAZINE_BASE'] >= ns['OBJECT_MAGAZINE_COUNTS'] + 12 * 8
+    assert ns['OBJECT_MAGAZINE_CLASSES'] == 13
+    assert ns['OBJECT_MAGAZINE_COUNTS'] >= 13 * 8
+    assert ns['RAW_MAGAZINE_BASE'] >= ns['OBJECT_MAGAZINE_COUNTS'] + 13 * 8
     assert ns['RAW_MAGAZINE_BASE'] + ns['OBJECT_MAGAZINE_COUNTS'] + 8*8 <= ns['OBJECT_MAGAZINE_PAGE_BYTES']
 
 
@@ -95,7 +95,7 @@ def test_explicit_reverse_mapping_drains_all_object_classes_then_raw():
         _raw_magazine_drain_all_locked=lambda state:calls.append(('raw',state)),
         page_free=lambda state,size:0,atomic_rmw_i64=lambda *a:None)
     ns['pcc_allocator_thread_cache_drain']()
-    assert calls==[(1234,i,16<<i,0) for i in range(11)]+[(1234,11,48,0),('raw',1234)]
+    assert calls==[(1234,i,16<<i,0) for i in range(11)]+[(1234,11,48,0),(1234,12,80,0),('raw',1234)]
 
 
 def test_central_list_and_sparse_queue_capacity_matches_new_index():
@@ -105,5 +105,5 @@ def test_central_list_and_sparse_queue_capacity_matches_new_index():
             if isinstance(n,ast.Expr) and isinstance(n.value,ast.Call)
             and isinstance(n.value.func,ast.Name) and n.value.func.id=='define_global_i64_array'
             and n.value.args and isinstance(n.value.args[0],ast.Constant)}
-    assert arrays['pcc_allocator_object_span_lists']==48
-    assert arrays['pcc_allocator_sparse_trim_heads']==12
+    assert arrays['pcc_allocator_object_span_lists']==52
+    assert arrays['pcc_allocator_sparse_trim_heads']==13

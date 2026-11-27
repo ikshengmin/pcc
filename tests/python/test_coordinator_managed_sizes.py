@@ -131,7 +131,7 @@ def expected(requests):
         row = rows[bucket_index(n)]
         row[0] += 1
         row[1] += n
-        row[2] += 48 if 32 < n <= 48 else max(16, 1 << max(0, (n-1).bit_length()))
+        row[2] += 48 if 32 < n <= 48 else 80 if 64 < n <= 80 else max(16, 1 << max(0, (n-1).bit_length()))
         row[3] += max(16, (n+15)//16*16)
     return [tuple(row) for row in rows]
 
@@ -148,7 +148,7 @@ def test_exact_boundary_and_multiple_batches_without_managed_object_reads():
 
 
 @pytest.mark.parametrize("requested,usable,marker", [
-    (-1,16,-1),(17,16,-1),(40,128,-1),(40,64,0),(16385,32768,-1),
+    (-1,16,-1),(17,16,-1),(40,128,-1),(72,128,-1),(40,64,0),(16385,32768,-1),
 ])
 def test_inconsistent_object_family_prefix_fails_closed(requested,usable,marker):
     m = Snapshot()

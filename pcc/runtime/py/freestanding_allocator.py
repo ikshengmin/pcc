@@ -923,6 +923,8 @@ def pcc_allocator_object_size_class(size: i64) -> i64:
         return 48
     if size <= 64:
         return 64
+    if size <= 80:
+        return 80
     if size <= 128:
         return 128
     if size <= 256:
@@ -1129,7 +1131,7 @@ SPAN_LIST_DENSE = 1
 SPAN_LIST_SPARSE = 2
 SPAN_LIST_EMPTY = 3
 SPAN_LIST_DISCARDED = 4
-# List heads: twelve object size classes, four lists each (class * 4 + list - 1).
+# List heads: thirteen object size classes, four lists each (class * 4 + list - 1).
 define_global_i64_array(
     "pcc_allocator_object_span_lists",
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -1137,10 +1139,11 @@ define_global_i64_array(
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0,
+    0, 0, 0, 0,
 )
 # Object slabs given back so far, carved again so far, and the bytes
 # given back at the moment.
-define_global_i64_array("pcc_allocator_sparse_trim_heads", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+define_global_i64_array("pcc_allocator_sparse_trim_heads", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 define_global_i64("pcc_allocator_partial_discarded_bytes", 0)
 define_global_i64("pcc_allocator_object_slabs_discarded", 0)
 define_global_i64("pcc_allocator_object_slabs_reused", 0)
@@ -1168,6 +1171,8 @@ def _granule_stride_count(stride: i64) -> i64:
         return 682
     if stride == 112:
         return 585
+    if stride == 128:
+        return 512
     if stride == 176:
         return 372
     if stride == 304:
@@ -2175,6 +2180,9 @@ def pcc_allocator_refill_small_object(usable: i64) -> c_ptr:
     elif usable == 64:
         stride: i64 = 112
         count: i64 = 585
+    elif usable == 80:
+        stride: i64 = 128
+        count: i64 = 512
     elif usable == 128:
         stride: i64 = 176
         count: i64 = 372
@@ -2231,14 +2239,19 @@ def pcc_allocator_refill_small_object(usable: i64) -> c_ptr:
         # allocating another slab here would leak this one.  free() misses
         # the granule and routes the cells to the raw family, matching the
         # carve; provenance stays exact via the per-object set.
-        # The managed-only class has no raw 48-byte list. Registration
-        # failed before any descriptor or free-list publication: re-carve
-        # this same private mapping into the existing raw 64-byte class.
+        # Managed-only classes have no matching raw list. Registration
+        # failed before descriptor/free-list publication: re-carve the
+        # same private mapping with the next existing raw size class.
         # The returned cell's own header records the actual usable size.
-        if usable == 48:
-            usable = 64
-            stride = 112
-            count = 585
+        if usable == 48 or usable == 80:
+            if usable == 48:
+                usable = 64
+                stride = 112
+                count = 585
+            else:
+                usable = 128
+                stride = 176
+                count = 372
             raw_cursor = first
             raw_index: i64 = 0
             while raw_index < count:
@@ -3018,11 +3031,11 @@ def pcc_allocator_granule_span_cache_set_fill(enabled: i64) -> i64:
 # Each registered thread owns one page with disjoint object/raw cache views.
 # Object descriptors never retire. Raw cached cells reserve their slab counts
 # until a central drain, so trim cannot reclaim storage underneath a cache.
-OBJECT_MAGAZINE_CLASSES = 12
+OBJECT_MAGAZINE_CLASSES = 13
 OBJECT_MAGAZINE_HEADS = 0
-OBJECT_MAGAZINE_COUNTS = 96
+OBJECT_MAGAZINE_COUNTS = 104
 OBJECT_MAGAZINE_PAGE_BYTES = 4096
-RAW_MAGAZINE_BASE = 192
+RAW_MAGAZINE_BASE = 208
 RAW_MAGAZINE_CLASSES = 8
 RAW_MAGAZINE_MAX_USABLE = 2048
 
@@ -3048,6 +3061,8 @@ def _object_magazine_class(usable: i64) -> i64:
             return 11
         return 2
     if usable <= 128:
+        if usable == 80:
+            return 12
         return 3
     if usable <= 256:
         return 4
@@ -3068,6 +3083,8 @@ def _object_magazine_class(usable: i64) -> i64:
 def _object_magazine_usable(index: i64) -> i64:
     if index == 11:
         return 48
+    if index == 12:
+        return 80
     return 16 << index
 
 
@@ -3335,9 +3352,9 @@ def pcc_allocator_alloc_object(size: i64) -> c_ptr:
         if ptr_is_null(user):
             return null()
         store_i64(user, GRANULE_REQUESTED_SIZE_OFFSET, size)
-        # A 48-byte refill may have fallen back to an unregistered raw
-        # 64-byte carve. Debit the same actual usable size free() will see.
-        if usable == 48:
+        # A managed-only refill may have fallen back to the unregistered
+        # next raw class. Debit the actual usable size free() will see.
+        if usable == 48 or usable == 80:
             usable = load_i64(user, GRANULE_USABLE_SIZE_OFFSET)
         pcc_allocator_account_allocate(size, usable, 0)
         return user
