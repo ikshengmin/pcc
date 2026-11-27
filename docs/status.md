@@ -5421,6 +5421,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend toward LLVM parity: locate the LLVM step the self passes lack (pcc_perf reference ablations, scripts/pcc_perf.py), then implement it in pcc's own AArch64 passes (shrink-wrapping, allocation or selection, whichever the ablation ranks first); IR-pass changes are target-neutral and reach x64; avoids the typed x64 MIR files: Claude, macOS, 2026-11-27T06:46Z, area backend
+   - Native pcc1 class method generation coarse phase attribution (only class_gen.py and focused timing test, existing PCC_PY_FRONTEND_WORKER_TIMING; ordinary disabled route unchanged, exact output/error/cleanup/nesting, bounded host overhead and strict context; next normal hosted CI only, no separate CI): Codex, Linux, 2026-11-27T14:16Z, area frontend-python
    - Stage1 AArch64 private CFG midpoint span-history retirement after drop_unreferenced_empty_local_labels (only self_backend_aarch64_darwin.py, _typed_peepholes.py, _typed_cfg.py orchestrator and test_aarch64_span_owner_transfer.py; avoid Claude selector/register/atomic/matcher files; one-shot derived canonical private authority after successful peephole retirement, preserve -2 unchecked/old roots/cursors/timer/error and public API; exact small PCO + focused/native context + formal CPU/RSS; no resource/CI): Codex, Linux, 2026-11-27T14:01Z, area backend
 
 
