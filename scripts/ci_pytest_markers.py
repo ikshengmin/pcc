@@ -16,6 +16,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,6 +63,25 @@ def digest(path):
 def save(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _save_inventory(path, value):
+    """Stream the canonical worker inventory, publishing only complete bytes."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        # Each worker owns its path. A unique same-directory temporary also
+        # keeps a failed writer from replacing the previous complete receipt.
+        with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=path.parent,
+                prefix="." + path.name + ".", suffix=".tmp", delete=False) as stream:
+            temporary = Path(stream.name)
+            json.dump(value, stream, indent=2, sort_keys=True)
+            stream.write("\n")
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
 
 
 def marker_command(directory, marker, partition="all", runtime_phase="all"):
@@ -223,7 +243,7 @@ def pytest_configure(config):
                 config.hook.pytest_deselected(items=moved)
                 items[:] = [item for item in items if item.nodeid in selected_set]
             worker = getattr(config, "workerinput", {}).get("workerid", "controller")
-            save(Path(directory) / ("inventory-" + worker + ".json"), {
+            _save_inventory(Path(directory) / ("inventory-" + worker + ".json"), {
                 "marker": marker, "expected": expected, "selected": selected,
                 "gated_out": sorted(set(expected) - set(selected)),
                 "unexpected": sorted(set(selected) - set(expected)),

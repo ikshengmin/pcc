@@ -199,6 +199,40 @@ def test_frozen_baseline_guard_refuses_inherited_runtime_config_without_values(t
     assert all(path.read_bytes() == data for path, data in config_bytes.items())
 
 
+def test_inventory_streaming_preserves_canonical_bytes_and_atomic_failure(tmp_path, monkeypatch):
+    # The complete inventory writer must use the original canonical bytes and
+    # never expose partial output if serialization fails.
+    stream_dir = tmp_path / "stream"
+    expected_path = stream_dir / "old.json"
+    actual_path = stream_dir / "new.json"
+    payload = {"marker": "not integration", "expected": ["a@group", "λ", "\n"],
+               "selected": ["λ", "a@group"], "gated_out": ["\n"], "unexpected": []}
+    gate.save(expected_path, payload)
+    expected_bytes = expected_path.read_bytes()
+    gate._save_inventory(actual_path, payload)
+    assert actual_path.read_bytes() == expected_bytes
+    # Preserve successful replacement and both existing/absent failure cases.
+    second = dict(payload, selected=[])
+    gate.save(expected_path, second)
+    gate._save_inventory(actual_path, second)
+    assert actual_path.read_bytes() == expected_path.read_bytes()
+    complete = actual_path.read_bytes()
+    missing = stream_dir / "missing.json"
+
+    def broken_dump(value, stream, **kwargs):
+        assert kwargs == {"indent": 2, "sort_keys": True}
+        stream.write('{"partial":')
+        raise OSError("inventory write interrupted")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(gate.json, "dump", broken_dump)
+        for target in (actual_path, missing):
+            with pytest.raises(OSError, match="inventory write interrupted"):
+                gate._save_inventory(target, payload)
+    assert actual_path.read_bytes() == complete and not missing.exists()
+    assert set(stream_dir.iterdir()) == {expected_path, actual_path}
+
+
 @pytest.mark.xdist_group(name="ci_marker_pytest_fixtures")
 def test_complete_marker_entry_real_six_worker_execution(tmp_path, monkeypatch):
     # Real pytest processes: default six workers, actual test bodies, and both
@@ -253,6 +287,7 @@ def test_complete_marker_entry_real_six_worker_execution(tmp_path, monkeypatch):
             assert not (corpus / "integration-ran").exists()
         inventory = out / "inventory-gw0.json"
         old = inventory.read_text()
+        assert old == json.dumps(rows, indent=2, sort_keys=True) + "\n"
         inventory.write_text("{}")
         with pytest.raises(ValueError, match="worker selection differs"):
             gate.summarize(out, marker)
