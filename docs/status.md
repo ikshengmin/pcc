@@ -3825,10 +3825,48 @@ in the relevant section or issue and removes the entry.
        end-to-end CPU no stable benefit and deterministic
        object/verify/finalize growth. No medium formal or source
        production, no resource/gate changes, no whole Stage1/2 claim.
-       Next (latest actual Stage1 codegen priority): (0) attribute and
-       reduce actual inline-edge object emit_finalize/verify overhead
-       with unchanged OFF default, exact same-input object and
-       exception/ownership contracts before reconsidering enablement;
+       Follow-up actual inline finalize/verify attribution (680df6b3,
+       default remains OFF): #639 exact x64 625 modules, all inline0;
+       4,242,421 blocks/712,904 call.cont/361,488 err.frame/
+       16,518,217 instructions, worker-codegen 4267.136s (ideal
+       six-core lower bound 711.189s, not measured), backend2615.803s,
+       emit1522.359/stackmap551.643/verify351.697/finalize37.123s.
+       Exact class phase15 OFF/ON labels321508->262893, relocs280563
+       ->284320, leaf .483/.478s profiled; GC gen2 both zero collected,
+       instrumented1.039/.964s. Frozen owner plain .4874/.4827s;
+       no causal proof of prior finalize increase. ON verifier actual
+       landing scans13713 queries/1,704,204 row comparisons, 106
+       functions sorted with threshold256 cover99.666% comparisons.
+       Dense private index five exact retained-result triples CPU
+       norm−95.952%5/5 but RSS+740KiB0/5, reject. Zero-allocation
+       sorted lower-bound candidate retained-result CPU−94.577%5/5,
+       RSS+136KiB0/5 within max control. Exact smaps/tracemalloc peak
+       +32B, no table allocation; production-shaped immediate-consume
+       independent 5 triples CPU−94.508%5/5 RSS−8KiB4/5, and
+       after valueclass dynamic getattr hardening repeat−94.583%5/5
+       RSS−4KiB4/5 (one tie, unchanged controls). Actual per-slot
+       checksum 88888563/41139 exact; dense full class screen exact
+       object verify−10.97% directional only. Strict native direct
+       valueclass observer attribute first RED, dynamic getter fixed
+       zero fallback/no libpython; new host-only proof isolation
+       test-first1 red->141 focused passes, actual context627
+       modules (added one helper), verifier129 funcs/65589 instr,
+       helper10/3468, zero fallback/no libpython. **Reject sorted
+       candidate**: three unchanged native verifier hot methods
+       reproducibly differ even after host isolation (_build_definitions
+       3266->3670, _verify_ordinary_uses2688->2866,
+       _verify_inline_error_edges1085->1080 with generic len);
+       calls/GC roots change adversely on OFF. Do not proceed formal
+       full worker or enable default despite isolated CPU wins; no
+       source production, no gate change, no Stage1/2 claim. Actual
+       general OFF profile _host_definition_planes343735 calls
+       1.204s, _host_definition_type_matches2.508s inclusive profiled
+       (not uninstrumented formal).
+       Next (latest actual Stage1 codegen priority): (0) attribute
+       general OFF verifier repeated definition-plane facts on exact
+       large compiler input, source-owned immutable private proof,
+       native unchanged hot edge parity first, then exact object and
+       CPU/RSS controls; retain inline OFF default;
        (1) ARM typed
        prepare memory: quantify retained prior run history and
        private CFG owner retirement with public snapshot/callback
@@ -4432,7 +4470,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
-   - Actual x86 streamed inline-edge object finalize and verifier attribution (unchanged default OFF, general OFF benefit required where possible): Codex, Linux, 2026-11-27T00:04Z, area backend (x86_64_asm_driver/elf_x86_64/verify attribution, no overlapping CI TLS owner edits)
+   - Actual general OFF verifier repeated definition-plane facts attribution (exact native hot parity first, default inline OFF unchanged): Codex, Linux, 2026-11-27T01:02Z, area backend (self_backend_verify, no overlap with current CI TLS/Stage2 dependency owner)
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
