@@ -320,7 +320,11 @@ def emit_cast_indexed(
     dst_type_id: int,
     src_index: int = 9,
     dst_index: int = 10,
+    zero_extended_source: bool = False,
 ) -> list[str]:
+    """``zero_extended_source``: the source register's upper bits are already
+    zero (a 32-bit-or-narrower load wrote it), so a zext to 64 bits is the
+    register itself."""
     src: CompilerInt4 = kernel.type_header(src_type_id)
     dst: CompilerInt4 = kernel.type_header(dst_type_id)
     src9 = reg_name_indexed(kernel, src_type_id, src_index)
@@ -381,6 +385,8 @@ def emit_cast_indexed(
                                           src_x if src.second > 32 else src_w,
                                           src.second)
         if src.second <= 32 and dst.second > 32:
+            if zero_extended_source:
+                return _cast_move(dst_x, src_x)
             return [emitted_move_register_line(dst_w, src_w)]
         return _cast_move(dst10, src9)
     if op == "sext":

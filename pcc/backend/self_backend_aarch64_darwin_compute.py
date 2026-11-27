@@ -93,6 +93,8 @@ from .self_backend_ir import (
     PARSED_INSTRUCTION_KIND_ICMP,
     PARSED_INSTRUCTION_KIND_INSERTELEMENT,
     PARSED_INSTRUCTION_KIND_INSERTVALUE,
+    PARSED_INSTRUCTION_KIND_LOAD,
+    PARSED_INSTRUCTION_KIND_LOAD_ATOMIC,
     PARSED_INSTRUCTION_KIND_SELECT,
     PARSED_INSTRUCTION_KIND_SHUFFLEVECTOR,
     PARSED_INSTRUCTION_KIND_VA_ARG,
@@ -279,6 +281,30 @@ def _emit_shifted_operand_binop(
     ))
     lines.extend(_commit_or_spill_scalar_result_indexed(func, kernel, dest_id, type_id, result))
     return lines
+
+
+def _defined_by_narrow_load(kernel: IndexedFunctionKernel, value_id: int) -> bool:
+    """Whether ``value_id`` is an i8/i16/i32 load result.
+
+    LDRB/LDRH/LDR W and their unscaled, acquire and stack-reload forms all
+    zero the register's upper bits, so the 64-bit register holds the value
+    zero-extended. Arguments and call results do not (AAPCS64 leaves their
+    upper 32 bits unspecified).
+    """
+    if value_id < 0:
+        return False
+    header: CompilerInt4 = kernel.type_header(kernel.value_type_id(value_id))
+    if header.first != TYPE_KIND_INT or header.second not in (8, 16, 32):
+        return False
+    block_id = kernel.value_scalars.get_unchecked(value_id * 8)
+    position = kernel.definition_position(value_id)
+    if block_id < 0 or position < 0:
+        return False
+    block: CompilerInt4 = kernel.block_fact(block_id)
+    if position >= block.second:
+        return False
+    metadata: CompilerInt4 = kernel.instruction_metadata_by_id(block.first + position)
+    return metadata.first == PARSED_INSTRUCTION_KIND_LOAD or metadata.first == PARSED_INSTRUCTION_KIND_LOAD_ATOMIC
 
 
 def _boolean_literal_indexed(kernel, reference: int) -> int:
@@ -1870,6 +1896,9 @@ def emit_compute_instruction_by_id(
                         dst_type_id,
                         src_index,
                         dst_index,
+                        zero_extended_source=(
+                            op == "zext" and _defined_by_narrow_load(indexed_kernel, cast_record.third)
+                        ),
                     )
                 )
                 lines.extend(
