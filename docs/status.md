@@ -3960,14 +3960,71 @@ in the relevant section or issue and removes the entry.
        cross-backend static hot-function codegen analysis (no external
        backend, actual instruction/stack/spill/scratch count) before
        any new allocator design; local [skip ci], no new complete CI
-       snapshot/dispatch/rerun while queue/running. Next (latest
-       actual Stage1 codegen priority): (0) same Linux runtime
-       post-pass IR exact receipt/source SHA across owned x64 and
-       AArch64 Linux (triple-only substitution, optimized ARM flag
-       separate); exclude architecture-specific inline asm rather
-       than conflate platform lowering, compare actual named
-       GC/allocator/JSON/scheduler hot functions and relocation root
-       contract; static counts not dynamic req/s; retain inline OFF;
+       snapshot/dispatch/rerun while queue/running.
+       Same-IR owned backend diagnostic (current c9120f18, Linux,
+       no source changes): actual optimized Linux runtime module
+       receipts (atomic/threads, original archive aafe3f12, generated
+       before backend emission) source+IR SHA exact current source.
+       py_obj IR b8abe0da9c75e45aca09f52c0ba66ca95db61a52922aa684676be1066ca0d864,
+       allocator IR d867dbd55fad1f5afe0646b2536f330cad91057391ff4ee0225f782ba0427a20,
+       JSON IR e6c60a9f6c262801b729fa90b55db281d979c3dfb736219ecac0870b2e6cc419,
+       vthread IR 8f4aa722c9f60397f1c5917aee8c3703854b38e817782b1b2584c62b12421084.
+       Input bytes identical except target triple x86_64 Linux ->
+       aarch64 Linux, empty datalayout; each hot body hash exact.
+       Full py_obj145/JSON63 defs x64 owned ELF byte-exact original
+       receipts198915d3/8c862586; allocator8/vthread6 selected
+       bodies same projection both arches with all original globals/type
+       context; exclude free/unrelated x86 inline syscall bodies, no
+       Darwin TLS/platform frontend differences. Owned AArch64 default
+       optimize=False and explicit optimize=True (callee-saved regalloc
+       default ON both); all ARM encoded instruction words equal final
+       instruction lines. 29 functions/87 exact arms: x64 11702 static
+       instructions vs ARM default7956/opt7393 (1.58x); x64 local rbp
+       loads592/stores861 + rsp721/165 =2339 direct stack accesses,
+       ARM opt x29 238/172 + sp1146/202 =1758 paired slot accesses,
+       frame address materializations87 (direct syntax lower bound,
+       computed aliases excluded). x64 r10/r11 scratch mov2694
+       (1324 register transfers) vs ARM x9-17 mov537(263 transfers),
+       scratch stack537/267; calls531/519, branches1421/1240.
+       All direct stack instructions classified; not dynamic req/s.
+       x64/ARM opt static store_root871/453,take215/113,known131/67,
+       retain101/47,release156/73,incref116/46,decref157/73,
+       gc_alloc207/138,load_ptr57/30,allocator alloc_object197/148,
+       malloc193/135,object magazine take313/186,raw take327/199,
+       granule start408/233,JSON loads175/97,dumps_ex108/41,
+       parse_string1729/1303,parse_value672/388,dump_value1398/942,
+       vthread join645/440,complete929/631,complete_unlocked380/234.
+       Controlled same-IR static isolation (no source edit; x64 only
+       late frame promotion bypass, other peepholes retained; ARM
+       optimize=True callee/whole-func/call-result flags OFF):
+       x64 no-promotion12923->11702 current(-9.45%), direct stack
+       6085->2339(-61.6%), scratch mov4720->2694; ARM block-local
+       13689->7393 function-wide pools(-46.0%), stack3791->1758,
+       scratch mov2204->537. Store_root x64 1103->871 vs ARM
+       1185->453; parse_string1964->1729 vs2188->1303;
+       complete992->929 vs1118->631. ARM-local even exceeds
+       x64 current: major difference is whole-function allocation
+       plus operand integration, not ISA alone. Static only.
+       GC root contract: x64 late destructive promotion excludes
+       mapped root/reload-source slots; reload destination plain
+       stores can themselves be promoted (explicit native test),
+       but pointer retirement/zero-home proof also excludes reload
+       destination, alloca/sret/overlap. ARM allocator pre-selection
+       excludes reload destination because slot refreshed only after
+       moving safepoint. Active GC nonmoving/read-only stack scan
+       does not justify deleting mapped physical stores: mutator
+       alias/root APIs/callbacks still write. Next (latest actual
+       Stage1 codegen priority): (0) opt-in generic x64 pre-selection
+       register/operand prototype, first narrow exact indexed
+       block-local integer SSA, non-addressable/nonmapped and
+       write-through homes, no call/unknown/PHI/inline-edge hazards,
+       flags/width/ABI and conservative roots preserved; use existing
+       late promotion unchanged. Main target extend whole-function
+       saved-register pool/PHI and direct operand model after safe
+       subset, not local-only. Same IR static counts + source-matched
+       native semantic/handler CPU/req w1 five alternating control
+       pairs and RSS before default change, w4 final if noise permits;
+       no new CI snapshots, retain inline OFF;
        (1) ARM typed
        prepare memory: quantify retained prior run history and
        private CFG owner retirement with public snapshot/callback
@@ -4634,7 +4691,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
-   - Actual same post-pass Linux runtime IR x64 vs AArch64 static hot-function comparison (GC/allocator/JSON/scheduler; no allocator edit): Codex, Linux, 2026-11-27T01:44Z, area backend (read-only owned emit attribution, Stage2 complementary container/TLS; CI metric tool disjoint)
+   - Opt-in generic x64 pre-selection register/operand prototype (safe block-local integer SSA first, eventual whole-function saved-register/PHI; actual static/native/handler CPU/RSS gates): Codex, Linux, 2026-11-27T01:52Z, area backend (x64 emitter/regalloc, GC alias audit and Stage2 design support, CI metric tool disjoint)
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
