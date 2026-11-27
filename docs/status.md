@@ -3187,6 +3187,12 @@ in the relevant section or issue and removes the entry.
    before zero tests and branches on constant PHIs; inlining into them had
    grown those paths (l). Arm h5-kscalar against h4-tst, control h3-base2:
    instructions -0.51%; the arm's smoke and primitives exact at w1/w4.
+   (o) Merged (Claude, 2026-11-27): instcombine folds `trunc`/`zext`/`sext`
+   of an integer constant (the kernel's compare-exchange operands were
+   `trunc i64 0 to i32` and `trunc i64 1 to i32`, each built in a scratch
+   register and copied). Arm h6-castfold against h5-kscalar (same `pcc/`
+   otherwise): instructions -0.39%. Tests execute the folded casts natively
+   before and after.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2

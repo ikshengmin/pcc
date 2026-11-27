@@ -28,6 +28,7 @@ canonicalizations that can be expressed textually:
   (InstCombineAndOrXor.cpp)
 - ``icmp eq/ne (sext iN x to iM), C`` → ``icmp eq/ne iN x, C`` for a signed
   N-bit ``C``, and ``(zext iN x)`` for ``0 <= C < 2^N`` (InstCombineCompares.cpp)
+- ``trunc/zext/sext`` of an integer constant → the constant (ConstantFolding.cpp)
 
 As in upstream, this pass runs after a simplifier phase and then
 cleans up dead now-unused local instructions. It is still a subset;
@@ -74,6 +75,10 @@ _SEXT_CONST_RE = re.compile(
     r"^(?P<indent>\s*)%(?P<result>[\w.$-]+)\s*=\s*sext\s+i1\s+(?P<cond>true|false)\s+to\s+(?P<ty>i\d+)\s*$"
 )
 _SSA_NAME_RE = re.compile(r"%([\w.$-]+)")
+_CAST_CONST_RE = re.compile(
+    r"^(?P<indent>\s*)%(?P<result>[\w.$-]+)\s*=\s*(?P<op>trunc|zext|sext)\s+"
+    r"i(?P<source>\d+)\s+(?P<value>-?\d+)\s+to\s+i(?P<target>\d+)\s*$"
+)
 _EXTEND_RE = re.compile(
     r"^(?P<indent>\s*)%(?P<result>[\w.$-]+)\s*=\s*(?P<op>sext|zext)\s+"
     r"(?P<narrow>i\d+)\s+(?P<source>%[\w.$-]+)\s+to\s+(?P<wide>i\d+)\s*$"
@@ -2006,6 +2011,24 @@ def _combine_or(state: _CombineState, idx: int, info: dict[str, str]) -> bool:
                 return True
     return False
 
+def _fold_cast_constant(op: str, source: int, value: int, target: int) -> int | None:
+    """The constant a ``trunc``/``zext``/``sext`` of ``value`` yields, in the
+    signed spelling of the target width (``zext`` results are non-negative
+    and fit it); None for i1 results, which are spelled true/false."""
+    if target <= 1 or source < 1:
+        return None
+    if op == "trunc":
+        width = target
+    else:
+        width = source
+    bits = value % (1 << width)
+    if op == "zext":
+        return bits
+    if bits >= 1 << (width - 1):
+        bits -= 1 << width
+    return bits
+
+
 def _narrow_width(ty: str) -> int | None:
     width = _int_width(ty)
     return width if width is not None and width > 1 else None
@@ -2258,6 +2281,18 @@ def _rewrite_function(
         match = _ICMP_EQ_RE.match(stripped)
         if match is not None:
             if _combine_icmp_extended(state, idx, match):
+                continue
+
+        match = _CAST_CONST_RE.match(stripped)
+        if match is not None:
+            folded = _fold_cast_constant(
+                match.group("op"), int(match.group("source")),
+                int(match.group("value")), int(match.group("target")),
+            )
+            if folded is not None:
+                replacements[match.group("result")] = str(folded)
+                lines[idx] = ""
+                state.changed = True
                 continue
 
         match = _ZEXT_CONST_RE.match(stripped)

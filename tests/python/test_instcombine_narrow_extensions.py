@@ -135,3 +135,57 @@ def test_narrowed_program_runs(tmp_path, combine):
     output.chmod(0o755)
     ran = subprocess.run([str(output)], capture_output=True, text=True, timeout=10)
     assert (ran.returncode, ran.stdout, ran.stderr) == (0, "", "")
+
+
+@pytest.mark.parametrize("op,source,constant,target,expected", [
+    ("trunc", "i64", "0", "i32", "0"), ("trunc", "i64", "1", "i32", "1"),
+    ("trunc", "i64", "4294967297", "i32", "1"), ("trunc", "i64", "255", "i8", "-1"),
+    ("trunc", "i64", "-1", "i16", "-1"), ("zext", "i8", "-1", "i64", "255"),
+    ("zext", "i32", "-2", "i64", "4294967294"), ("sext", "i8", "-1", "i64", "-1"),
+    ("sext", "i16", "32767", "i64", "32767"), ("zext", "i1", "true", "i32", "1"),
+])
+def test_casts_of_constants_fold(op, source, constant, target, expected):
+    text = (f"define {target} @f() {{\nentry:\n  %c = {op} {source} {constant} to {target}\n"
+            f"  ret {target} %c\n}}\n")
+    out = _combined(text)
+    assert f"ret {target} {expected}" in out, out
+    assert f" {op} " not in out, out
+
+
+CAST_SOURCE = '''target triple = "arm64-apple-darwin"
+@cell = global i32 0, align 4
+define i32 @main() {
+entry:
+  %zero = trunc i64 0 to i32
+  %one = trunc i64 4294967297 to i32
+  %byte = zext i8 -1 to i64
+  %neg = sext i16 -2 to i64
+  %old = cmpxchg ptr @cell, i32 %zero, i32 %one acquire monotonic
+  %seen = extractvalue { i32, i1 } %old, 0
+  %now = load i32, ptr @cell
+  %ok_seen = icmp eq i32 %seen, 0
+  %ok_now = icmp eq i32 %now, 1
+  %ok_byte = icmp eq i64 %byte, 255
+  %ok_neg = icmp eq i64 %neg, -2
+  %a = and i1 %ok_seen, %ok_now
+  %b = and i1 %ok_byte, %ok_neg
+  %all = and i1 %a, %b
+  %status = select i1 %all, i32 0, i32 61
+  ret i32 %status
+}
+'''
+
+
+# owned Darwin arm64 execution, before and after folding
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
+@pytest.mark.parametrize("combine", [False, True])
+def test_folded_constant_casts_run(tmp_path, combine):
+    text = _combined(CAST_SOURCE) if combine else CAST_SOURCE
+    if combine:
+        assert " trunc " not in text and " zext " not in text and " sext " not in text, text
+    output = tmp_path / "casts"
+    output.write_bytes(link_executable([emit_owned_object(text, "arm64-apple-darwin")],
+                                       entry="_main"))
+    output.chmod(0o755)
+    ran = subprocess.run([str(output)], capture_output=True, text=True, timeout=10)
+    assert (ran.returncode, ran.stdout, ran.stderr) == (0, "", "")
