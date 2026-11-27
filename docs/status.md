@@ -4282,6 +4282,23 @@ in the relevant section or issue and removes the entry.
        exact; strict629 closure/81 funcs/44204 inst fallback0,
        no libpython. No new runtime QPS/whole Stage1/2 claim;
        #647 excludes this source, no new CI.
+       Default MIR-OFF x64 stackmap pointer-alias attribution
+       (2026-11-27; independent scope, no production): exact
+       #647 Stage1 629 worker receipts function_emit1562.305,
+       stackmap649.037,layout147.837 worker-s. Frozen actual
+       class_gen direct PIDXcf4113cc/source2b1ada66,727 funcs,
+       87118 blocks/335663 inst, no fallback. Current planner
+       exact source4a28d71a; guarded18.87s/299.79MB, owner
+       diagnostic8.154s/184919 records, plan digest522a7600.
+       Resolver137330 calls,120282 exact same-object/content
+       repeats87.6%;136612 zero-hop99.48%,718 single-hop.
+       Instrumented inclusive resolve CPU0.619s, repeated subset
+       0.533s (includes observation overhead), ideal ceiling
+       ~6.5% planner, ~1% old complete backend, before extra
+       cache lookup/retention; no native benefit inferred.
+       Reject standalone cache, preserve original hash/cycle
+       validation; no source change. Next actual general OFF
+       function-emission structural attribution, no gate relax.
        Next measure current combined generator/ownership IR
        reduction and packed allocator on the actual giant, then
        sparse live planes/streamed lowering only if measured
@@ -5068,7 +5085,6 @@ in the relevant section or issue and removes the entry.
    - 2026-11-27 rejected cost-aware exact nonescaping i1 mem2reg cutoff (floor 256, ratio >8; claim 0d1d4b55). 19 focused passes, strict 629 closure fallback 0; actual giant PHIs 18,055→281, body 14.39→5.04 MB, single pass/backend CPU −26.56/−50.07%, full same-source handler compile CPU −12.98%, peak RSS −10.82%. Independent w4 fixed-CPU 5 triples: candidate 51,708–52,166 QPS vs unchanged control 53,004–53,490; normalized QPS −1.60%, CPU +1.45%. Latency repeat normalized RSS +0.336% > max control 0.275%; smaps file code RSS +72 KiB (w4), +8 KiB (w1), anonymous/dirty unchanged. Not a GC heap regression, but default runtime gate not met. Candidate source/tests not published; original and repeat raw receipts retained. Hosted direct passes-off bootstrap unaffected; no whole-stage improvement claim. Next: actual native indexed large-module codegen attribution.
 
    Claims:
-   - Actual default MIR-OFF x64 stackmap pointer-alias owner attribution (self_backend_precise_stackmaps.py only; exact indexed value identity and repeated resolution cost, no source edit before ceiling, preserve custom/cycle/hash semantics): Codex, Linux, 2026-11-27T06:22Z, area backend
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
    - Actual direct-native large-module verifier structural cost attribution (exact phi-free/terminator/edge inventory, pcc/backend/self_backend_verify.py and focused verifier tests only; distinct from CSR and closure, no edits before ceiling or verification weakening): Codex, Linux, 2026-11-27T06:04Z, area runtime-codegen
 4. **Source-language frontends**, in parallel with item 2 (different files;
