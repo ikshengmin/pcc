@@ -252,6 +252,11 @@ def _run_export_worker(
 ) -> int:
     worker_timing = worker_timing_enabled()
     total_started = time.monotonic() if worker_timing else 0.0
+    if worker_timing:
+        from pcc.frontends.python.pipeline_profile import profile_begin, profile_end
+
+    # Completed intervals are disjoint within this worker; context already
+    # emits its own nested timings. No phase clock or trace import when off.
     result_path = str(manifest["result_path"])
     ir_dir = str(manifest["ir_dir"])
     ast_dir = str(manifest.get("ast_dir", "") or "")
@@ -272,28 +277,45 @@ def _run_export_worker(
         allow_local_int_abi_proofs=len(module_names) == 1,
     )
     if ast_dir:
+        if worker_timing:
+            phase_started = profile_begin(None)
         for local_index, ast_module in enumerate(parsed_modules):
             index = assigned_indices[local_index]
             ast_path = os.path.join(ast_dir, "module_" + str(index) + ".json")
             write_ast_wire(ast_path, ast_module)
+        if worker_timing:
+            profile_end(None, "export_worker_ast_write", phase_started)
+    if worker_timing:
+        phase_started = profile_begin(None)
     edges = closed_world_reexport_edges(
         parsed_modules,
         subset_names,
         subset_srcs,
         module_names,
     )
+    if worker_timing:
+        profile_end(None, "export_worker_reexport_scan", phase_started)
     owned_metadata = None
     if owned_export_metadata is not None:
+        if worker_timing:
+            phase_started = profile_begin(None)
         owned_metadata = owned_export_metadata(
             parsed_modules, subset_names, subset_srcs, module_names, native_exports,
         )
+        if worker_timing:
+            profile_end(None, "export_worker_owned_metadata", phase_started)
     if owned_metadata is None:
+        if worker_timing:
+            phase_started = profile_begin(None)
         module_dependencies = closed_world_module_dependencies(
             parsed_modules,
             subset_names,
             subset_srcs,
             module_names,
         )
+        if worker_timing:
+            profile_end(None, "export_worker_dependencies", phase_started)
+            phase_started = profile_begin(None)
         function_object_uses = mark_function_object_exports(
             parsed_modules,
             subset_names,
@@ -301,6 +323,8 @@ def _run_export_worker(
             native_exports,
             known_module_names=module_names,
         )
+        if worker_timing:
+            profile_end(None, "export_worker_function_objects", phase_started)
     else:
         module_dependencies, function_object_uses = owned_metadata
     exports_path = os.path.join(
@@ -311,17 +335,24 @@ def _run_export_worker(
         ir_dir,
         "reexports_" + os.path.basename(result_path) + ".json",
     )
+    if worker_timing:
+        phase_started = profile_begin(None)
     write_native_exports_wire(
         exports_path,
         native_exports,
         {},
         function_object_uses=function_object_uses,
     )
+    if worker_timing:
+        profile_end(None, "export_worker_native_wire", phase_started)
+        phase_started = profile_begin(None)
     write_reexport_edges_wire(
         edges_path,
         edges,
         module_dependencies=module_dependencies,
     )
+    if worker_timing:
+        profile_end(None, "export_worker_reexport_wire", phase_started)
     with open(result_path, "w", encoding="utf-8") as stream:
         line = "EXPORT\t" + exports_path + "\t" + edges_path
         if worker_timing:
