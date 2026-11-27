@@ -21,9 +21,12 @@ from .arm64_encode import (
 
 def encode_producer_registers(
     mnemonic: str, destination: str, left: str,
-    right: str = "", fourth: str = "", shift: int = 0,
+    right: str = "", fourth: str = "", shift: int = 0, shift_kind: int = 0,
 ) -> int:
-    """Original register/condition operands, never an assembly line."""
+    """Original register/condition operands, never an assembly line.
+
+    ``shift_kind`` (0 lsl, 1 lsr, 2 asr) applies ``shift`` to the second
+    source register of add/sub/and/orr/eor."""
     unary = mnemonic in ("neg", "sxtb", "sxth", "sxtw", "fneg", "fcmp",
                          "fmov", "fcvt", "scvtf", "ucvtf", "fcvtzs", "fcvtzu", "clz", "rbit", "rev", "rev16",
                          "uxtw", "mvn", "tst", "fabs", "fsqrt",
@@ -32,8 +35,10 @@ def encode_producer_registers(
         raise EncodeError("unexpected producer right operand")
     if mnemonic not in ("madd", "msub", "csel", "fcsel", "csinv") and fourth:
         raise EncodeError("unexpected producer fourth operand")
-    if mnemonic not in ("add", "sub", "adds", "subs", "orr") and shift != 0:
+    if mnemonic not in ("add", "sub", "adds", "subs", "and", "orr", "eor") and (shift != 0 or shift_kind != 0):
         raise EncodeError("unexpected producer register shift")
+    if not 0 <= shift_kind <= 2:
+        raise EncodeError("unexpected producer register shift kind")
     if _is_sp_token(destination) or _is_sp_token(left):
         raise EncodeError("producer scalar operation cannot use SP")
     if mnemonic in ("fadd", "fsub", "fmul", "fdiv", "fneg", "fcmp", "fcsel", "fabs", "fsqrt",
@@ -126,9 +131,10 @@ def encode_producer_registers(
         raise EncodeError("producer integer register widths differ")
     if mnemonic in ("add", "sub", "adds", "subs"):
         return _enc_addsub_reg(int(mnemonic.startswith("sub")), rd, rn, rm, d64,
-                               int(mnemonic in ("adds", "subs")), shift=shift)
+                               int(mnemonic in ("adds", "subs")), shift=shift, shift_kind=shift_kind)
     if mnemonic in ("and", "orr", "eor"):
-        return _enc_logical_reg({"and": 0, "orr": 1, "eor": 2}[mnemonic], rd, rn, rm, d64, shift=shift)
+        return _enc_logical_reg({"and": 0, "orr": 1, "eor": 2}[mnemonic], rd, rn, rm, d64,
+                                shift=shift, shift_kind=shift_kind)
     if mnemonic in ("lslv", "lsrv", "asrv"):
         op2 = {"lslv": 8, "lsrv": 9, "asrv": 10}[mnemonic]
         return _sf(d64) | 0x1AC00000 | (rm << 16) | (op2 << 10) | (rn << 5) | rd

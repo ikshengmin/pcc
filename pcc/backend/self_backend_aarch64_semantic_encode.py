@@ -201,14 +201,16 @@ def encode_semantic_instruction(opcode_id: int, operands: list[CompilerInt4]) ->
     else:
         registers = []
         shift = 0
+        shift_kind = 0
         for operand in operands:
             if operand.first == TOKEN_REGISTER:
                 registers.append(_register(operand))
-            elif operand.first == TOKEN_SHIFT and SHIFT_NAMES[operand.second] == "lsl":
+            elif operand.first == TOKEN_SHIFT and SHIFT_NAMES[operand.second] in ("lsl", "lsr", "asr"):
                 shift = operand.third
+                shift_kind = operand.second
             else:
                 raise encoder.EncodeError("typed replacement operands are unsupported")
         if len(registers) < 2 or len(registers) > 4:
             raise encoder.EncodeError("typed replacement register count is unsupported")
-        word = encode_producer_registers(mnemonic, registers[0], registers[1], registers[2] if len(registers) > 2 else "", registers[3] if len(registers) > 3 else "", shift)
+        word = encode_producer_registers(mnemonic, registers[0], registers[1], registers[2] if len(registers) > 2 else "", registers[3] if len(registers) > 3 else "", shift, shift_kind)
     return CompilerInt4(word, family, kind, symbol)

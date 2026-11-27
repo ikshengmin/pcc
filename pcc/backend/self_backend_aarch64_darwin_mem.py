@@ -685,10 +685,11 @@ def _capture_direct_instruction(
 def emitted_scalar_register_line(
     mnemonic: str, destination: str, left: str,
     right: str = "", fourth: str = "", shift: int = 0,
-    *, explicit_shift: bool = False,
+    *, explicit_shift: bool = False, shift_kind: int = 0,
 ) -> str:
+    """``shift_kind`` 0/1/2 names lsl/lsr/asr for the shifted second source."""
     if _DIRECT_INSTRUCTION_RECORDS is not None:
-        word = encode_producer_registers(mnemonic, destination, left, right, fourth, shift)
+        word = encode_producer_registers(mnemonic, destination, left, right, fourth, shift, shift_kind)
         operands = [_semantic_register(destination), _semantic_register(left)]
         if right:
             operands.append(
@@ -700,7 +701,7 @@ def emitted_scalar_register_line(
                 else _semantic_register(fourth)
             )
         if shift or explicit_shift:
-            operands.append(CompilerInt4(semantics.TOKEN_SHIFT, 0, shift, 1))
+            operands.append(CompilerInt4(semantics.TOKEN_SHIFT, shift_kind, shift, 1))
         _capture_direct_instruction(word, EMITTED_INSTRUCTION_SCALAR, 0, -1, mnemonic, operands)
         return DIRECT_INSTRUCTION_PLACEHOLDER
     line = "  " + mnemonic + " " + destination + ", " + left
@@ -709,7 +710,7 @@ def emitted_scalar_register_line(
     if fourth:
         line += ", " + fourth
     if shift or explicit_shift:
-        line += ", lsl #" + str(shift)
+        line += ", " + semantics.SHIFT_NAMES[shift_kind] + " #" + str(shift)
     return line
 
 

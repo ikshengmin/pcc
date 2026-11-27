@@ -3278,6 +3278,28 @@ in the relevant section or issue and removes the entry.
    with the h10-rot2 runtime). Remaining hot backward branches: loops
    whose latch has other backedges (`continue`), slow-path `b` in rotated
    loops (cold), and loops with a header outside the rotation shape.
+   (t) Merged as LLVM-parity lowering, not a performance claim (Claude,
+   2026-11-28): a constant `shl`/`lshr`/`ashr` whose only use is the
+   directly following i32/i64 `add`/`sub`/`and`/`or`/`xor` (the
+   subtrahend for `sub`) is that operation's shifted second source
+   (`eor x1, x1, x0, asr #13` in `pcc_container_unlock`);
+   `adjacent_shift_operand` decides for both instructions and leaves
+   consumers fused into `madd` or `tst` alone. Producer encoding, direct
+   capture and semantic re-encoding gained lsr/asr kinds (clang 20
+   words); `test_arm64_encode_producer.py` had listed a shifted `and` as
+   unproven and now encodes the shifted forms. Arm h11-shift against
+   h10-rot2 (same source otherwise; five repeats, runs within 0.93%):
+   211880 -> 211774 instructions (-0.05%, inside the noise). Most hot
+   shifts feed address computations, `gep i8, @stripes, (shl %h, 7)` in
+   the container locks; folding them into the GEP's `add` and into
+   register-offset loads (`[Xn, Xm, lsl #s]`) is the next step. Five
+   `"x" + str(...)` register spellings in the compute module (2026-11-01,
+   2026-11-13) now call a typed `_x_register`, so the module compiles
+   standalone with `pcc --python-library` again (it failed on HEAD like
+   the memory module in (r)). Tests: the new file executes every folded
+   and kept form natively under both allocators; backend files 8240
+   passed with (r)'s four nodes deselected (the archive one passed alone
+   with the h11-shift runtime).
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2

@@ -158,6 +158,129 @@ def _binop_immediate_line(
     return ""
 
 
+def _x_register(number: int) -> str:
+    # A typed int parameter: a standalone --python-library compile treats
+    # this package's imports as CPython, and str() of such a call result in
+    # the large emitters cannot publish into its output slot.
+    return "x" + str(number)
+
+
+def adjacent_shift_operand(
+    func: ParsedFunction,
+    kernel: IndexedFunctionKernel | None,
+    block_id: int,
+    position: int,
+) -> CompilerInt4:
+    """Return (shift value, source ref, shift kind, amount), or first=-1.
+
+    ``%s = shl/lshr/ashr iN %y, C`` (N 32 or 64, 0 < C < N) whose only use
+    is the directly following ``add``/``sub``/``and``/``or``/``xor`` of the
+    same type, as that operation's second source (``sub``: its subtrahend),
+    is selected as the shifted-register form; kind 0/1/2 is lsl/lsr/asr. The
+    other operand must be a value. A consumer fused into ``madd`` or into a
+    ``tst`` reads the shift itself and keeps it. The shift and its consumer
+    both query this, so the decision depends only on the kernel and the
+    function's fusion plans.
+    """
+    missing = CompilerInt4(-1, -1, 0, 0)
+    if kernel is None or block_id < 0 or position < 0:
+        return missing
+    block: CompilerInt4 = kernel.block_fact(block_id)
+    if position + 1 >= block.second:
+        return missing
+    producer: CompilerInt4 = kernel.instruction_metadata_by_id(block.first + position)
+    consumer: CompilerInt4 = kernel.instruction_metadata_by_id(block.first + position + 1)
+    if producer.first != PARSED_INSTRUCTION_KIND_BINOP or consumer.first != PARSED_INSTRUCTION_KIND_BINOP:
+        return missing
+    shift: CompilerInt4 = kernel.instruction_record(producer.second)
+    shift_op = kernel.call_texts[shift.first]
+    if shift_op == "shl":
+        kind = 0
+    elif shift_op == "lshr":
+        kind = 1
+    elif shift_op == "ashr":
+        kind = 2
+    else:
+        return missing
+    header: CompilerInt4 = kernel.type_header(shift.second)
+    if header.first != TYPE_KIND_INT or (header.second != 32 and header.second != 64):
+        return missing
+    if shift.third < 0 or shift.fourth >= 0:
+        return missing
+    amount_text = kernel.call_texts[-shift.fourth - 1]
+    if len(amount_text) > 2:
+        return missing
+    amount = const_int_from_value(amount_text)
+    if amount is None or amount <= 0 or amount >= header.second:
+        return missing
+    definition: CompilerInt4 = kernel.instruction_fact_by_id(block.first + position)
+    if definition.first < 0 or kernel.last_use(block_id, definition.first) != position + 1:
+        return missing
+    use: CompilerInt4 = kernel.instruction_record(consumer.second)
+    use_op = kernel.call_texts[use.first]
+    if use_op not in ("add", "sub", "and", "or", "xor") or use.second != shift.second:
+        return missing
+    if use.fourth == definition.first:
+        other = use.third
+    elif use.third == definition.first and use_op != "sub":
+        other = use.fourth
+    else:
+        return missing
+    if other < 0 or other == definition.first:
+        return missing
+    result: CompilerInt4 = kernel.instruction_fact_by_id(block.first + position + 1)
+    if result.first < 0 or result.first in func.aarch64_folded_test_ands:
+        return missing
+    if aarch64_madd_fusion_for_result(func, kernel.value_name(result.first)) is not None:
+        return missing
+    return CompilerInt4(definition.first, shift.third, kind, amount)
+
+
+def _emit_shifted_operand_binop(
+    func: ParsedFunction,
+    kernel: IndexedFunctionKernel,
+    op: str,
+    record: CompilerInt4,
+    folded: CompilerInt4,
+    dest_id: int,
+    type_id: int,
+    module_symbols: PreparedModuleSymbols,
+) -> list[str]:
+    """``op result, other, source, <kind> #amount`` for a folded shift."""
+    other = record.fourth if record.third == folded.first else record.third
+    lines: list[str] = []
+    other_register = allocated_scalar_register_indexed(kernel, other, type_id)
+    if other_register < 0:
+        other_register = 9
+        lines.extend(materialize_scalar_value_indexed(
+            func, kernel, kernel.value_name(other), type_id, 9, module_symbols, value_id=other,
+        ))
+    source_register = allocated_scalar_register_indexed(kernel, folded.second, type_id)
+    if source_register < 0:
+        source_register = 10
+        lines.extend(materialize_scalar_value_indexed(
+            func, kernel, kernel.value_name(folded.second), type_id, 10, module_symbols,
+            value_id=folded.second,
+        ))
+    result_register = allocated_scalar_register_indexed(kernel, dest_id, type_id)
+    if result_register < 0:
+        result_register = 11
+    result = reg_name_indexed(kernel, type_id, result_register)
+    mnemonic = op
+    if op == "or":
+        mnemonic = "orr"
+    elif op == "xor":
+        mnemonic = "eor"
+    lines.append(emitted_scalar_register_line(
+        mnemonic, result,
+        reg_name_indexed(kernel, type_id, other_register),
+        reg_name_indexed(kernel, type_id, source_register),
+        shift=folded.fourth, shift_kind=folded.third,
+    ))
+    lines.extend(_commit_or_spill_scalar_result_indexed(func, kernel, dest_id, type_id, result))
+    return lines
+
+
 def _boolean_literal_indexed(kernel, reference: int) -> int:
     if reference >= 0:
         return -1
@@ -1178,6 +1301,11 @@ def emit_compute_instruction_by_id(
                     return []
                 if not indexed_dest_has_slot:
                     return []
+                if (op == "shl" or op == "lshr" or op == "ashr") and adjacent_shift_operand(
+                    func, indexed_kernel, block_id, instruction_index,
+                ).first >= 0:
+                    # Selected into the next operation's shifted operand.
+                    return []
                 fusion = None
                 if value_type_header.second == 64:
                     fusion = aarch64_madd_fusion_for_result(func, dest)
@@ -1228,6 +1356,15 @@ def emit_compute_instruction_by_id(
                         )
                     )
                     return lines
+                if op in ("add", "sub", "and", "or", "xor"):
+                    folded: CompilerInt4 = adjacent_shift_operand(
+                        func, indexed_kernel, block_id, instruction_index - 1,
+                    )
+                    if folded.first >= 0:
+                        return _emit_shifted_operand_binop(
+                            func, indexed_kernel, op, binop_record, folded,
+                            indexed_dest_id, value_type_id, module_symbols,
+                        )
                 lhs_register = 9
                 rhs_register = 10
                 result_register = 11
@@ -2064,14 +2201,14 @@ def emit_compute_instruction_by_id(
                     indexed_kernel, indexed_dest_id, gep_span.second,
                 )
                 lines = []
-                base_name = "x" + str(base_register)
+                base_name = _x_register(base_register)
                 if base_register < 0:
                     base_name = "x9"
                     lines.extend(materialize_scalar_value_indexed(
                         func, indexed_kernel, ptr_value, gep_header.second, 9,
                         module_symbols, value_id=gep_header.third,
                     ))
-                result_name = "x" + str(result_register) if result_register >= 0 else "x11"
+                result_name = _x_register(result_register) if result_register >= 0 else "x11"
                 lines.extend(emit_add_offset(result_name, base_name, constant_offset))
                 if result_register < 0:
                     lines.extend(_commit_or_spill_scalar_result_indexed(
@@ -2103,17 +2240,17 @@ def emit_compute_instruction_by_id(
                         indexed_kernel, indexed_dest_id, gep_span.second,
                     )
                     lines = []
-                    base_name = "x" + str(base_register)
+                    base_name = _x_register(base_register)
                     if base_register < 0:
                         base_name = "x9"
                         lines.extend(materialize_scalar_value_indexed(
                             func, indexed_kernel, ptr_value, gep_header.second, 9,
                             module_symbols, value_id=gep_header.third,
                         ))
-                    result_name = "x" + str(result_register) if result_register >= 0 else "x11"
+                    result_name = _x_register(result_register) if result_register >= 0 else "x11"
                     shift = {1: 0, 2: 1, 4: 2, 8: 3, 16: 4}[element_size]
                     lines.append(emitted_scalar_register_line(
-                        "add", result_name, base_name, "x" + str(index_register),
+                        "add", result_name, base_name, _x_register(index_register),
                         shift=shift,
                     ))
                     if result_register < 0:
