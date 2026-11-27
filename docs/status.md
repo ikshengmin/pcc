@@ -5796,8 +5796,58 @@ in the relevant section or issue and removes the entry.
    Stage1 route harness disjoint. CI ELF context heavy first;
    source-only attribution prep until release.
 
-   Claims:
-   - Stage2 coordinator local lexical closure scan attribution: Codex, Linux, 2026-11-26T23:11Z, area selfhost
+   Stage2 owned selfhost coordinator lexical cache last-use release:
+   exact #638 source9223aca1 uninstrumented closure613->625 modules,
+   624 siblings, actual ABI validation included, exact order against
+   prior attribution. Three pure retained caches D643/T623/I32,
+   1,298 entries/1,924 string identities/671 distinct same-content
+   pairs, 51,737,771 UTF8 bytes and host getsizeof71,811,192B (not
+   native RSS). Exact content manifest SHA66e0187727e1e034387654753c2b0726dcbe86eed9b1977966f8991ab8970140;
+   identity rows SHA3354f61d2751bebc3691d8bd93fb83c5709686d76326bf25e7bd02b6b754c26a.
+   Release only all three original dictionary objects after last
+   init order, owned pcc.__main__ exact realpath, scaffold on/self,
+   non-emit/no explicit target/direct indexed route. Generic action
+   cache dependency scan may legitimately use caches later, so
+   non-direct routes unchanged; worker processes own separate caches.
+   Five test-first helper-missing failures->5 passes, current
+   source e1a0fc9e uninstrumented graph614->626/625 siblings exact
+   SHA060ffe8d685400ae340bb44529bf12d7fe0a6324a63b568ea58804b996ec0af2,
+   cache644/624/34->0/0/0 unchanged identities. Strict context
+   626-module changed scan59 funcs/24,541 inst, pipeline329/195,168,
+   zero fallback/no libpython.
+   Actual native lexical transform smoke (12.3KB T +14.3KB I +12B D)
+   exact output/cache D3/T1/I1; candidate release0, subsequent
+   exact memoized reuse both arms. Prior large380KB transform smoke
+   deliberately stopped at30s for peer slot, unqualified; full
+   transform replay not used as performance evidence. Separate
+   source-matched static native full retained-owner reconstruction
+   verifies each1,924 content SHA256,671 distinct same-content pairs,
+   actual ordered dictionary key/value aliases before loader returns.
+   Baseline/candidate exact archive byte-identical, source provenance
+   separately rebuilt/verified; native ELF SHA3647e209/23db87d0.
+   Exclusive five alternating A/B/control triples, all15 exact.
+   After loader return and actual production clear, baseline vs
+   candidate post-release requested53,992,871->2,176,460B
+   (-51,816,411), usable58,630,368->2,433,280B (-56,197,088),
+   mapped64,233,472->17,997,824B (-46,235,648), RSS67,664->22,572KiB
+   (-45,092,5/5, unchanged control0/max8KiB). Full process peak
+   67,868->67,664KiB (-204,5/5, control+4/max68). Loader drop
+   separately requested85,666B/usable116,896B/RSS0 all arms.
+   CPU4.575338->4.594864s (+.427%,2/5, control-.603%; paired
+   normalized+.05698s vs max unchanged drift.332109s), wall
+   4.659034->4.675822s (+.360%,1/5, control-1.043%; paired
+   normalized+.03663s vs max unchanged drift.47926s). No proven
+   speed improvement, observed cost within unchanged control.
+   Scope is exact retained-owner memory, not original lexical
+   phase performance, parent coordinator whole-process RSS, or
+   completed Stage2 time/peak. Raw 15 receipt SHA256
+   510aa0b3c8c3814588b25afe48f6ce76d96a3cc4ea276d1092a631141c0508fa,
+   summary SHA256 acf5b1f106b4486173d1f6ff28a9f59cb70169b69dd1f3234c974170bb5a8525.
+   No limits/concurrency relaxed; latest complete fixed point
+   still unqualified. Next real lexical duplicate/large-source
+   cost attribution and test-first local snapshot reuse, no
+   persistent cache or broad route changes.
+
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its

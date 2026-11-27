@@ -447,6 +447,27 @@ _SCAN_CACHE_MAX_ENTRIES = 4096
 _DISCOVERY_TEXT_CACHE: dict = {}
 _WITHOUT_TYPE_CHECKING_CACHE: dict = {}
 _WITHOUT_IMPLEMENTATION_CACHE: dict = {}
+_OWNED_DISCOVERY_TEXT_CACHE: dict = _DISCOVERY_TEXT_CACHE
+_OWNED_WITHOUT_TYPE_CHECKING_CACHE: dict = _WITHOUT_TYPE_CHECKING_CACHE
+_OWNED_WITHOUT_IMPLEMENTATION_CACHE: dict = _WITHOUT_IMPLEMENTATION_CACHE
+
+
+def release_owned_coordinator_lexical_caches() -> bool:
+    """Release pure discovery snapshots after the selfhost coordinator's last use.
+
+    The ordinary direct readers remain memoized and already tolerate cache
+    clears at their size bound. Never clear a caller-replaced cache object.
+    The coordinator calls this only after its complete closure/init ordering;
+    worker processes own independent lexical caches.
+    """
+    if (_DISCOVERY_TEXT_CACHE is not _OWNED_DISCOVERY_TEXT_CACHE
+            or _WITHOUT_TYPE_CHECKING_CACHE is not _OWNED_WITHOUT_TYPE_CHECKING_CACHE
+            or _WITHOUT_IMPLEMENTATION_CACHE is not _OWNED_WITHOUT_IMPLEMENTATION_CACHE):
+        return False
+    _DISCOVERY_TEXT_CACHE.clear()
+    _WITHOUT_TYPE_CHECKING_CACHE.clear()
+    _WITHOUT_IMPLEMENTATION_CACHE.clear()
+    return True
 
 
 def _false_implementation_guard(line, alias, implementation):

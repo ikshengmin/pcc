@@ -3776,6 +3776,34 @@ def _check_compiled_module_imports_are_in_closure(
         )
 
 
+def _release_selfhost_coordinator_lexical_caches(
+    src_paths: list[str], module_names: list[str], entry_module: str,
+    ir_scaffold_mode: str, native_backend: Optional[str], emit_llvm_only: bool,
+    target_triple: Optional[str],
+) -> bool:
+    """Drop dead lexical snapshots only at the owned selfhost CLI boundary."""
+    if (entry_module != "pcc.__main__" or ir_scaffold_mode != "on"
+            or native_backend != "self" or emit_llvm_only or target_triple is not None):
+        return False
+    # The indexed direct route bypasses the later module-action dependency
+    # scan. Other coordinator routes can still consume the lexical caches.
+    direct_assembly = str(
+        os.environ.get("PCC_DIRECT_INDEXED_KERNEL_EMIT", "") or ""
+    ).strip().lower() in ("1", "true", "yes", "on")
+    if not direct_assembly:
+        return False
+    try:
+        entry_index = module_names.index(entry_module)
+        entry_path = os.path.realpath(src_paths[entry_index])
+        owned_entry = os.path.realpath(os.path.join(_PCC_DIR, "__main__.py"))
+    except Exception:
+        # This optional memory release must not introduce compile failures.
+        return False
+    if entry_path != owned_entry:
+        return False
+    return _pipeline_import_scan.release_owned_coordinator_lexical_caches()
+
+
 def compile_python_multi(
     src_paths,
     out_path: str,
@@ -3931,6 +3959,10 @@ def compile_python_multi(
     sibling_inits = _order_module_inits(src_paths, module_names, entry_module)
     _profile_end(profile, "order_module_inits", t)
     _coordinator_memory_phase("init-order-returned")
+    _release_selfhost_coordinator_lexical_caches(
+        src_paths, module_names, entry_module,
+        ir_scaffold_mode, native_backend, emit_llvm_only, target_triple,
+    )
     _profile_counter(profile, "before_build_closed_world_context", len(src_paths))
 
     total_ir_bytes_before_passes = 0
