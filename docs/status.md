@@ -5365,6 +5365,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend toward LLVM parity: locate the LLVM step the self passes lack (pcc_perf reference ablations, scripts/pcc_perf.py), then implement it in pcc's own AArch64 passes (shrink-wrapping, allocation or selection, whichever the ablation ranks first); IR-pass changes are target-neutral and reach x64; avoids the typed x64 MIR files: Claude, macOS, 2026-11-27T06:46Z, area backend
+   - Stage1 AArch64 private typed finalizer span-history memory attribution (actual #650 Mac finalize1309.751 worker-s; clean184f51f0 cross-target Darwin structured PCO from historical625/inlineOFF ARM c_codegen PIDX48c535cf, not hosted Mac exact; guarded paired baseline/census, per-pass live/retained counts and exact PCO, no source/default/guard/CI changes): Codex, Linux, 2026-11-27T13:09Z, area backend
 
 
 
