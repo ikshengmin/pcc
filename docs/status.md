@@ -3180,6 +3180,13 @@ in the relevant section or issue and removes the entry.
    is worth 0.5-1% and touches three encoders, the allocator and the
    emitters; a selection framework that matches single-use operand trees
    once would make each further pattern a table entry.
+   (n) Merged (Claude, 2026-11-27): the pthread kernel runs the runtime
+   pass list without the inliners (`owned_runtime_build._without_inlining`,
+   Makefile `PCC_THREAD_KERNEL_IR_PASSES`). Its lock, TLS and stop-the-world
+   helpers kept constant truncations, a multiply by 128, sign extensions
+   before zero tests and branches on constant PHIs; inlining into them had
+   grown those paths (l). Arm h5-kscalar against h4-tst, control h3-base2:
+   instructions -0.51%; the arm's smoke and primitives exact at w1/w4.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2

@@ -155,10 +155,26 @@ merge:
     assert owned._runtime_passes_after_frontend(PASSES, PREFIX, first) == PASSES
 
 
+def _no_inline(passes):
+    return ",".join(name for name in passes.split(",") if not name.startswith("inline"))
+
+
+def test_the_pthread_kernel_list_drops_only_the_inliners():
+    assert owned._without_inlining(PASSES) == _no_inline(PASSES)
+    assert "inline" not in owned._without_inlining(PASSES)
+    assert owned._without_inlining("inline-defined-wide") == ""
+    makefile = (ROOT / "pcc/runtime/Makefile").read_text()
+    assert "$(subst $(PCC_COMMA)inline-defined-wide,,$(PCC_RUNTIME_IR_PASSES))" in makefile
+
+
+# The pthread kernel takes the runtime pass list without the inliners: its
+# lock, TLS and stop-the-world helpers were emitted unoptimized, and
+# inlining into them measured no gain (docs/status.md, item 3 P0 notes).
 @pytest.mark.parametrize("passes, evidence, expected", [
-    (PASSES, PREFIX, [TAIL]), (PREFIX, PREFIX, []), (PASSES, None, [PASSES]),
+    (PASSES, PREFIX, [TAIL, _no_inline(TAIL)]), (PREFIX, PREFIX, []),
+    (PASSES, None, [PASSES, _no_inline(PASSES)]),
 ])
-def test_archive_applies_remaining_tail_but_never_to_pthread_kernel(
+def test_archive_applies_remaining_tail_and_the_kernel_its_scalar_passes(
     tmp_path, monkeypatch, passes, evidence, expected,
 ):
     from pcc.backend import ar_writer, owned_object_emit

@@ -255,8 +255,14 @@ $(OBJDIR_PY)/%.o.provenance.json: $(OBJDIR_PY)/%.o
 # call to pcc_thread_safepoint into pcc_thread_safepoint (and every helper),
 # causing immediate unbounded recursion. Its blocking loops already contain
 # the required explicit polls; disable automatic insertion for this one object.
+# It takes the runtime pass list without the inliners (owned_runtime_build
+# _without_inlining): inlining grew its lock and safepoint paths.
+PCC_COMMA := ,
+PCC_THREAD_KERNEL_IR_PASSES = $(subst $(PCC_COMMA)inline-defined-wide,,$(PCC_RUNTIME_IR_PASSES))
 $(OBJDIR_PY)/freestanding_thread_kernel_pthread.o: $(PYDIR)/freestanding_thread_kernel_pthread.py | $(OBJDIR_PY)
 	PYTHONPATH=$(PCC_REPO_ROOT) PCC_HOST_PYTHON=$(PYTHON) PCC_IMPLICIT_THREAD_SAFEPOINTS=0 $(PCC) --python-library --target=$(PCC_RUNTIME_TARGET) --emit-llvm=$(OBJDIR_PY)/freestanding_thread_kernel_pthread.ll $<
+	PYTHONPATH=$(PCC_REPO_ROOT) $(PYTHON) -m pcc.ir.optimization.driver "$(PCC_THREAD_KERNEL_IR_PASSES)" $(OBJDIR_PY)/freestanding_thread_kernel_pthread.ll $(OBJDIR_PY)/freestanding_thread_kernel_pthread.opt.ll
+	mv $(OBJDIR_PY)/freestanding_thread_kernel_pthread.opt.ll $(OBJDIR_PY)/freestanding_thread_kernel_pthread.ll
 	PYTHONPATH=$(PCC_REPO_ROOT) $(PCC_IR_TO_OBJ) $(OBJDIR_PY)/freestanding_thread_kernel_pthread.ll $@ --target=$(PCC_RUNTIME_TARGET) --provenance $@.provenance.json --source $< --runtime-root $(CURDIR) --member $(@F) $(PCC_RUNTIME_CONFIG_ARGS)
 
 # The logger's raw sink cannot suspend while it owns the sink lock. Suppress

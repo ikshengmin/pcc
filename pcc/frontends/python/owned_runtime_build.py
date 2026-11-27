@@ -180,6 +180,22 @@ def _compile_runtime_module(name, source, ir_path, target, *, runtime_dir=None):
                 os.environ[key] = value
 
 
+def _without_inlining(passes: str) -> str:
+    """The kernel's pass list: every runtime pass but the inliners.
+
+    The pthread kernel's lock, TLS and stop-the-world helpers are emitted
+    unoptimized otherwise (constant truncations, a multiply by 128, sign
+    extensions before zero tests, branches on constant PHIs). Inlining into
+    those paths grew them and measured no gain (docs/status.md, item 3 P0
+    notes), so only the scalar cleanups run here.
+    """
+    kept = []
+    for name in passes.split(","):
+        if name and not name.startswith("inline"):
+            kept.append(name)
+    return ",".join(kept)
+
+
 def _runtime_passes_after_frontend(passes, frontend_prefix, ir_text):
     """Elide only a proven no-op repeat of the frontend's owned default tier."""
     from pcc.frontends.python.compiled_default_passes import _has_py_cpy_call
@@ -260,12 +276,13 @@ def _build_runtime_module(runtime_dir, name, target, output_dir, passes, config)
     # As in the Makefile rule, the object and its receipt describe the
     # optimized IR: precise stack maps expect promoted frame-slot
     # locals, and unoptimized runtime code is not what Darwin ships.
-    if name != _THREAD_KERNEL_MODULE:
-        remaining_passes = _runtime_passes_after_frontend(passes, frontend_prefix, ir_text)
-        if remaining_passes is not None:
-            ir_text = optimize_ir(ir_text, remaining_passes)
-        with open(ir_path, "w", encoding="utf-8") as stream:
-            stream.write(ir_text)
+    remaining_passes = _runtime_passes_after_frontend(passes, frontend_prefix, ir_text)
+    if remaining_passes is not None and name == _THREAD_KERNEL_MODULE:
+        remaining_passes = _without_inlining(remaining_passes)
+    if remaining_passes:
+        ir_text = optimize_ir(ir_text, remaining_passes)
+    with open(ir_path, "w", encoding="utf-8") as stream:
+        stream.write(ir_text)
     data = emit_owned_object(ir_text, target)
     with open(object_path, "wb") as stream:
         stream.write(data)
