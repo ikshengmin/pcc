@@ -469,6 +469,44 @@ integration remainder budget exhausted UNRUN. #638 aggregate exact
 producers, not global green. No complete Stage2 <= Stage1 or
 six-worker Stage1 300s acceptance.
 
+As of 2026-11-27T00:13Z a distinct cumulative immutable source snapshot
+at production head 0409a468 follows #645 run
+[45909263179](https://github.com/ikshengmin/pcc/actions/runs/45909263179),
+exact head bc1094c305384e6c1dcc742fb180fa5b962b9491, observed pending.
+Verified first-parent ancestry includes:
+cf7762a6 target-qualified freestanding Linux x64 initial-exec TLS
+(existing self emitted assembly/object byte-identical, five focused and
+33 adjacent tests, contextual626 fallback0; hosted LLVM reference
+still UNRUN, no allowance of TLSGD or external resolver);
+6aab9ce7 validated coordinator lexical-cache retirement after indexed
+initialization ordering (Stage2 memory-only exact acceptance, no full
+fixed-point qualification);
+0409a468 opt-in managed live slab size distribution at manifests-ready
+(native owner and diagnostics verification, no allocation layout or
+performance claim). Rejected candidates are not production. No changes
+to resource caps, worker counts, deadlines or source/reference tests.
+
+Latest #639 source 4efcdda1473df9f234640751ed3d65bc42d1d4fd verified
+all four Stage1 manifest-bound actual receipts: 625/625 modules each.
+Compile wall/peak bytes: Linux x64 1163.566s/3018366976 (artifact
+15160016178), ARM1573.257s/5043924992 (15160156396), Windows x64
+1738.770s/3664633856 (15160695690), macOS ARM3342.503s with observed
+peak unavailable (15160584849); entry is separate, macOS avg1.913
+fails target avg2 and1800s. Stage2 owner partial/timeouts x64
+15161420535 peak3258445824, ARM15161147939 peak4682493952, Win
+15160784369 1800.221s deadline/RSS not observed. No complete
+Stage2 <= Stage1 qualification. Four worker prior failures still
+the historical stale three-root node fixed5f49dbca later.
+Java reference actual four red selected-JDK-only normative obligations,
+not a PCC output regression; preserve unchanged oracle. Java integration
+two additional selected-JDK-only disagreements and two actual unchanged
+Commons/ZXing reference field/class-init gaps, #13 frontend remains
+frozen until existing runtime/platform/nonregression gate. No waiver.
+
+Existing queued/active runs preserved; exact production parent had
+zero workflow runs prior to this normal cumulative source-distinct
+checkpoint, no duplicate/cancel/rerun.
+
 Do not claim any hosted lane green from focused tests. The latest completed
 [checkpoint comparison](investigations/checkpoint-validation-45427972345.md)
 keeps that baseline: candidate `7ec14d388` has exact test regressions
