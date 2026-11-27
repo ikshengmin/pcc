@@ -2157,6 +2157,23 @@ in the relevant section or issue and removes the entry.
    runtime costs (call paths, ownership protocol, allocation, syscalls),
    never from route- or module-specific paths. Platform: any for code;
    numbers come from the local Mac (labeled local Mac evidence) or Linux.
+   Target, maintainer 2026-11-28 (translated): with pcc's advantages used,
+   at least 2x asyncio is the reasonable bar; LLVM parity alone is not the
+   goal. Arithmetic: asyncio's request is 11.5 us of processor time, so 2x
+   is 5.75 us; the self build is 17.1 us and LLVM's backend on the same IR
+   13.7 us (2026-11-28, w1, under load), so code-generation parity reaches
+   about 1.25x of the way and the rest is fewer runtime operations per
+   request, which compile-time knowledge can remove (Claude's order):
+   ownership in code generation (no root store or count for borrowed
+   temporaries, known-empty slots, immortal or tagged values; 304
+   `pcc_gc_store_root` per request), escape analysis for objects that stay
+   in the request (no container lock or provenance check, batched
+   allocation), type specialization of the hot compiled library code
+   (json encoder, `str.join`), and coroutine frames that keep their locals
+   across an await. Stepped budget of h10-rot2 per request (118k
+   instructions): counts and GC barriers 25%, strings and json 22%,
+   allocation and release 16%, container locks 7.7%, lists 5.9%, dicts and
+   attributes 4.0%, generator frames 3.4%.
    - Lower level, the in-process handler against its CPython asyncio
      counterpart (`benchmarks/handler/`): beat asyncio on every collector
      with one worker and with four; four workers are never slower than one.
@@ -3375,6 +3392,24 @@ in the relevant section or issue and removes the entry.
    archive one passed alone with the h13-page2 runtime). The phase split
    first failed the CRLF-emulating capi inventory test (IR read back with
    host newlines); phase "object" now reads LF text.
+   (x) Merged (Claude, 2026-11-28): instcombine puts the constant of
+   add/mul/and/or/xor on the right (905 constant-left operations in the
+   arm64 runtime IR before, none after; exact 113420 -> 113121, -0.26%,
+   measured across h13-page -> h14-ic). A constant `shl i64 %i, k` used
+   only by the next GEP's index folds into its address: `ldr/str Rt,
+   [Xb, Xi, lsl #k]` when the GEP feeds an access of 2^k bytes
+   (`adjacent_index_shift`; a global base is materialized into x9), else
+   `add Xr, Xb, Xi, lsl #(k + log2 size)` (`_gep_add_shifted_index`):
+   exact 113121 -> 112613 (-0.45%, h14-ic -> h15-gepshift). A zext of an
+   i8/i16/i32 load result shares the load's register even while the narrow
+   value stays live (alias pair; the zext is the loaded bits): 112613 ->
+   112527 (-0.08%, h15 -> h16-alias). Tests: new and extended files
+   execute natively under both allocators with typed/text agreement;
+   backend, Mach-O, TLS and runtime-build files 8568 passed with (r)'s
+   four nodes deselected. QPS at w1 under load 11-13 (another process's
+   VM used about one core), median of five: HEAD h14-ic 68065 req/s (78%
+   of asyncio), h15-gepshift 68332 (79%), LLVM's backend h11-cg 84018
+   (97%); processor time per request 17.1, 16.8 and 13.7 us.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2

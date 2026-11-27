@@ -3236,7 +3236,7 @@ def _emit_indexed_instruction_core(
         if address.first >= 0:
             return []
         register_address: CompilerInt4 = adjacent_gep_register_address(indexed_kernel, block_id, instruction_index)
-        if register_address.first >= 0:
+        if register_address.third >= 0:
             return []
     elif kind_id in (PARSED_INSTRUCTION_KIND_LOAD, PARSED_INSTRUCTION_KIND_STORE) and not is_volatile:
         address: CompilerInt4 = adjacent_gep_memory_address(indexed_kernel, block_id, instruction_index - 1)
@@ -3248,7 +3248,7 @@ def _emit_indexed_instruction_core(
             register_address: CompilerInt4 = adjacent_gep_register_address(
                 indexed_kernel, block_id, instruction_index - 1,
             )
-            if register_address.first >= 0:
+            if register_address.third >= 0:
                 pointer_override_ref = register_address.first
                 pointer_override_type = register_address.second
                 memory_index_ref = register_address.third

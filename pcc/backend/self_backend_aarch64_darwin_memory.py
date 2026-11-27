@@ -61,6 +61,7 @@ from .self_backend_aarch64_darwin_symbols import asm_symbol, sanitize_label
 from .self_backend_ir import (
     PARSED_INSTRUCTION_KIND_ALLOCA,
     PARSED_INSTRUCTION_KIND_ATOMICRMW,
+    PARSED_INSTRUCTION_KIND_BINOP,
     PARSED_INSTRUCTION_KIND_CALL,
     PARSED_INSTRUCTION_KIND_CMPXCHG,
     PARSED_INSTRUCTION_KIND_FENCE,
@@ -322,17 +323,65 @@ def _register_index_name(kernel: IndexedFunctionKernel, index_ref: int) -> str:
     return reg_name_indexed(kernel, type_id, register)
 
 
+def adjacent_index_shift(
+    kernel: IndexedFunctionKernel, block_id: int, gep_position: int,
+) -> CompilerInt4:
+    """Return (shift value, source ref, amount, 0), or first=-1.
+
+    The instruction right before the GEP at ``gep_position`` is
+    ``shl i64 %src, k`` (0 < k < 64) whose only use is that GEP's single
+    i64 index, so the address can take ``%src`` shifted by ``k``.
+    """
+    missing = CompilerInt4(-1, -1, 0, 0)
+    if gep_position < 1:
+        return missing
+    block: CompilerInt4 = kernel.block_fact(block_id)
+    if gep_position >= block.second:
+        return missing
+    producer: CompilerInt4 = kernel.instruction_metadata_by_id(block.first + gep_position - 1)
+    consumer: CompilerInt4 = kernel.instruction_metadata_by_id(block.first + gep_position)
+    if producer.first != PARSED_INSTRUCTION_KIND_BINOP or consumer.first != PARSED_INSTRUCTION_KIND_GEP:
+        return missing
+    shift: CompilerInt4 = kernel.instruction_record(producer.second)
+    if kernel.call_texts[shift.first] != "shl" or shift.third < 0 or shift.fourth >= 0:
+        return missing
+    shift_type: CompilerInt4 = kernel.type_header(shift.second)
+    if shift_type.first != TYPE_KIND_INT or shift_type.second != 64:
+        return missing
+    amount_text = kernel.call_texts[-shift.fourth - 1]
+    if len(amount_text) > 2:
+        return missing
+    amount = const_int_from_value(amount_text)
+    if amount is None or amount <= 0 or amount >= 64:
+        return missing
+    definition: CompilerInt4 = kernel.instruction_fact_by_id(block.first + gep_position - 1)
+    if definition.first < 0 or kernel.last_use(block_id, definition.first) != gep_position:
+        return missing
+    span: CompilerInt4 = kernel.gep_span(consumer.second)
+    if span.first != 1:
+        return missing
+    header: CompilerInt4 = kernel.gep_header(consumer.second)
+    index: CompilerInt2 = kernel.gep_index(header.fourth)
+    if index.second != definition.first:
+        return missing
+    return CompilerInt4(definition.first, shift.third, amount, 0)
+
+
 def adjacent_gep_register_address(
     kernel: IndexedFunctionKernel, block_id: int, position: int,
 ) -> CompilerInt4:
-    """Return (base ref, pointer type, index ref, shift), or first=-1.
+    """Return (base ref, pointer type, index ref, shift), or third=-1.
 
     ``gep T, ptr %p, i64 %i`` whose only use is the directly following
     non-volatile integer/pointer load or store address is selected as
     ``[Xp, Xi]`` (T one byte) or ``[Xp, Xi, lsl #log2(size)]`` (T's size equal
-    to the access size), when %p and %i both have registers. The GEP then
-    emits nothing. Both the GEP and its access query this, so the decision
-    depends only on the kernel and the finished register assignment.
+    to the access size), when %i has a register and %p has one or is a
+    global (materialized into x9; the base ref is then negative). A byte
+    GEP whose index is ``shl i64 %j, k`` used only there, with 2^k the
+    access size, takes ``[Xp, Xj, lsl #k]`` (``adjacent_index_shift``; the
+    shift then emits nothing). The GEP emits nothing. The GEP, its access
+    and the shift query this, so the decision depends only on the kernel
+    and the finished register assignment.
     """
     missing = CompilerInt4(-1, -1, -1, 0)
     block: CompilerInt4 = kernel.block_fact(block_id)
@@ -361,15 +410,28 @@ def adjacent_gep_register_address(
         return missing
     header: CompilerInt4 = kernel.gep_header(producer.second)
     span: CompilerInt4 = kernel.gep_span(producer.second)
-    if span.first != 1 or header.third < 0:
+    if span.first != 1:
         return missing
+    if header.third < 0:
+        base_text = kernel.call_texts[-header.third - 1]
+        if not (base_text.startswith("@") or base_text.startswith("gep0:")):
+            return missing
     element: CompilerInt4 = kernel.type_header(header.first)
     if element.first not in (TYPE_KIND_INT, TYPE_KIND_PTR):
         return missing
     element_bytes = _scalar_access_bytes(element)
+    index: CompilerInt2 = kernel.gep_index(header.fourth)
+    index_type: CompilerInt4 = kernel.type_header(index.first)
+    if index.second < 0 or index_type.first != TYPE_KIND_INT or index_type.second != 64:
+        return missing
+    index_ref = index.second
     shift = -1
     if element_bytes == 1 and element.first == TYPE_KIND_INT and element.second == 8:
         shift = 0
+        scaled: CompilerInt4 = adjacent_index_shift(kernel, block_id, position)
+        if scaled.first >= 0 and (1 << scaled.third) == access_bytes and scaled.third <= 3:
+            index_ref = scaled.second
+            shift = scaled.third
     elif element_bytes == access_bytes:
         if element_bytes == 2:
             shift = 1
@@ -379,15 +441,11 @@ def adjacent_gep_register_address(
             shift = 3
     if shift < 0:
         return missing
-    index: CompilerInt2 = kernel.gep_index(header.fourth)
-    index_type: CompilerInt4 = kernel.type_header(index.first)
-    if index.second < 0 or index_type.first != TYPE_KIND_INT or index_type.second != 64:
+    if header.third >= 0 and allocated_scalar_register_indexed(kernel, header.third, header.second) < 0:
         return missing
-    if allocated_scalar_register_indexed(kernel, header.third, header.second) < 0:
+    if allocated_scalar_register_indexed(kernel, index_ref, index.first) < 0:
         return missing
-    if allocated_scalar_register_indexed(kernel, index.second, index.first) < 0:
-        return missing
-    return CompilerInt4(header.third, header.second, index.second, shift)
+    return CompilerInt4(header.third, header.second, index_ref, shift)
 
 
 def _indexed_scalar_stack_load_op(type_header: CompilerInt4) -> str:

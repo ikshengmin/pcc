@@ -1644,6 +1644,30 @@ def _is_noop_word_cast(kernel, cast_record: CompilerInt4) -> bool:
 
 
 
+def defined_by_narrow_load(kernel: IndexedFunctionKernel, value_id: int) -> bool:
+    """Whether ``value_id`` is an i8/i16/i32 load result.
+
+    LDRB/LDRH/LDR W and their unscaled, acquire and stack-reload forms all
+    zero the register's upper bits, so the 64-bit register holds the value
+    zero-extended. Arguments and call results do not (AAPCS64 leaves their
+    upper 32 bits unspecified).
+    """
+    if value_id < 0:
+        return False
+    header: CompilerInt4 = kernel.type_header(kernel.value_type_id(value_id))
+    if header.first != TYPE_KIND_INT or header.second not in (8, 16, 32):
+        return False
+    block_id = kernel.value_scalars.get_unchecked(value_id * 8)
+    position = kernel.definition_position(value_id)
+    if block_id < 0 or position < 0:
+        return False
+    block: CompilerInt4 = kernel.block_fact(block_id)
+    if position >= block.second:
+        return False
+    metadata: CompilerInt4 = kernel.instruction_metadata_by_id(block.first + position)
+    return metadata.first == PARSED_INSTRUCTION_KIND_LOAD or metadata.first == PARSED_INSTRUCTION_KIND_LOAD_ATOMIC
+
+
 def zero_byte_gep_base(kernel: IndexedFunctionKernel, record_id: int) -> CompilerInt2:
     """Return (pointer type, source ref) for an exact byte-address identity.
 
@@ -2787,6 +2811,16 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
                     if cast_record.third >= 0 and _is_noop_word_cast(
                         kernel, cast_record
                     ):
+                        alias_pairs.append((dest_id, cast_record.third))
+                    elif (
+                        cast_record.third >= 0
+                        and kernel.call_texts[cast_record.first] == "zext"
+                        and kernel.type_header(cast_record.fourth).second == 64
+                        and defined_by_narrow_load(kernel, cast_record.third)
+                    ):
+                        # The load already zeroed the upper bits: the zext
+                        # holds its source's 64-bit register bits, so the two
+                        # share one register even while both are live.
                         alias_pairs.append((dest_id, cast_record.third))
                     elif cast_record.third >= 0:
                         # Other casts read their operand before writing the

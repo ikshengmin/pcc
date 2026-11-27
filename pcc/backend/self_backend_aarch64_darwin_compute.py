@@ -49,7 +49,12 @@ from .self_backend_aarch64_darwin_ops import (
     sign_extend_int_reg_indexed,
 )
 from .self_backend_aarch64_darwin_regs import emit_add_offset, emit_const_to_reg
+from .self_backend_aarch64_darwin_memory import (
+    adjacent_gep_register_address,
+    adjacent_index_shift,
+)
 from .self_backend_aarch64_darwin_regalloc import (
+    defined_by_narrow_load,
     aarch64_cmpxchg_scalar_projection,
     aarch64_zero_test_operand,
     zero_byte_gep_base,
@@ -238,6 +243,61 @@ def adjacent_shift_operand(
     return CompilerInt4(definition.first, shift.third, kind, amount)
 
 
+def _gep_add_shifted_index(
+    kernel: IndexedFunctionKernel | None, block_id: int, gep_position: int,
+) -> CompilerInt4:
+    """(source ref, total shift, 0, 0) when the GEP at ``gep_position`` is
+    emitted as ``add result, base, source, lsl #total``, or first=-1.
+
+    Its single index is ``shl i64 %source, k`` used only there
+    (``adjacent_index_shift``), the GEP is not selected into its access, the
+    element is 1, 2, 4, 8 or 16 bytes and ``%source`` has a register. Both
+    the GEP and the shift query this.
+    """
+    missing = CompilerInt4(-1, 0, 0, 0)
+    if kernel is None or block_id < 0 or gep_position < 1:
+        return missing
+    scaled: CompilerInt4 = adjacent_index_shift(kernel, block_id, gep_position)
+    if scaled.first < 0:
+        return missing
+    if adjacent_gep_register_address(kernel, block_id, gep_position).third >= 0:
+        return missing
+    block: CompilerInt4 = kernel.block_fact(block_id)
+    metadata: CompilerInt4 = kernel.instruction_metadata_by_id(block.first + gep_position)
+    header: CompilerInt4 = kernel.gep_header(metadata.second)
+    element_size = kernel.type_span(header.first).third
+    element_shift = -1
+    if element_size == 1:
+        element_shift = 0
+    elif element_size == 2:
+        element_shift = 1
+    elif element_size == 4:
+        element_shift = 2
+    elif element_size == 8:
+        element_shift = 3
+    elif element_size == 16:
+        element_shift = 4
+    if element_shift < 0 or scaled.third + element_shift > 63:
+        return missing
+    index: CompilerInt2 = kernel.gep_index(header.fourth)
+    if allocated_scalar_register_indexed(kernel, scaled.second, index.first) < 0:
+        return missing
+    return CompilerInt4(scaled.second, scaled.third + element_shift, 0, 0)
+
+
+def _shift_folded_into_gep(kernel: IndexedFunctionKernel | None, block_id: int, position: int) -> bool:
+    """Whether the ``shl`` at ``position`` is selected into the next GEP's address."""
+    if kernel is None or block_id < 0 or position < 0:
+        return False
+    scaled: CompilerInt4 = adjacent_index_shift(kernel, block_id, position + 1)
+    if scaled.first < 0:
+        return False
+    register_address: CompilerInt4 = adjacent_gep_register_address(kernel, block_id, position + 1)
+    if register_address.third >= 0:
+        return register_address.third == scaled.second
+    return _gep_add_shifted_index(kernel, block_id, position + 1).first >= 0
+
+
 def _emit_shifted_operand_binop(
     func: ParsedFunction,
     kernel: IndexedFunctionKernel,
@@ -281,30 +341,6 @@ def _emit_shifted_operand_binop(
     ))
     lines.extend(_commit_or_spill_scalar_result_indexed(func, kernel, dest_id, type_id, result))
     return lines
-
-
-def _defined_by_narrow_load(kernel: IndexedFunctionKernel, value_id: int) -> bool:
-    """Whether ``value_id`` is an i8/i16/i32 load result.
-
-    LDRB/LDRH/LDR W and their unscaled, acquire and stack-reload forms all
-    zero the register's upper bits, so the 64-bit register holds the value
-    zero-extended. Arguments and call results do not (AAPCS64 leaves their
-    upper 32 bits unspecified).
-    """
-    if value_id < 0:
-        return False
-    header: CompilerInt4 = kernel.type_header(kernel.value_type_id(value_id))
-    if header.first != TYPE_KIND_INT or header.second not in (8, 16, 32):
-        return False
-    block_id = kernel.value_scalars.get_unchecked(value_id * 8)
-    position = kernel.definition_position(value_id)
-    if block_id < 0 or position < 0:
-        return False
-    block: CompilerInt4 = kernel.block_fact(block_id)
-    if position >= block.second:
-        return False
-    metadata: CompilerInt4 = kernel.instruction_metadata_by_id(block.first + position)
-    return metadata.first == PARSED_INSTRUCTION_KIND_LOAD or metadata.first == PARSED_INSTRUCTION_KIND_LOAD_ATOMIC
 
 
 def _boolean_literal_indexed(kernel, reference: int) -> int:
@@ -1332,6 +1368,9 @@ def emit_compute_instruction_by_id(
                 ).first >= 0:
                     # Selected into the next operation's shifted operand.
                     return []
+                if op == "shl" and _shift_folded_into_gep(indexed_kernel, block_id, instruction_index):
+                    # Selected into the next GEP's address.
+                    return []
                 fusion = None
                 if value_type_header.second == 64:
                     fusion = aarch64_madd_fusion_for_result(func, dest)
@@ -1897,7 +1936,7 @@ def emit_compute_instruction_by_id(
                         src_index,
                         dst_index,
                         zero_extended_source=(
-                            op == "zext" and _defined_by_narrow_load(indexed_kernel, cast_record.third)
+                            op == "zext" and defined_by_narrow_load(indexed_kernel, cast_record.third)
                         ),
                     )
                 )
@@ -2252,7 +2291,15 @@ def emit_compute_instruction_by_id(
                 element_size = element_span.third
                 index_header: CompilerInt4 = indexed_kernel.type_header(index_ref.first)
                 index_register = -1
-                if (
+                shifted_index: CompilerInt4 = _gep_add_shifted_index(
+                    indexed_kernel, block_id, instruction_index,
+                )
+                if shifted_index.first >= 0:
+                    # ``shl`` folded into the add (the shift emitted nothing).
+                    index_register = allocated_scalar_register_indexed(
+                        indexed_kernel, shifted_index.first, index_ref.first,
+                    )
+                elif (
                     index_ref.second >= 0
                     and element_size in (1, 2, 4, 8, 16)
                     and index_header.first == TYPE_KIND_INT
@@ -2277,7 +2324,10 @@ def emit_compute_instruction_by_id(
                             module_symbols, value_id=gep_header.third,
                         ))
                     result_name = _x_register(result_register) if result_register >= 0 else "x11"
-                    shift = {1: 0, 2: 1, 4: 2, 8: 3, 16: 4}[element_size]
+                    if shifted_index.first >= 0:
+                        shift = shifted_index.second
+                    else:
+                        shift = {1: 0, 2: 1, 4: 2, 8: 3, 16: 4}[element_size]
                     lines.append(emitted_scalar_register_line(
                         "add", result_name, base_name, _x_register(index_register),
                         shift=shift,

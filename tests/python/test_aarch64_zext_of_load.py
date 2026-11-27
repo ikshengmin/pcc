@@ -7,7 +7,9 @@ loaded register (LLVM selects no instruction). The backend emitted
 and ``py_obj_eq_value`` (about 3.1k per 600000 stepped instructions; docs
 /status.md, item 3 P0 notes). A zext of an argument or a call result keeps
 ``mov w, w``: their upper 32 bits are unspecified (AAPCS64), which the
-program checks with a callee that truncates 0x100000005.
+program checks with a callee that truncates 0x100000005. Because the
+zext holds the load's bits, the allocator gives both one register even
+while the narrow value stays live (``both``), so no copy remains.
 """
 import re
 import subprocess
@@ -67,6 +69,16 @@ entry:
   %s = add i64 %w, 1
   ret i64 %s
 }
+define i64 @both(ptr %p, i64 %i) {
+entry:
+  %a = getelementptr i8, ptr %p, i64 %i
+  %b = load i8, ptr %a, align 1
+  %w = zext i8 %b to i64
+  %c = icmp eq i8 %b, 0
+  %s = select i1 %c, i64 100, i64 %w
+  %t = add i64 %s, %w
+  ret i64 %t
+}
 define i32 @main() {
 entry:
   %buf = alloca [8 x i8], align 8
@@ -79,18 +91,21 @@ entry:
   %v4 = call i64 @atomic_word()
   %v5 = call i64 @from_call(i64 4294967301)
   %v6 = call i64 @from_argument(i32 -1)
+  %v7 = call i64 @both(ptr %buf, i64 2)
   %c1 = icmp eq i64 %v1, 202
   %c2 = icmp eq i64 %v2, 65536
   %c3 = icmp eq i64 %v3, 4291362816
   %c4 = icmp eq i64 %v4, 8
   %c5 = icmp eq i64 %v5, 5
   %c6 = icmp eq i64 %v6, 4294967296
+  %c7 = icmp eq i64 %v7, 400
   %a1 = and i1 %c1, %c2
   %a2 = and i1 %a1, %c3
   %a3 = and i1 %a2, %c4
   %a4 = and i1 %a3, %c5
   %a5 = and i1 %a4, %c6
-  %status = select i1 %a5, i32 0, i32 89
+  %a6 = and i1 %a5, %c7
+  %status = select i1 %a6, i32 0, i32 89
   ret i32 %status
 }
 '''
@@ -108,6 +123,10 @@ def test_zext_of_a_load_emits_nothing(monkeypatch):
         body = _body(assembly, name)
         assert re.search(r"\b(ldrb|ldrh|ldr|ldar) w\d+, \[", body), (name, body)
         assert not re.search(r"\bmov w(\d+), w\1\b", body), (name, body)
+    both = _body(assembly, "both")
+    loaded = re.search(r"\bldrb w(\d+), ", both).group(1)
+    # The zext's use (the final add) reads the loaded register itself.
+    assert re.search(r"\badd x\d+, x\d+, x" + loaded + r"$", both, re.M), both
     for name in ("from_call", "from_argument"):
         body = _body(assembly, name)
         assert re.search(r"\bmov w\d+, w\d+\b", body), (name, body)
