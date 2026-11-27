@@ -9,6 +9,7 @@ from .self_backend_aarch64_darwin_mem import (
     emitted_scalar_register_line,
     emitted_scalar_immediate_line,
     emitted_branch_line,
+    emitted_compare_immediate_line,
     emitted_compare_register_line,
     emitted_cset_line,
     emitted_fixed_instruction_line,
@@ -654,18 +655,54 @@ def emit_memory_instruction_by_id(
         else:
             value_type, value, _ptr_type, ptr_name, ordering = data[:5]
         _atomic_width_check(func, "store_atomic", value_type)
+        address_register = "x9"
+        value_register = reg_name(value_type, 10)
         if indexed_kernel is not None and isinstance(data, int):
-            lines = materialize_scalar_value_indexed(
-                func, indexed_kernel, ptr_name, record.third, 9, module_symbols,
-                value_id=record.fourth,
-            )
-            lines.extend(materialize_scalar_value_indexed(
-                func, indexed_kernel, value, record.first, 10, module_symbols,
-                value_id=record.second,
-            ))
+            # Operands already in allocated registers are used in place, and
+            # a zero value is the zero register (LLVM: ``stlr wzr, [x1]``).
+            lines = []
+            base_register = -1
+            if record.fourth >= 0:
+                base_register = allocated_scalar_register_indexed(
+                    indexed_kernel, record.fourth, record.third,
+                )
+            if base_register >= 0:
+                address_register = "x" + str(base_register)
+            else:
+                lines = materialize_scalar_value_indexed(
+                    func, indexed_kernel, ptr_name, record.third, 9, module_symbols,
+                    value_id=record.fourth,
+                )
+            source_register = -1
+            if record.second >= 0:
+                source_register = allocated_scalar_register_indexed(
+                    indexed_kernel, record.second, record.first,
+                )
+            if source_register >= 0:
+                value_register = reg_name(value_type, source_register)
+            elif record.second < 0 and const_int_from_value(value) == 0:
+                value_register = "xzr" if value_type.width == 64 else "wzr"
+            else:
+                lines.extend(materialize_scalar_value_indexed(
+                    func, indexed_kernel, value, record.first, 10, module_symbols,
+                    value_id=record.second,
+                ))
         else:
-            lines = materialize_pointer(func, ptr_name, 9, module_symbols)
-            lines.extend(materialize_value(func, value, value_type, 10, module_symbols))
+            # The same choices for a legacy (tuple) payload, by value name, so
+            # both payload forms emit the same instructions.
+            lines = []
+            base_name = allocated_register_name(func, ptr_name, _ptr_type)
+            if base_name is not None:
+                address_register = base_name
+            else:
+                lines = materialize_pointer(func, ptr_name, 9, module_symbols)
+            value_name = allocated_register_name(func, value, value_type)
+            if value_name is not None:
+                value_register = value_name
+            elif not value.startswith("%") and const_int_from_value(value) == 0:
+                value_register = "xzr" if value_type.width == 64 else "wzr"
+            else:
+                lines.extend(materialize_value(func, value, value_type, 10, module_symbols))
         store_op = (
             "stlr" + _atomic_size_suffix(value_type)
             if ordering in ("release", "seq_cst") else mem_store_op(value_type)
@@ -673,8 +710,8 @@ def emit_memory_instruction_by_id(
         lines.append(
             emitted_memory_instruction_line(
                 store_op,
-                reg_name(value_type, 10),
-                "x9",
+                value_register,
+                address_register,
             )
         )
         return lines
@@ -769,9 +806,46 @@ def emit_memory_instruction_by_id(
         if address_register is None or address_register == "x" + str(old_register):
             address_register = "x9"
             lines = materialize_pointer(func, ptr_name, 9, module_symbols)
-        lines.extend(materialize_value(func, expected, value_type, 10, module_symbols))
-        lines.extend(materialize_value(func, desired, value_type, 11, module_symbols))
-        if _lse_atomics_available(module_symbols):
+        if _lse_atomics_available(module_symbols) and value_type.width in (32, 64):
+            # LLVM's +lse lowering without the scratch copies: CAS reads Rt
+            # and only writes Rs, so a desired value already in a register
+            # other than the observed result's (or zero, as ZR) is Rt itself;
+            # a small constant expectation seeds Rs directly and is compared
+            # as an immediate, an allocated one is copied once and compared
+            # where it is.
+            old_number = str(old_register)
+            desired_register = allocated_register_name(func, desired, value_type)
+            if desired_register is None and const_int_from_value(desired) == 0:
+                desired_register = "xzr" if value_type.width == 64 else "wzr"
+            if desired_register is None or desired_register[1:] == old_number:
+                lines.extend(materialize_value(func, desired, value_type, 11, module_symbols))
+                desired_register = r_des
+            expected_constant = const_int_from_value(expected)
+            expected_register = allocated_register_name(func, expected, value_type)
+            immediate_compare = expected_constant is not None and 0 <= expected_constant <= 4095
+            if immediate_compare:
+                lines.extend(materialize_value(func, expected, value_type, old_register, module_symbols))
+            else:
+                if expected_register is None or expected_register[1:] == old_number:
+                    lines.extend(materialize_value(func, expected, value_type, 10, module_symbols))
+                    expected_register = r_exp
+                lines.append(emitted_move_register_line(r_old, expected_register))
+            ordering_suffix = _LSE_ORDERING_SUFFIX[_cmpxchg_merged_ordering(success, failure)]
+            lines.append(
+                emitted_atomic_instruction_line(
+                    "cas" + ordering_suffix + _atomic_size_suffix(value_type),
+                    r_old, address_register, desired_register,
+                )
+            )
+            # Emit the compare only now: direct instruction capture records
+            # each line when its helper runs, so helpers run in output order.
+            if immediate_compare:
+                lines.append(emitted_compare_immediate_line(r_old, expected_constant))
+            else:
+                lines.append(emitted_compare_register_line(r_old, expected_register))
+        elif _lse_atomics_available(module_symbols):
+            lines.extend(materialize_value(func, expected, value_type, 10, module_symbols))
+            lines.extend(materialize_value(func, desired, value_type, 11, module_symbols))
             # CAS returns the observed value in its Rs operand; seed that
             # register with the expected value, keep the expected copy for
             # the success flag, and compare after (LLVM's +lse lowering).
@@ -791,6 +865,8 @@ def emit_memory_instruction_by_id(
             )
             lines.append(emitted_compare_register_line(r_old, r_exp))
         else:
+            lines.extend(materialize_value(func, expected, value_type, 10, module_symbols))
+            lines.extend(materialize_value(func, desired, value_type, 11, module_symbols))
             base = "Lat_" + sanitize_label(func.name) + "_" + sanitize_label(dest)
             lines.append(f"{base}_retry:")
             lines.append(emitted_atomic_instruction_line(load_exclusive, r_old, address_register))

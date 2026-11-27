@@ -3193,6 +3193,18 @@ in the relevant section or issue and removes the entry.
    register and copied). Arm h6-castfold against h5-kscalar (same `pcc/`
    otherwise): instructions -0.39%. Tests execute the folded casts natively
    before and after.
+   (p) Merged as LLVM-parity lowering, not a performance claim (Claude,
+   2026-11-27): atomic stores use their operands' registers and ZR for a
+   zero value (`stlr wzr, [x1]`); 32/64-bit LSE compare-exchange takes a
+   new value already in a register as Rt (ZR for zero) and seeds a small
+   constant expectation directly with an immediate compare. Arm h7-atomics
+   against h6-castfold: instructions -0.08% (the constant fold had already
+   removed most of these copies). The first draft emitted the compare
+   before the CAS on the native path only: direct instruction capture
+   records each line when its helper runs, so helpers must run in output
+   order; `test_aarch64_cmpxchg_operands.py` executes success and failure
+   paths natively and caught it. Legacy tuple payloads make the same choices
+   so both payload forms emit the same code.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2
