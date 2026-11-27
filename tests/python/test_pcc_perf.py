@@ -1346,6 +1346,68 @@ def test_step_request_lengths_are_exact_instructions_between_marker_hits():
         PERF.step_marker_address(PERF.parse_step_symbols(NM_TEXT), "missing")
 
 
+def test_step_callers_count_entries_by_call_site_with_inclusive_lengths():
+    # alpha calls gamma twice (one call runs 3 steps, one 5), beta calls it
+    # once and the window ends inside it, and a step inside gamma that is
+    # not its first instruction is no entry. Slide 0x4000.
+    symbols = PERF.parse_step_symbols(NM_TEXT)
+    slide = 0x4000
+    gamma = 0x100005080
+    pcs = [0x100005000, 0x100005004, gamma, gamma + 4, gamma + 8, 0x100005008,
+           0x10000500C, gamma, gamma + 4, gamma + 8, gamma + 12, gamma + 16, 0x100005010,
+           0x100005044, gamma + 4, 0x100005048, gamma]
+    called = PERF.step_callers(symbols, pcs, slide, "gamma")
+    assert called == {"alpha": [2, 8, 2], "beta": [1, 0, 0]}
+    assert PERF.step_callees(symbols, pcs, slide, "alpha") == {"gamma": [2, 8, 2]}
+    assert PERF.step_callees(symbols, pcs, slide, "beta") == {"gamma": [1, 0, 0]}
+
+
+def test_step_calls_close_tail_calls_and_abandoned_calls_at_an_outer_return():
+    # alpha calls beta (returns to alpha+8); beta tail-branches to gamma,
+    # which returns straight to alpha+8: both close there. Then alpha calls
+    # gamma, which calls beta, and beta returns to alpha+0x14 directly (a
+    # switched stack): the abandoned inner call closes with the outer one.
+    symbols = PERF.parse_step_symbols(NM_TEXT)
+    slide = 0
+    alpha, beta, gamma = 0x100001000, 0x100001040, 0x100001080
+    pcs = [alpha, alpha + 4, beta, beta + 4, gamma, gamma + 4, alpha + 8,
+           alpha + 0x10, gamma, gamma + 4, beta, beta + 4, alpha + 0x14]
+    calls = PERF.step_calls(symbols, pcs, slide)
+    assert calls == {
+        ("alpha", "beta"): [1, 4, 1],
+        ("beta", "gamma"): [1, 2, 1],
+        ("alpha", "gamma"): [1, 4, 1],
+        ("gamma", "beta"): [1, 2, 1],
+    }
+
+
+def test_steps_reuse_a_kept_record_and_print_callers(monkeypatch, tmp_path, capsys):
+    record = "markers 2 steps 6 slide 4000 seconds 1.0\n" + "".join(
+        f"{pc:x}\n" for pc in (0x100005000, 0x100005080, 0x100005084, 0x100005004,
+                               0x100005080, 0x100005088))
+    arm = tmp_path / "arm"
+    arm.mkdir()
+    (arm / "steps-6-gamma.txt").write_text(record)
+    monkeypatch.setattr(PERF.sys, "platform", "darwin")
+    monkeypatch.setattr(PERF, "arm_dir", lambda name: arm)
+    monkeypatch.setattr(PERF, "binary_of", lambda name: arm / "native_stats")
+
+    def fake_run(command, **kwargs):
+        text = NM_TEXT if command[1] == "nm" else OTOOL_TEXT
+        return subprocess.CompletedProcess(command, 0, stdout=text, stderr="")
+    monkeypatch.setattr(PERF.subprocess, "run", fake_run)
+    PERF.print_steps(["one"], 6, 0, "gamma", 1, 5, reuse=True, callers="gamma",
+                     callees="alpha")
+    out = capsys.readouterr().out
+    assert "calls alpha makes per request by callee" in out
+    assert "     1.0      2.0        2.0  gamma" in out
+    # Two entries from alpha: the first returned after 2 steps, the second
+    # did not return inside the window.
+    assert "one: exact instructions per request 3" in out
+    assert "calls of gamma per request by caller" in out
+    assert "     1.0      2.0        2.0  alpha" in out
+
+
 def test_steps_refuse_hosts_without_lldb(monkeypatch):
     monkeypatch.setattr(PERF.sys, "platform", "linux")
     with pytest.raises(SystemExit, match="Darwin"):

@@ -23,7 +23,10 @@
                         a control arm shows how far each moves unchanged
     steps A [B]         executed instructions per request by function on the
                         request thread (Darwin, lldb single-stepping); with B,
-                        the functions that differ most
+                        the functions that differ most; --callers F / --callees
+                        F count the calls into / out of F per request with
+                        their inclusive lengths; --reuse attributes the kept
+                        record instead of stepping again
     table NAME          one and four workers, against the recorded asyncio
                         figure for the same worker count
     asyncio             measure the CPython asyncio counterpart with one and
@@ -1834,7 +1837,8 @@ def print_instruction_functions(function_results: dict, limit: int) -> None:
 # lldb after a warm-up, records every PC, and charges each to the function
 # that encloses it; marker hits (a function the handler calls once per
 # request) turn counts into instructions per request. Exact and independent
-# of machine load, but slow: about one request per 230k steps.
+# of machine load, but slow: about one request per 230k steps. Each arm keeps
+# its record, so a new attribution (callers, callees) reuses it.
 
 _STEP_SCRIPT = r'''
 import os
@@ -1908,6 +1912,65 @@ def step_request_lengths(pcs: list[int], slide: int, marker_address: int) -> lis
     small code-generation change is measured here rather than by counters."""
     hits = [index for index, pc in enumerate(pcs) if pc - slide == marker_address]
     return [after - before for before, after in zip(hits, hits[1:])]
+
+
+def step_calls(symbols: list[tuple[int, str]], pcs: list[int], slide: int) -> dict:
+    """(caller, callee) -> [calls, inclusive instructions of the calls that
+    returned, calls that returned] over the stepped PCs.
+
+    A call is a step onto a function's first instruction from anywhere but
+    the instruction before it; the caller is the function enclosing the site
+    (the step before), and the call returns when a step reaches the
+    instruction after that site. A pending call whose return address a
+    later step reaches is closed with every call opened after it (a tail
+    call shares its caller's return; a switched stack abandons calls). A
+    call that never returns inside the window has no length."""
+    starts = {address for address, _name in symbols}
+    addresses = [address for address, _name in symbols]
+    def enclosing(address: int) -> str:
+        index = bisect.bisect_right(addresses, address) - 1
+        return symbols[index][1] if index >= 0 else "<outside>"
+    calls: dict = {}
+    pending: list = []
+    waiting: dict = collections.defaultdict(list)
+    for index in range(1, len(pcs)):
+        pc = pcs[index]
+        if pc in waiting:
+            depth = waiting[pc][-1]
+            while len(pending) > depth:
+                back, opened, key = pending.pop()
+                positions = waiting[back]
+                positions.pop()
+                if not positions:
+                    del waiting[back]
+                row = calls[key]
+                row[1] += index - opened
+                row[2] += 1
+        site = pcs[index - 1]
+        if pc - slide in starts and pc != site + 4:
+            key = (enclosing(site - slide), enclosing(pc - slide))
+            calls.setdefault(key, [0, 0, 0])[0] += 1
+            waiting[site + 4].append(len(pending))
+            pending.append((site + 4, index, key))
+    return calls
+
+
+def step_callers(symbols: list[tuple[int, str]], pcs: list[int], slide: int,
+                 function: str) -> dict:
+    """caller -> [calls, inclusive instructions of returned calls, returned
+    calls] of ``function`` (see step_calls)."""
+    step_marker_address(symbols, function)
+    return {caller: row for (caller, callee), row in step_calls(symbols, pcs, slide).items()
+            if callee == function}
+
+
+def step_callees(symbols: list[tuple[int, str]], pcs: list[int], slide: int,
+                 function: str) -> dict:
+    """callee -> [calls, inclusive instructions of returned calls, returned
+    calls] made by ``function`` (see step_calls)."""
+    step_marker_address(symbols, function)
+    return {callee: row for (caller, callee), row in step_calls(symbols, pcs, slide).items()
+            if caller == function}
 
 
 def parse_step_sections(otool_text: str) -> list[tuple[int, int, str]]:
@@ -1996,10 +2059,17 @@ def step_rows(first: dict, first_requests: int, second: dict | None, *,
     return rows[:limit]
 
 
-def run_steps(name: str, count: int, warm: int, marker: str, rounds: int) -> tuple[dict, int, int, list]:
-    """(instructions by function, marker hits, steps, exact request lengths)
-    for one arm."""
+def run_steps(name: str, count: int, warm: int, marker: str, rounds: int,
+              reuse: bool = False, callers: str = "", callees: str = "") -> tuple:
+    """(instructions by function, marker hits, steps, exact request lengths,
+    step_callers of ``callers`` or None, step_callees of ``callees`` or None)
+    for one arm. ``reuse`` reads the arm's kept record of the same count and
+    marker instead of stepping again."""
     binary = binary_of(name)
+    kept = arm_dir(name) / f"steps-{count}-{marker}.txt"
+    if reuse and kept.is_file():
+        markers, slide, pcs = parse_step_output(kept.read_text())
+        return _step_attribution(binary, markers, slide, pcs, marker, callers, callees)
     with tempfile.TemporaryDirectory(prefix="pcc-steps-") as scratch:
         script = Path(scratch) / "pcc_step.py"
         script.write_text(_STEP_SCRIPT)
@@ -2017,7 +2087,12 @@ def run_steps(name: str, count: int, warm: int, marker: str, rounds: int) -> tup
         record = out.read_text()
         markers, slide, pcs = parse_step_output(record)
     # Keep the raw record: a new attribution needs no new half-hour of stepping.
-    (arm_dir(name) / f"steps-{count}-{marker}.txt").write_text(record)
+    kept.write_text(record)
+    return _step_attribution(binary, markers, slide, pcs, marker, callers, callees)
+
+
+def _step_attribution(binary: Path, markers: int, slide: int, pcs: list[int], marker: str,
+                      callers: str, callees: str) -> tuple:
     nm = subprocess.run(["xcrun", "nm", "-n", str(binary)], capture_output=True, text=True,
                         check=True).stdout
     otool = subprocess.run(["xcrun", "otool", "-l", str(binary)], capture_output=True, text=True,
@@ -2025,7 +2100,9 @@ def run_steps(name: str, count: int, warm: int, marker: str, rounds: int) -> tup
     symbols = parse_step_symbols(nm)
     counts = step_function_counts(symbols, pcs, slide, parse_step_sections(otool))
     lengths = step_request_lengths(pcs, slide, step_marker_address(symbols, marker))
-    return counts, markers, len(pcs), lengths
+    called = step_callers(symbols, pcs, slide, callers) if callers else None
+    calling = step_callees(symbols, pcs, slide, callees) if callees else None
+    return counts, markers, len(pcs), lengths, called, calling
 
 
 def runtime_function_names(name: str) -> set:
@@ -2041,15 +2118,30 @@ def runtime_function_names(name: str) -> set:
             for line in nm.splitlines() if line and not line.endswith(":")}
 
 
+def print_step_callers(name: str, title: str, called: dict, requests: int) -> None:
+    """Calls per request by caller or callee, with inclusive lengths."""
+    print(f"{name}: {title} "
+          f"(calls, inclusive instructions per returned call, per request)")
+    rows = []
+    for caller, (calls, length, returned) in called.items():
+        each = length / returned if returned else 0.0
+        rows.append((calls / requests * each, caller, calls / requests, each))
+    rows.sort(key=lambda row: (-row[0], row[1]))
+    for per_request, caller, calls, each in rows:
+        print(f"{calls:8.1f} {each:8.1f} {per_request:10.1f}  {caller}")
+
+
 def print_steps(names: list[str], count: int, warm: int, marker: str, rounds: int,
-                limit: int) -> None:
+                limit: int, reuse: bool = False, callers: str = "",
+                callees: str = "") -> None:
     if sys.platform != "darwin":
         raise SystemExit("steps single-steps under lldb and needs Darwin")
     if not 1 <= len(names) <= 2:
         raise SystemExit("steps takes one arm or two")
-    measured = [run_steps(name, count, warm, marker, rounds) for name in names]
+    measured = [run_steps(name, count, warm, marker, rounds, reuse, callers, callees)
+                for name in names]
     exact = []
-    for name, (counts, markers, steps, lengths) in zip(names, measured):
+    for name, (counts, markers, steps, lengths, called, calling) in zip(names, measured):
         print(f"{name}: {steps} steps, {markers} requests (hits of {marker}), "
               f"{steps / markers:.0f} instructions per request on the stepped thread")
         if lengths:
@@ -2057,6 +2149,12 @@ def print_steps(names: list[str], count: int, warm: int, marker: str, rounds: in
             exact.append(median)
             print(f"{name}: exact instructions per request {median} "
                   f"(median of {len(lengths)} whole requests: {lengths})")
+        if called is not None:
+            print_step_callers(name, f"calls of {callers} per request by caller", called,
+                               markers)
+        if calling is not None:
+            print_step_callers(name, f"calls {callees} makes per request by callee", calling,
+                               markers)
     if len(exact) == 2:
         print(f"exact per request {names[0]} -> {names[1]}: {exact[0]} -> {exact[1]} "
               f"({100.0 * (exact[1] - exact[0]) / exact[0]:+.2f}%)")
@@ -2781,6 +2879,12 @@ def main(argv: list[str] | None = None) -> int:
                        help="a function the handler calls once per request")
     steps.add_argument("--rounds", type=int, default=400)
     steps.add_argument("--limit", type=int, default=40)
+    steps.add_argument("--reuse", action="store_true",
+                       help="attribute the arm's kept record of this count and marker")
+    steps.add_argument("--callers", default="",
+                       help="a function: its calls per request by caller")
+    steps.add_argument("--callees", default="",
+                       help="a function: the calls it makes per request by callee")
 
     table = commands.add_parser("table")
     table.add_argument("name")
@@ -2904,7 +3008,8 @@ def main(argv: list[str] | None = None) -> int:
         append_ledger(rows)
         return 0
     if args.command == "steps":
-        print_steps(args.names, args.count, args.warm, args.marker, args.rounds, args.limit)
+        print_steps(args.names, args.count, args.warm, args.marker, args.rounds, args.limit,
+                    args.reuse, args.callers, args.callees)
         return
     if args.command == "instr":
         if args.short_rounds < 0 or args.long_rounds <= args.short_rounds:
