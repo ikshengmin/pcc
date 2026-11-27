@@ -18,7 +18,7 @@ def _load_tool():
     return module
 
 
-def test_data_plane_class_contract_is_fail_closed_for_new_backend_classes() -> None:
+def test_data_plane_class_contract_is_fail_closed_for_new_backend_classes(monkeypatch) -> None:
     tool = _load_tool()
     report = tool.data_plane_class_contract_report()
     site_report = tool.diagnostic_projection_site_contract_report()
@@ -46,6 +46,35 @@ def test_data_plane_class_contract_is_fail_closed_for_new_backend_classes() -> N
     assert site_report["sites"][
         "self_backend_precise_stackmaps.py:_frame_protocol_enter_group:_RootGroup"
     ] == {"count": 1, "policy": "legacy_or_unsupported"}
+    # Exact opt-in x64 physical-frame projection adapters; neither an
+    # unrestricted constructor whitelist nor a raw native record claim.
+    mir_sites = (
+        "self_backend_x86_mir_frame.py:_remap_location_group:PlannedRootLocation",
+        "self_backend_x86_mir_frame.py:_remap_reload_group:PlannedManagedReload",
+    )
+    original = tool.DIAGNOSTIC_PROJECTION_SITE_CONTRACT
+    for site in mir_sites:
+        assert site_report["sites"][site] == {"count": 1, "policy": "diagnostic_adapter"}
+        omitted = dict(original)
+        del omitted[site]
+        monkeypatch.setattr(tool, "DIAGNOSTIC_PROJECTION_SITE_CONTRACT", omitted)
+        assert tool.diagnostic_projection_site_contract_report()["unclassified_sites"] == [site]
+        wrong_count = dict(original)
+        wrong_count[site] = (2, "diagnostic_adapter")
+        monkeypatch.setattr(tool, "DIAGNOSTIC_PROJECTION_SITE_CONTRACT", wrong_count)
+        assert tool.diagnostic_projection_site_contract_report()["count_mismatches"] == [
+            {"site": site, "expected": 2, "actual": 1}]
+        wrong_policy = dict(original)
+        wrong_policy[site] = (1, "unrestricted")
+        monkeypatch.setattr(tool, "DIAGNOSTIC_PROJECTION_SITE_CONTRACT", wrong_policy)
+        assert tool.diagnostic_projection_site_contract_report()["invalid_policies"] == [site]
+        moved = site.replace(":_remap_", ":_undeclared_remap_")
+        wrong_owner = dict(omitted)
+        wrong_owner[moved] = (1, "diagnostic_adapter")
+        monkeypatch.setattr(tool, "DIAGNOSTIC_PROJECTION_SITE_CONTRACT", wrong_owner)
+        moved_report = tool.diagnostic_projection_site_contract_report()
+        assert moved_report["unclassified_sites"] == [site]
+        assert moved_report["stale_sites"] == [moved]
 
 
 def test_legalization_phase_shells_remain_visible_to_record_inventory() -> None:

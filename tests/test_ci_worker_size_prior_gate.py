@@ -4168,7 +4168,34 @@ class _ClassificationProof:
     report = namespace["data_plane_class_contract_report"](ROOT / "pcc/backend")
     assert report["unclassified"] == report["stale_classifications"] == report["invalid_classifications"] == []
     assert report["discovered_class_count"] == report["classified_class_count"]
-    for missing_key in (key, frame_key, *typed_classifications):
+    # The opt-in x64 MIR now owns explicit managed records and one native
+    # packed integer arena. Do not classify ordinary slotted records as raw
+    # value records or let a newly introduced class escape the broad scan.
+    mir_classifications = {
+        "self_backend_x86_mir.py:X86MIRValue": "semantic_record",
+        "self_backend_x86_mir.py:X86MIRInstruction": "semantic_record",
+        "self_backend_x86_mir.py:X86MIRBlock": "phase_shell",
+        "self_backend_x86_mir.py:X86MIRFunction": "phase_shell",
+        "self_backend_x86_mir.py:X86MIRAllocation": "phase_shell",
+        "self_backend_x86_mir.py:MIRAllocationBudgetExceeded": "target_control",
+        "self_backend_x86_mir.py:_PackedU32": "native_arena",
+        "self_backend_x86_mir_emit.py:MIRUnsupported": "target_control",
+        "self_backend_x86_mir_emit.py:Location": "semantic_record",
+        "self_backend_x86_mir_emit.py:Lowerer": "phase_shell",
+        "self_backend_x86_mir_frame.py:X86MIRFrame": "phase_shell",
+    }
+    for class_key, classification in mir_classifications.items():
+        assert contract[class_key] == classification
+        filename, class_name = class_key.split(":")
+        source_tree = ast.parse((ROOT / "pcc/backend" / filename).read_text())
+        class_node = one(node for node in source_tree.body
+                         if isinstance(node, ast.ClassDef) and node.name == class_name)
+        if classification == "target_control":
+            assert any(named(base, "Exception") for base in class_node.bases)
+        else:
+            slots = one(node for node in class_node.body if assigned(node, "__slots__"))
+            assert ast.literal_eval(slots.value)
+    for missing_key in (key, frame_key, *typed_classifications, *mir_classifications):
         missing = dict(contract)
         del missing[missing_key]
         namespace["DATA_PLANE_CLASS_CONTRACT"] = missing

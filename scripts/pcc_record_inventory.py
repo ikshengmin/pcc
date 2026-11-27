@@ -107,6 +107,22 @@ DATA_PLANE_CLASS_CONTRACT = {
     # One carrier per private emission, not a value per span/record. The
     # grant borrows the old arena and releases it on transfer or revocation.
     "self_backend_aarch64_typed_peepholes.py:_SpanOwnerTransfer": "phase_shell",
+    # The x64 MIR is a private function-owned managed record graph, not a
+    # raw valueclass plane. Scalar/value/location and instruction records use
+    # explicit slots; block/function/allocation and emission/frame owners
+    # retain their bounded collections. Only the packed u32 graph arena owns
+    # native integer storage (the host oracle uses bytearray).
+    "self_backend_x86_mir.py:X86MIRValue": "semantic_record",
+    "self_backend_x86_mir.py:X86MIRInstruction": "semantic_record",
+    "self_backend_x86_mir.py:X86MIRBlock": "phase_shell",
+    "self_backend_x86_mir.py:X86MIRFunction": "phase_shell",
+    "self_backend_x86_mir.py:X86MIRAllocation": "phase_shell",
+    "self_backend_x86_mir.py:_PackedU32": "native_arena",
+    "self_backend_x86_mir.py:MIRAllocationBudgetExceeded": "target_control",
+    "self_backend_x86_mir_emit.py:MIRUnsupported": "target_control",
+    "self_backend_x86_mir_emit.py:Location": "semantic_record",
+    "self_backend_x86_mir_emit.py:Lowerer": "phase_shell",
+    "self_backend_x86_mir_frame.py:X86MIRFrame": "phase_shell",
     "self_backend_module_symbols.py:PreparedModuleSymbols": "phase_shell",
     "self_backend_prepare.py:PreparedSelfBackendModule": "phase_shell",
     # Text legalization owners: one module scope for lines/type/helper tables
@@ -340,6 +356,17 @@ DIAGNOSTIC_PROJECTION_SITE_CONTRACT: dict[str, tuple[int, str]] = {
     "self_backend_stackprep.py:assign_stack_slots.publish_alloca:AllocaInfo": (
         1,
         "legacy_or_unsupported",
+    ),
+    # The opt-in x64 frame remap consumes existing plain projected stack-map
+    # groups. Only changed physical offsets construct a replacement record;
+    # unchanged source identities are retained and packed/custom plans rebuild.
+    "self_backend_x86_mir_frame.py:_remap_location_group:PlannedRootLocation": (
+        1,
+        "diagnostic_adapter",
+    ),
+    "self_backend_x86_mir_frame.py:_remap_reload_group:PlannedManagedReload": (
+        1,
+        "diagnostic_adapter",
     ),
 }
 _DATA_PLANE_CLASSIFICATIONS = frozenset(
