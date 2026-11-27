@@ -6107,8 +6107,52 @@ in the relevant section or issue and removes the entry.
    No retained state or broad cache. Stage1 attribution priority;
    source-only prep until direct release.
 
-   Claims:
-   - Stage2 marker-absent exact split/join attribution: Codex, Linux, 2026-11-27T01:04Z, area selfhost
+   Stage2 exact-str marker-absent attribute mask split/join:
+   actual current call-weighted closure 614->626 modules/625 siblings,
+   exact graph SHA060ffe8d. Single eligible1591/1696 calls,
+   43,554,332/51,909,395B and1,009,156 lines; multi1678/1790,
+   44,409,464/52,910,552B and1,036,676 lines; order543/579,
+   14,681,504/17,492,075B and341,615 lines. Total3812/4065
+   calls,102.645/122.312MB,2,387,447 eligible lines; no claim
+   these counts equal elapsed-time gain. Five source lines only:
+   exact str and literal marker absent means original handler
+   cannot match; direct join(splitlines(keepends=True)) preserves
+   original list elements, line endings, trailing newline and
+   one-line/multiline result identity behavior, skips per-line
+   strip/lstrip/indent and second out list. No retained state,
+   no return-original shortcut; subclasses/duck and marker-present
+   full scanner unchanged. Test-first one intended 128+128
+   strip/lstrip failure/16 pass ->61/61 including adjacent,
+   explicit all11 separators/dynamic string identity, custom
+   hooks/errors, nonliteral spacing and literal prefix variants.
+   Actual graph/order byte-identical, same cache counts.
+   Strict current scanner59 funcs/24,585 inst zero fallback/no
+   libpython, pidx SHA f5cff77d. Exact native scanner fixture
+   24 actual old #638 files4,018,552B (18 absent2,910,744B) plus
+   44 separator/identity rows. Host base/candidate69 rows exact
+   SHAe14b4f96. Baseline native source archive strict explicit
+   provenance verification, candidate fresh source-matched archive
+   byte-identical, distinct provenance; static native ELF
+   180a0aef/3198a19b. Native baseline real24 file rows exact
+   host; known baseline native vs CPython 22 one-line/trailing
+   identity differences and8 marker-present exotic separator
+   content gaps unchanged, all native base/candidate69 rows
+   exact SHA c7f6f2e8f33742bf7aab80046e1ccaad2f9d7fcf4be4a50a2789e46f465529c3.
+   Separate CI runtime splitlines CR/LF-only correctness owner,
+   not broadened or masked by this optimization.
+   Exclusive five alternating A/B/control triples all15 exact:
+   CPU.481931->.418190s (-13.226%,5/5, control-3.481%;
+   paired normalized-12.208%); wall-13.475%5/5 control-2.728%.
+   Peak RSS18,712->18,696KiB (-16,5/5, control0/max4KiB,
+   paired normalized-.096%). Raw RSS A/B/C KiB:
+   18716/18700/18716,18712/18700/18712,18712/18692/18716,
+   18716/18696/18712,18712/18692/18712. No whole Stage2 or
+   broad CPython semantics qualification, no limit change.
+   Formal raw SHA256
+   456df134b15a0a4386b6df9d5c80dbe79a5f19d16687fd68522e0239f25f3d10;
+   guard SHA256
+   0b9def58cc6548ab54b7760c5ca78cdfc35d378905c20c78717c3be50ae4243f.
+
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its

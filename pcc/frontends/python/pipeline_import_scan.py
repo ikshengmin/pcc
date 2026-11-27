@@ -353,6 +353,11 @@ def _without_attribute_error_handler_imports(source: str) -> str:
     the primary path really is unavailable it raises the normal strict import
     diagnostic instead of silently disappearing.
     """
+    if type(source) is str and "except AttributeError" not in source:
+        # Without the literal prefix no handler can match. Preserve the
+        # original split/join result (including line endings and one-line
+        # identity), but do not strip every line or build a second list.
+        return "".join(source.splitlines(keepends=True))
     out: list[str] = []
     handler_indent = -1
     for raw_line in source.splitlines(keepends=True):
