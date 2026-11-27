@@ -536,6 +536,68 @@ class StringMethodLoweringMixin:
         self._emit_post_call_err_check(getattr(arg_expr, "span", None))
         return result
 
+    def _native_dynamic_splitlines_operand(self, expr: Call):
+        """A single native keepends argument which actually needs evaluation."""
+        if expr.func.name != "splitlines" or self._has_unpacked_operands(expr.args, expr.kwargs):
+            return None
+        if len(expr.args) == 1 and not expr.kwargs:
+            operand = expr.args[0]
+        elif not expr.args and len(expr.kwargs) == 1 and expr.kwargs[0][0] == "keepends":
+            operand = expr.kwargs[0][1]
+        else:
+            return None
+        if (isinstance(operand, (BoolLit, IntLit))
+                or self._expr_looks_cpython(expr.func.obj)
+                or self._expr_looks_cpython(operand)):
+            return None
+        return operand
+
+    def _emit_owned_splitlines_keepends(self, expr: Call, operand):
+        """Capture receiver then argument once, and check its Python truth.
+
+        Truth conversion can run arbitrary user code or raise. Retain both
+        authoritative roots through conversion and the real splitlines call,
+        publish the result before cleanup, and keep the selecting exception
+        through error-path retirement. Constant/no-argument forms retain
+        their existing fast lowering.
+        """
+        sink = self._slot_call_result_sink(expr)
+        output = sink
+        roots = []
+        if output is None:
+            output = self._new_slot_call_root("str.splitlines.result")
+            roots.append(output)
+        previous = self._current_try_err_block()
+        target = previous if previous is not None else self._ensure_fn_err_exit()
+        saved_cpy = self._cpy_operand_cleanup_block
+        try:
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            receiver = self._emit_slot_call_operand(expr.func.obj, "str.splitlines.receiver")
+            roots.append(receiver)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            keepends = self._emit_slot_call_operand(operand, "str.splitlines.keepends")
+            roots.append(keepends)
+            self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+            self._cpy_operand_cleanup_block = self._try_err_block
+            truth = self._slot_call_runtime_call("py_obj_truthy", (keepends,), span=operand.span)
+            flag = self.builder.zext(
+                self.builder.icmp_signed("!=", truth, ir.Constant(_I64, 0)),
+                _I32, name=self._fresh("str.splitlines.flag"),
+            )
+            self._slot_call_runtime_call(
+                "py_str_splitlines_keepends", (receiver,), result_slot=output,
+                suffix_args=(flag,), span=expr.span,
+            )
+            self._release_slot_call_roots(tuple(roots[1:] if sink is None else roots))
+        finally:
+            self._try_err_block = previous
+            self._cpy_operand_cleanup_block = saved_cpy
+        if sink is not None:
+            return self.builder.load(output, name=self._fresh("str.splitlines.output"))
+        return self._take_slot_call_root(output, source_expr=expr)
+
     def _extract_splitlines_keepends(self, expr: Call):
         """Return the ``keepends`` constant bool for a
         ``splitlines(True)`` / ``splitlines(keepends=…)`` call, or ``None``
@@ -547,7 +609,8 @@ class StringMethodLoweringMixin:
                 return bool(v.value)
             if isinstance(v, IntLit):
                 return bool(v.value)
-            # Non-constant — treat as True (preserves line endings) to be safe.
+            # Valid single native nonconstant arguments were handled by the
+            # owned evaluator before entering this legacy fallback.
             return True
         for key, v in expr.kwargs or ():
             if key == "keepends":
@@ -555,8 +618,8 @@ class StringMethodLoweringMixin:
                     return bool(v.value)
                 if isinstance(v, IntLit):
                     return bool(v.value)
-                # Non-constant keepends — treat as ``True`` to be
-                # safe; produced output preserves line endings.
+                # Valid single native nonconstant arguments use the owned
+                # evaluator before this legacy fallback.
                 return True
         return None
 
@@ -1049,6 +1112,9 @@ class StringMethodLoweringMixin:
             or attr.name == "encode"
         ):
             return None
+        dynamic_keepends = self._native_dynamic_splitlines_operand(expr)
+        if dynamic_keepends is not None:
+            return self._emit_owned_splitlines_keepends(expr, dynamic_keepends)
         owned_result = self._maybe_emit_owned_str_result(expr)
         if owned_result is not None:
             return owned_result
@@ -1606,6 +1672,9 @@ class StringMethodLoweringMixin:
             or attr.name in ("format", "encode")
         ):
             return None
+        dynamic_keepends = self._native_dynamic_splitlines_operand(expr)
+        if dynamic_keepends is not None:
+            return self._emit_owned_splitlines_keepends(expr, dynamic_keepends)
         owned_result = self._maybe_emit_owned_str_result(expr)
         if owned_result is not None:
             return owned_result

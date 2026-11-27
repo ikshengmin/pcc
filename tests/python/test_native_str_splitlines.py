@@ -73,3 +73,107 @@ def test_native_splitlines_content_matches_cpython(
     )
     assert (actual.returncode, actual.stderr) == (0, b"")
     assert actual.stdout == expected.stdout
+
+
+_DYNAMIC_PROBE = '''\
+import gc
+
+def emit(items: list[str]) -> None:
+    print(len(items))
+    for item in items:
+        print([ord(c) for c in item])
+
+def receiver() -> str:
+    print("receiver")
+    return "前\\r\\n后\\u2028tail"
+
+def operand(value):
+    print("operand")
+    return value
+
+def bad_operand():
+    print("bad operand")
+    raise ValueError("operand error")
+
+class Flag:
+    def __init__(self, value: bool):
+        self.value = value
+
+    def __bool__(self) -> bool:
+        print("truth", self.value)
+        gc.collect()
+        return self.value
+
+class Length:
+    def __init__(self, value: int):
+        self.value = value
+
+    def __len__(self) -> int:
+        print("length", self.value)
+        return self.value
+
+class Bad:
+    def __bool__(self) -> bool:
+        print("bad truth")
+        raise ValueError("truth error")
+
+def positional(text: str, keep):
+    emit(text.splitlines(keep))
+
+def keyword(text: str, keep):
+    emit(text.splitlines(keepends=keep))
+
+def typed(text: str, keep: bool):
+    emit(text.splitlines(keep))
+    emit(text.splitlines(keepends=keep))
+
+def dynamic_receiver(text, keep):
+    emit(text.splitlines(keep))
+    emit(text.splitlines(keepends=keep))
+
+def main() -> None:
+    text = "前\\r\\n后\\u2028tail"
+    typed(text, False)
+    typed(text, True)
+    for value in (False, True, 0, -1, 0.0, 1.5, None, "", "x", [], [1]):
+        positional(text, value)
+        keyword(text, value)
+    dynamic_receiver(text, False)
+    dynamic_receiver(text, True)
+    emit(receiver().splitlines(operand(Flag(False))))
+    emit(receiver().splitlines(keepends=operand(Flag(True))))
+    emit(receiver().splitlines(operand(Length(0))))
+    emit(receiver().splitlines(keepends=operand(Length(2))))
+    try:
+        emit(receiver().splitlines(bad_operand()))
+    except ValueError:
+        print("caught operand")
+    try:
+        emit(receiver().splitlines(keepends=operand(Bad())))
+    except ValueError:
+        print("caught truth")
+    print("SPLITLINES_DYNAMIC_DONE")
+
+main()
+'''
+
+
+def test_native_splitlines_dynamic_keepends_evaluates_truth_once(
+    tmp_path, pcc_runtime_archive, python_program_compiler,
+):
+    source = tmp_path / "splitlines_dynamic_probe.py"
+    source.write_text(_DYNAMIC_PROBE, encoding="utf-8")
+    expected = subprocess.run(
+        [sys.executable, str(source)], capture_output=True, timeout=30,
+    )
+    assert (expected.returncode, expected.stderr) == (0, b"")
+    executable = tmp_path / "splitlines_dynamic_probe"
+    python_program_compiler(
+        str(source), str(executable), backend="self", ir_scaffold_mode="on",
+        runtime_archive=str(pcc_runtime_archive),
+    )
+    actual = subprocess.run(
+        [str(executable)], capture_output=True, timeout=60,
+    )
+    assert (actual.returncode, actual.stderr) == (0, b"")
+    assert actual.stdout == expected.stdout
