@@ -22,7 +22,7 @@ from tests.python.codegen_body_model import CodegenBodyModel
 ROOT = Path(__file__).resolve().parents[2]
 CODEGEN = ROOT / "pcc/frontends/python/codegen"
 METHODS = {
-    "owned": ("ownership_lowering.py", "_emit_owned_local_cleanup", "emitted_slot_leaves", "entry_alloca"),
+    "owned": ("ownership_lowering.py", "_emit_exit_frame_leaves", "emitted_slot_leaves", "entry_alloca"),
     "shared": ("return_lowering.py", "_shared_return_exit", "emitted", "base"),
     "register": ("ownership_lowering.py", "_ensure_local_gc_frame_root", "", ""),
     "patch": ("ownership_lowering.py", "_insert_gc_frame_leave_before_terminator", "", ""),
@@ -102,6 +102,19 @@ def load_method(kind, *, reference=False, counts=None):
         "compare_identity": compare_identity,
     }
     support = []
+    if kind == "owned":
+        # The ownership planner and frame-leave ledger are now separate
+        # production owners. Execute the real entry wrapper and both helpers;
+        # invert only the ledger body to the historical linear identity scan.
+        owner_methods = (
+            "_emit_owned_local_cleanup", "_owned_local_cleanup_plan",
+            "_emit_cleanup_root_clear",
+        )
+        support = [
+            copy.deepcopy(next(node for node in ast.walk(tree)
+                               if isinstance(node, ast.FunctionDef) and node.name == helper))
+            for helper in owner_methods
+        ]
     if kind == "frame_entry":
         # Run the selector's actual provenance and pairing closure with the
         # same recording IR sink, without importing compiler/runtime modules.
@@ -110,6 +123,12 @@ def load_method(kind, *, reference=False, counts=None):
     module = ast.Module(body=[ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0),
                               *support, method], type_ignores=[])
     exec(compile(ast.fix_missing_locations(module), str(CODEGEN / filename), "exec"), namespace)
+    if kind == "owned":
+        def run_owned(host, *args, **kwargs):
+            for helper in (*owner_methods, name):
+                setattr(host, helper, namespace[helper].__get__(host))
+            return namespace["_emit_owned_local_cleanup"](host, *args, **kwargs)
+        return run_owned
     return namespace[name]
 
 
