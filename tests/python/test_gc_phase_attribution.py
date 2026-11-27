@@ -191,6 +191,21 @@ def test_snapshot_native_lowering_calls_owned_runtime_directly(tmp_path):
     require_definition(text, "user_pcc_backend_indexed_phase_timing__write_event")
     bridge_calls = bool(re.search(r'\b(?:call|invoke)\b[^\n]*@"?py_cpy_', text))
     assert not bridge_calls, "native diagnostics must not call a CPython bridge"
+    # The worker observer must keep the owned clock at its original sites;
+    # eliminating a host callable capture must not remove native timing.
+    clock_owners = (
+        "ModulePhaseTiming_start", "ModulePhaseTiming_add",
+        "ModulePhaseTiming_complete_backend_finalize",
+        "complete_x86_backend_progress", "CoarsePhaseTiming_begin",
+        "CoarsePhaseTiming_complete",
+    )
+    for method in clock_owners:
+        symbol = "user_pcc_backend_indexed_phase_timing_" + method
+        require_definition(text, symbol)
+        body = re.search(r'^define[^\n]*@"?' + re.escape(symbol)
+                         + r'"?\([^\n]*\)[^\n]*\{\n(.*?)^\}', text, re.M | re.S)
+        assert len(re.findall(r'\bcall ptr (?:\([^\n]*?\) )?@"?py_time_perf_counter_ns"?\(',
+                              body.group(1))) == 1, method
 
 
 def test_normal_ci_selects_bounded_phase_checks_without_new_jobs():

@@ -229,7 +229,12 @@ class ModulePhaseTiming:
 _ORIGINAL_MODULE_PHASE_TIMING = ModulePhaseTiming
 _ORIGINAL_MODULE_PHASE_START = getattr(ModulePhaseTiming, "start", None)
 _ORIGINAL_MODULE_PHASE_ADD = getattr(ModulePhaseTiming, "add", None)
-_ORIGINAL_MODULE_PHASE_CLOCK = time.perf_counter_ns
+# Native time.perf_counter_ns() has a statically owned clock lowering. Only
+# CPython exposes the mutable first-class host callable to this observer.
+if sys.implementation.name == "cpython":
+    _ORIGINAL_MODULE_PHASE_CLOCK = time.perf_counter_ns
+else:
+    _ORIGINAL_MODULE_PHASE_CLOCK = None
 
 
 def mark_worker_owned_phase_timing(timer) -> None:
@@ -255,9 +260,11 @@ def worker_owned_phase_timing_is_stable(timer) -> bool:
     if (_ORIGINAL_MODULE_PHASE_START is None
             or getattr(ModulePhaseTiming, "start", None) is not _ORIGINAL_MODULE_PHASE_START
             or _ORIGINAL_MODULE_PHASE_ADD is None
-            or getattr(ModulePhaseTiming, "add", None) is not _ORIGINAL_MODULE_PHASE_ADD
-            or time.perf_counter_ns is not _ORIGINAL_MODULE_PHASE_CLOCK):
+            or getattr(ModulePhaseTiming, "add", None) is not _ORIGINAL_MODULE_PHASE_ADD):
         return False
+    if sys.implementation.name == "cpython":
+        if time.perf_counter_ns is not _ORIGINAL_MODULE_PHASE_CLOCK:
+            return False
     attributes = getattr(timer, "__dict__", None)
     if type(attributes) is not dict or "start" in attributes or "add" in attributes:
         return False
