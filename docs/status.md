@@ -3889,12 +3889,48 @@ in the relevant section or issue and removes the entry.
        later direct functions, duplicate-last map may hide earlier invalid
        rows. New holder marker/arg or tightening native global builder
        risks semantics/hot parity for bounded ceiling. Reject standalone,
-       no source change or cache. Next (latest actual Stage1 codegen
-       priority): (0) profile current actual general OFF x64 function
-       emission after landed copy/dead-move/frame/global/packed owners,
-       identify materially repeated work on exact frozen large compiler
-       PIDX before editing; native strict parity and exact ELF, CPU/RSS
-       controls; retain inline OFF default;
+       no source change or cache.
+       Current exact d222ab42 class OFF PIDX cf4113cc marked full
+       streamed backend sampling: CPU44.068s, ELF12,661,992B SHA
+       122f82e57da42757dbdb6d9f6c07ed14c2f4460c1e81ff89011f596dfabb7a8f,
+       10231 samples/4446 function emit: block emit1588, register
+       copies1168 (dead moves368), frame promotion983 (root offsets136).
+       Exact 727 plans/184919 records, 11,322,013 root location visits;
+       adjacent tuple identity128363 records, retained3,381,583
+       visits (−70.13%), distinct19123 tuples/1,130,439 location
+       visits; all exact dataclass/int, reloads941 untouched. Canonical
+       owner CPU.564s, offset digest da47de4eb2cf125c4423e4842d9ad3092592f8c6d81cb8cf1195b4ffd27dad1c.
+       Adjacent local identity candidate only after exact immutable
+       tuple/record/location/reload guards; any custom callback disables
+       reuse for remainder, packed route untouched. Test-first1 intended
+       24 vs3 loop reads red+2 observer controls green ->167 focused
+       pass. Native strict contextual module626-source closure both,
+       43 symbols, zero fallback/no libpython; 40 unchanged hot methods
+       exact call/instruction parity, target914->2374 instr and module
+       init+20/static+2. Exact frozen all727 plans pickle25.74MB
+       SHA39b04cf3c05892c6d61955b5a8550ac2497b72e1551cad2afb50212795c0f9f7.
+       Host five alternating triples all15 exact sorted and ordered
+       offsets (ordered SHA66a932abe5dae0d49b29a2e2a3e66384205ad4ada95d7582a70ecb2a09ccc0d1);
+       CPU .554843->.351331s, control.537560, norm−34.613%5/5
+       vs control2.379% median/5.635% max; RSS173148->173144KiB
+       control173144, norm0%,2 wins/3 ties. Directional whole class
+       ceiling small (.176s screen), no full-worker gain claimed.
+       Actual native focused projection preserves 1050 root identities,
+       1218 shared tuples,14848 largest class-init record slots, exact
+       every expected key1050/checksum7772008, TSV1.114MB; fresh
+       source-matched owned archive SHAaafe3f12e2dc790a0f4b1a8df7f4b77214ad53564c9fa2a07a6e7ae05778198a.
+       Full actual native source-closure fixture guard **TIMEOUT**
+       400s, peak715MB, no binary, active safe worker63/65; no
+       resource/deadline changes or retry. Reject current candidate
+       because native actual semantics/perf unqualified and small full
+       worker ceiling, despite robust host owner and unchanged native
+       hot parity. No source production/whole Stage1/2 claim.
+       Next (latest actual Stage1 codegen priority): (0) attribute
+       actual OFF x64 dead-move liveness repeated dense neutral/effect
+       events after landed sparse block owners; quantify exact neutral
+       line count, dense array retention and per-iteration scan cost,
+       no sparse edit unless real ceiling, exact ABI/CFG/assembly/ELF
+       and CPU/RSS controls; retain inline OFF default;
        (1) ARM typed
        prepare memory: quantify retained prior run history and
        private CFG owner retirement with public snapshot/callback
@@ -4498,7 +4534,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
-   - Actual current general OFF x64 function emission attribution after landed sparse/packed owners (exact same-input ELF, native hot parity): Codex, Linux, 2026-11-27T01:08Z, area backend (x64 emitter/late pass attribution, no overlap with current CI TLS/Stage2 lexical owner)
+   - Actual general OFF x64 dead-move liveness dense neutral/effect attribution (after landed sparse block owner, exact CFG/assembly/ELF): Codex, Linux, 2026-11-27T01:31Z, area backend (x86_64_register_copies; no overlap with CI Unicode/Stage2 lexical owner)
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
