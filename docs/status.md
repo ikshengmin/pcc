@@ -4838,6 +4838,7 @@ in the relevant section or issue and removes the entry.
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
    - Shared generator save-suffix prefix spine, exact slot/ownership/state cutoffs (generator_lowering.py + test_generator_shared_frame_save.py; no backend overlap): Codex, Linux, 2026-11-27T03:43Z, area runtime-codegen
+   - Post-merge x64 MIR large compilation cost, actual giant same-IR phase attribution and exact sparse live/interference event optimization (self_backend_x86_mir.py/emit/frame, no generator_lowering overlap; preserve exact PCO/runtime wins and unchanged caps/defaults): Codex, Linux, 2026-11-27T03:55Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
