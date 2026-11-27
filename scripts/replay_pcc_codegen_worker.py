@@ -7,12 +7,15 @@ import argparse
 import hashlib
 import json
 import os
+import subprocess
+import time
 from pathlib import Path
 import sys
 
 
 MANIFEST_SCHEMA = "pcc.frontends.python.codegen_worker.v4"
 REPLAY_SCHEMA = "pcc.codegen-worker-replay.v1"
+TIMING_SCHEMA = "pcc.codegen-worker-timing.v1"
 
 
 class ReplayError(RuntimeError):
@@ -144,13 +147,26 @@ def prepare_replay(
         # -m would otherwise prepend cwd and load the editable checkout ahead
         # of the requested frozen PYTHONPATH root, making both arms identical.
         compiler_prefix.extend(["-P", "-m", "pcc"])
-    command = [
-        "/usr/bin/time",
-        "-lp",
+    worker_command = [
         *compiler_prefix,
         "--pcc-python-multi-codegen-worker",
         str(replay_manifest),
     ]
+    # Darwin's system time reports byte RSS with -l. Linux may have GNU time
+    # (which does not accept -l) or no time executable at all. A fresh host
+    # wrapper waits for exactly the launched worker; the external process-tree
+    # guard remains the independent timeout, tree-RSS and lock owner.
+    timing_receipt = ""
+    if sys.platform.startswith("linux"):
+        timing_owner = "linux-wait4"
+        timing_receipt = str(output_dir / "timing.json")
+        command = [
+            sys.executable, "-I", "-S", str(Path(__file__).resolve()),
+            "--_linux-time", timing_receipt, "--", *worker_command,
+        ]
+    else:
+        timing_owner = "darwin-system-time" if sys.platform == "darwin" else "system-time"
+        command = ["/usr/bin/time", "-lp", *worker_command]
     replay_receipt = {
         "schema": REPLAY_SCHEMA,
         "compiler": str(compiler),
@@ -169,6 +185,9 @@ def prepare_replay(
         "result": str(result_path),
         "artifact_dir": str(artifact_dir),
         "command": command,
+        "worker_command": worker_command,
+        "timing_owner": timing_owner,
+        "timing_receipt": timing_receipt,
         "effective_worker_environment": {
             key: environment.get(key, "") for key in (
                 "PCC_PYTHON_IR_PASSES",
@@ -203,8 +222,62 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def _linux_time(argv: list[str]) -> int:
+    """Time one ordinary worker in its inherited supervised process group.
+
+    The receipt is separate from the worker's own stdout and stderr. wait4's
+    usage is for the immediate child and its waited descendants; maximum RSS
+    is not the synchronized aggregate RSS that the outer guard enforces.
+    """
+    if not sys.platform.startswith("linux") or not hasattr(os, "wait4"):
+        raise ReplayError("Linux wait4 timing is unavailable")
+    if len(argv) < 3 or argv[1] != "--":
+        raise ReplayError("Linux timing requires a receipt path and worker command")
+    receipt_path = Path(argv[0])
+    if not receipt_path.is_absolute() or os.path.lexists(receipt_path):
+        raise ReplayError("Linux timing requires a fresh absolute receipt path")
+    command = argv[2:]
+    started = time.monotonic_ns()
+    process = subprocess.Popen(command)
     try:
+        pid, status, usage = os.wait4(process.pid, 0)
+        finished = time.monotonic_ns()
+        if pid != process.pid:
+            raise ReplayError("wait4 did not return the launched worker")
+        process.returncode = os.waitstatus_to_exitcode(status)
+    except BaseException:
+        # Only clean up this directly owned child. The outer watchdog is
+        # responsible for any surviving descendants and its original deadline.
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        raise
+    if usage.ru_maxrss <= 0:
+        raise ReplayError("wait4 did not report a positive worker maximum RSS")
+    receipt = {
+        "schema": TIMING_SCHEMA,
+        "command": command,
+        "returncode": process.returncode,
+        "wall_s": (finished - started) / 1_000_000_000,
+        "user_s": usage.ru_utime,
+        "system_s": usage.ru_stime,
+        "cpu_s": usage.ru_utime + usage.ru_stime,
+        "cpu_scope": "wait4_child_and_waited_descendants",
+        # Linux ru_maxrss is in KiB, not bytes as on Darwin.
+        "max_rss_bytes": usage.ru_maxrss * 1024,
+        "rss_scope": "wait4_child_maximum_not_tree_aggregate",
+    }
+    with receipt_path.open("x", encoding="utf-8") as stream:
+        json.dump(receipt, stream, indent=2, sort_keys=True, allow_nan=False)
+        stream.write("\n")
+    return process.returncode if process.returncode >= 0 else 128 - process.returncode
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    try:
+        if argv[:1] == ["--_linux-time"]:
+            return _linux_time(argv[1:])
         args = _parser().parse_args(argv)
         command, environment = prepare_replay(
             compiler=args.compiler,
