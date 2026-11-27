@@ -6153,6 +6153,25 @@ in the relevant section or issue and removes the entry.
    guard SHA256
    0b9def58cc6548ab54b7760c5ca78cdfc35d378905c20c78717c3be50ae4243f.
 
+   Independent Stage2 uncached TYPE_CHECKING negative attribution:
+   exact old graph618/625 files lack raw TYPE_CHECKING, but original
+   parenthesized import scanner concatenates stripped continuation
+   fragments without separators and can synthesize a flag alias.
+   Do not assume contiguous marker absence in alias text suffices.
+   Stronger exact predicate: exact source and discovery alias text
+   strings; raw TYPE_CHECKING absent and literal from typing import
+   prefix absent in alias text, so flag_aliases cannot be populated
+   and raw alias.TYPE_CHECKING condition cannot match. Keep original
+   discovery hook/cache call before predicate, direct original
+   split/join identity/separators, custom/source/marker paths intact.
+   Actual call-weighted uncached source/alias counts/bytes first
+   (existing cache high hits); explicit fragmented alias and custom
+   lexer regressions; no persistent state. Strict context and exact
+   native scanner CPU/RSS 5-pair controls only if credible.
+   CI/Stage1 heavy priority, source-only prep.
+
+   Claims:
+   - Stage2 uncached TYPE_CHECKING negative lexical attribution: Codex, Linux, 2026-11-27T01:23Z, area selfhost
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
