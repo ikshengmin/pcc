@@ -80,14 +80,20 @@ def test_rust_platform_owner_does_not_silently_accept_or_require_a_foreign_archi
 
 
 def test_shared_darwin_source_owner_preserves_linux_stage1_contract(tmp_path, monkeypatch):
-    # The 54 tracked Darwin execution nodes are a separate host-PCC source
+    # The 55 tracked Darwin execution nodes are a separate host-PCC source
     # owner; they neither consume nor authenticate a Linux x86-64 archive.
     from scripts import ci_validation_coverage as coverage
     from scripts import ci_validation_owners as owners
 
     manifest, _ = owners.read_manifest(Path(__file__).resolve().parents[1])
-    assert len([rule for rule in manifest['overrides'] if rule['domain'] == 'shared'
-                and rule['lane'] == 'ordinary' and 'macos-arm64' in rule['platforms']]) == 54
+    darwin_rules = [rule for rule in manifest['overrides'] if rule['domain'] == 'shared'
+                    and rule['lane'] == 'ordinary' and 'macos-arm64' in rule['platforms']]
+    assert len(darwin_rules) == 55
+    handoff_node = ('tests/python/test_indexed_handoff_closed_world.py'
+                    '::test_handoff_provider_closed_world_aarch64')
+    assert [rule for rule in darwin_rules if rule['nodeid'] == handoff_node] == [
+        dict(domain='shared', lane='ordinary', nodeid=handoff_node,
+             platforms=['macos-arm64'], tools={'macos-arm64': []})]
     assert owners.additional_campaigns(['shared'], manifest) == [
         dict(domain='shared', lane='ordinary', platform='macos-arm64', runner='macos-15')]
     for lane in planner.LANES:
