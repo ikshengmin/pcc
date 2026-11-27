@@ -5109,6 +5109,7 @@ in the relevant section or issue and removes the entry.
    Claims:
    - Default MIR-OFF x64 post-selection repeated machine event attribution (self_backend_x86_64_linux.py, x86_64_frame_registers.py, x86_64_register_copies.py; actual per-pass CPU/unchanged text/parse owner, no edits before upper bound, exact output and no verifier/IR overlap): Codex, Linux, 2026-11-27T07:03Z, area backend
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
+   - Compiler hot-function same contextual IR MIR/legacy static admission (retained exact source-matched contextual compiler PIDX, static instruction/stack traffic and admission reasons; host profile directional only; no production/default change, no Stage1 emitter source edit): Codex, Linux, 2026-11-27T06:28Z, area runtime-codegen
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
