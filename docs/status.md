@@ -5323,6 +5323,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend toward LLVM parity: locate the LLVM step the self passes lack (pcc_perf reference ablations, scripts/pcc_perf.py), then implement it in pcc's own AArch64 passes (shrink-wrapping, allocation or selection, whichever the ablation ranks first); IR-pass changes are target-neutral and reach x64; avoids the typed x64 MIR files: Claude, macOS, 2026-11-27T06:46Z, area backend
+   - Owned AST V2 compact tape scanner scratch host proof (test-first scanner/eligibility and actual c_parsetab/representative frozen V2 corpus census; no tracked source/header/ABI edits, no native rebuild or CI; preserve public/V1/provider fallback/error semantics): Codex, Linux, 2026-11-27T12:53Z, area runtime-codegen
 
 
 4. **Source-language frontends**, in parallel with item 2 (different files;
