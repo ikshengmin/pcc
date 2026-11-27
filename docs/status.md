@@ -3219,6 +3219,45 @@ in the relevant section or issue and removes the entry.
    fixed before merge: CFG passes dropped labels only tbz referenced (the
    runtime failed to build), and the relaxation threshold must use the
    smaller reach so patched limits still relax.
+   (r) Merged (Claude, 2026-11-27): register-offset addressing, LLVM's
+   AArch64 selection of `gep T, ptr %p, i64 %i` feeding the next scalar
+   integer/pointer load or store as its only use: `[Xp, Xi]` for a byte
+   element, `[Xp, Xi, lsl #log2(size)]` when the element size equals the
+   access size, both operands already in registers; the GEP emits nothing.
+   The rc-base step record executed 8628 `add` + access pairs per 600000
+   instructions (1.44%; memchr/memcmp/memset byte loops, `py_obj_eq_value`,
+   allocator granule walks). Encoders gained LDR/STR (register) in text,
+   direct capture (`ADDRESS_REGISTER` tokens) and semantic re-encoding,
+   words checked against clang 20. Atomic (`ldar`) and volatile accesses,
+   i32 indices (`sxtw` form) and the block-local
+   `PCC_SELF_CALLEE_SAVED_REGISTERS=0` allocator (arguments in slots) keep
+   the add. Arm h9-regoff against a clean HEAD build h9-base: instructions
+   216901 -> 213867 (-1.40%); cycles were taken under load 17 and are not
+   a result. `test_aarch64_constant_and_gep_lowering.py` pinned the old
+   `add ..., lsl #3` for a GEP that feeds a load; it now checks the folded
+   load and keeps the shifted add covered by a returned address.
+   Standalone `pcc --python-library --emit-llvm` of
+   `self_backend_aarch64_darwin_memory.py` failed on HEAD
+   (`slot-call ... lacks an immediate owned-result handoff`): that compile
+   classifies this package's imports as CPython, and `"x" + str(call
+   result)` in the large emitters converted the CPython result after the
+   call. Four such lines (three from 2026-10-30, one from the atomic-store
+   change) now call typed `_x_register`/`_w_register`; the module compiles
+   standalone again. The closure (Stage1) compile was not run. Tests: the
+   new file encodes against clang, re-encodes records, and executes every
+   folded form natively under both allocators; AArch64, arm64 encoder,
+   Mach-O, TLS, native-fragment and self-backend files 8134 passed with
+   `PCC_RUNTIME_ARCHIVE` set to the h9-regoff2 runtime (source-matched).
+   Not passing, all independent of this change: two fail identically on a
+   clean 05ff5a481 snapshot,
+   `test_native_emission_fragments.py::test_native_terminator_fragment_keeps_nop_between_distinct_safepoints`
+   (the unoptimized object's stack map decodes only the entry record,
+   although the call and loop labels and the separator `nop` are emitted)
+   and
+   `test_threaded_exception_tls_isolation.py::test_pcc_python_exception_slot_is_compiler_owned_tls_and_registered_root`
+   (expects `pcc_gc_note_slot_write_barrier` in `py_tls_exc_set`, which
+   has none); `test_self_backend_no_host_gate.py::test_self_backend_no_host_no_silent_fallback`
+   needs a pcc1 binary (run with `PCC_NO_AUTO_PCC1=1`).
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2
@@ -5424,7 +5463,7 @@ in the relevant section or issue and removes the entry.
    - 2026-11-27 Stage1 AArch64 private CFG midpoint span-history retirement (memory-only): accepted peepholes-to-CFG owner336baa1e kept298465 IDs, subsequent actual postmerge25f61ccc census on historical625/inlineOFF ARM worker_resource_plan PIDX55b2bf2f cross-Darwin host structured emission showed fourth CFG pass latest297466/retained1,488,668, obsolete1,191,202 refs (9.53MB minimum), process RSS rose after midpoint204.677→248.701MB; retiring only after seventh pass would be too late for this peak. Single derived private canonical owner permission only after successful prior retirement, revoke on timer/custom/failure, exact owner-type before generation read, preserve unchecked -2 run marker, old owner/cursors untouched, same CFG/matcher order and public fallback. Test-first intended red, focused33 PASS; original e95 source screen+formal15 exact6,149,624B PCOed92ccb29, process HWM norm−9.477%5/5, guard norm−2.766%5/5, CPU norm−2.223%3/5 within10.100% control, strict629 three modules fallback0. Fresh remote preimage conflict with Claude9e9a0e17 branch14 selection/relaxation caused publication STOP; exact conflict-free three-way rebase on d0a89d04 preserved both changed hunk lists byte-for-byte, no overwrite. Current rebased focused36 PASS (old33+three peer encoding/relaxation/selection host controls; Darwin native3 UNRUN). Same historical frozen input, current clean d0a source c1dc817a/candidate diagnostic-only exact four-file source12143f1d, new PCO6,149,220B SHAec92f4511e9832693b425a3e91160c92ec5815eca78b3ac31c6cf01c8a43ce5c exact all current screen A/B/C and formal15; previous PCO legitimately differs with peer branch14. Current exact CFG entry298364, midpoint latest297365/retained1,488,163→297,365, obsolete1,190,798→0, unchecked marker -2 unchanged. Process HWM med240104→216128KiB paired−10.177%5/5/norm−10.322%5/5 beyond max control6.534%; guard peak245.809→221.528MB paired−9.083%5/5/norm−5.785%5/5 within max control7.452%; immediate midpoint RSS mixed paired+.047%2/5/norm+.054% (allocator retention). CPU med24.296→24.831s paired−.969%3/5/norm+1.737%2/5 within max control15.417%, adverse fifth pair+16.126%; transfer residual excess median+.036s, fifth normalized whole+2.866s incl pre-boundary emit+1.429s, no speed claim. Current exact629 strict contextual3 modules 204/76/327 functions, fallback0/no libpython, 67.355s/407,535,616B; source lowering only, not native pcc1 execution. Original per-arm60s/.75GiB+2 reserve and strict120s/1GiB+2 reserve, exact checkout restoration, no resource/default/CI change. Preserve old and rebased receipts and release claim. [skip ci]
 
    Claims:
-   - Runtime QPS through the self AArch64 backend toward LLVM parity: locate the LLVM step the self passes lack (pcc_perf reference ablations, scripts/pcc_perf.py), then implement it in pcc's own AArch64 passes (shrink-wrapping, allocation or selection, whichever the ablation ranks first); IR-pass changes are target-neutral and reach x64; avoids the typed x64 MIR files: Claude, macOS, 2026-11-27T06:46Z, area backend
+   - Runtime QPS through the self AArch64 backend toward LLVM parity: locate the LLVM step the self passes lack (pcc_perf reference ablations, scripts/pcc_perf.py), then implement it in pcc's own AArch64 passes (shrink-wrapping, allocation or selection, whichever the ablation ranks first); IR-pass changes are target-neutral and reach x64; avoids the typed x64 MIR files: Claude, macOS, 2026-11-27T15:16Z, area backend
 
 
 

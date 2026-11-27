@@ -63,6 +63,7 @@ from .self_backend_aarch64_darwin_flow import (
 )
 from .self_backend_aarch64_darwin_memory import (
     adjacent_gep_memory_address,
+    adjacent_gep_register_address,
     emit_memory_instruction_by_id as _memory_emit_instruction,
 )
 from .self_backend_aarch64_darwin_mem import (
@@ -3228,9 +3229,14 @@ def _emit_indexed_instruction_core(
     pointer_override_ref = -1
     pointer_override_type = -1
     memory_offset = 0
+    memory_index_ref = -1
+    memory_index_shift = 0
     if kind_id == PARSED_INSTRUCTION_KIND_GEP:
         address: CompilerInt4 = adjacent_gep_memory_address(indexed_kernel, block_id, instruction_index)
         if address.first >= 0:
+            return []
+        register_address: CompilerInt4 = adjacent_gep_register_address(indexed_kernel, block_id, instruction_index)
+        if register_address.first >= 0:
             return []
     elif kind_id in (PARSED_INSTRUCTION_KIND_LOAD, PARSED_INSTRUCTION_KIND_STORE) and not is_volatile:
         address: CompilerInt4 = adjacent_gep_memory_address(indexed_kernel, block_id, instruction_index - 1)
@@ -3238,6 +3244,15 @@ def _emit_indexed_instruction_core(
             pointer_override_ref = address.second
             pointer_override_type = address.third
             memory_offset = address.fourth
+        else:
+            register_address: CompilerInt4 = adjacent_gep_register_address(
+                indexed_kernel, block_id, instruction_index - 1,
+            )
+            if register_address.first >= 0:
+                pointer_override_ref = register_address.first
+                pointer_override_type = register_address.second
+                memory_index_ref = register_address.third
+                memory_index_shift = register_address.fourth
     lines = _memory_emit_instruction(
         func,
         kind_id,
@@ -3250,6 +3265,8 @@ def _emit_indexed_instruction_core(
         pointer_override_ref=pointer_override_ref,
         pointer_override_type=pointer_override_type,
         memory_offset=memory_offset,
+        memory_index_ref=memory_index_ref,
+        memory_index_shift=memory_index_shift,
     )
     if lines is None:
         lines = _compute_emit_instruction(

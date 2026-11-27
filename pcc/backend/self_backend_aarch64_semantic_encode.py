@@ -8,7 +8,7 @@ from .self_backend_aarch64_semantics import (
     OPCODE_NAMES, CONDITION_NAMES, SYSTEM_NAMES, SHIFT_NAMES,
     TOKEN_REGISTER, TOKEN_IMMEDIATE, TOKEN_WIDE_IMMEDIATE, TOKEN_SYMBOL,
     TOKEN_ADDRESS, TOKEN_SHIFT, TOKEN_CONDITION, TOKEN_SYSTEM, TOKEN_FLOAT_ZERO, TOKEN_FLOAT_IMMEDIATE,
-    ADDRESS_BASE, ADDRESS_OFFSET, ADDRESS_PREINDEX, ADDRESS_POSTINDEX,
+    ADDRESS_BASE, ADDRESS_OFFSET, ADDRESS_PREINDEX, ADDRESS_POSTINDEX, ADDRESS_REGISTER,
     SYMBOL_PLAIN, SYMBOL_PAGE, SYMBOL_PAGEOFF, SYMBOL_GOTPAGE, SYMBOL_GOTPAGEOFF,
     semantic_register_spelling, semantic_immediate_value, validate_semantic_token,
 )
@@ -90,6 +90,20 @@ def encode_semantic_instruction(opcode_id: int, operands: list[CompilerInt4]) ->
         if offset < -512 or offset > 504:
             raise encoder.EncodeError("typed pair offset is out of range")
         word = encoder._enc_ldstp(mnemonic == "ldp", modes[address.second], _gpr(operands[0], allow_zr=True), _gpr(operands[1], allow_zr=True), _gpr(operands[3], allow_sp=True), offset, True)
+    elif count >= 4 and operands[1].first == TOKEN_ADDRESS and operands[1].second == ADDRESS_REGISTER:
+        address = operands[1]
+        if count not in (4, 5) or address.third != count - 2:
+            raise encoder.EncodeError("typed register-offset address is invalid")
+        shift = 0
+        if count == 5:
+            shift_token = operands[4]
+            if (shift_token.first != TOKEN_SHIFT or SHIFT_NAMES[shift_token.second] != "lsl"
+                    or shift_token.fourth != 1 or shift_token.third == 0):
+                raise encoder.EncodeError("typed register-offset shift is invalid")
+            shift = shift_token.third
+        word = encoder.encode_emitted_load_store_register_parts(
+            mnemonic, _register(operands[0]), _register(operands[2]), _register(operands[3]), shift,
+        )
     elif count >= 3 and operands[1].first == TOKEN_ADDRESS:
         address = operands[1]
         if address.second not in (ADDRESS_BASE, ADDRESS_OFFSET) or address.third != count - 2:

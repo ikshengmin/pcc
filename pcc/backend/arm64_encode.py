@@ -1003,6 +1003,78 @@ def _enc_ldst_unsigned(size: int, opc: int, rt, rn, imm: int) -> int:
     )
 
 
+def _enc_ldst_register(size: int, opc: int, rt: int, rn: int, rm: int, shifted: bool) -> int:
+    """LDR/STR (register) with option LSL/UXTX: ``[Xn, Xm{, lsl #size}]``."""
+    return (
+        (size << 30) | 0x38200800 | (opc << 22) | (rm << 16)
+        | (0b011 << 13) | ((1 if shifted else 0) << 12) | (rn << 5) | rt
+    )
+
+
+_REGISTER_OFFSET_MNEMONICS = ("ldr", "str", "ldrb", "strb", "ldrh", "strh")
+
+
+def encode_emitted_load_store_register_parts(
+    mnemonic: str,
+    register: str,
+    base: str,
+    index: str,
+    shift: int,
+) -> int:
+    """Encode ``ldr/str{b,h} Rt, [Xbase, Xindex{, lsl #shift}]``.
+
+    Only integer data registers and an X index are proven. ``shift`` is 0 or
+    log2 of the access size, the two amounts the form encodes; a byte access
+    has no shifted form here.
+    """
+
+    if mnemonic not in _REGISTER_OFFSET_MNEMONICS:
+        raise EncodeError("unsupported register-offset mnemonic " + mnemonic)
+    register_code = _emitted_register_code(register)
+    base_code = _emitted_register_code(base)
+    index_code = _emitted_register_code(index)
+    if register_code < 0 or register_code >> 6 not in (_EMITTED_REG_X, _EMITTED_REG_W) or register in ("sp", "wsp"):
+        raise EncodeError("bad register-offset data register " + register)
+    if base_code < 0 or base_code >> 6 != _EMITTED_REG_X or base == "xzr":
+        raise EncodeError("bad register-offset base " + base)
+    if index_code < 0 or index_code >> 6 != _EMITTED_REG_X or index == "sp":
+        raise EncodeError("bad register-offset index " + index)
+    if mnemonic.endswith("b") or mnemonic.endswith("h"):
+        if register_code >> 6 != _EMITTED_REG_W:
+            raise EncodeError("narrow register-offset access requires a w register")
+        size = 0 if mnemonic.endswith("b") else 1
+    else:
+        size = 3 if register_code >> 6 == _EMITTED_REG_X else 2
+    if shift != 0 and (size == 0 or shift != size):
+        raise EncodeError("register-offset shift must be 0 or the access size")
+    return _enc_ldst_register(
+        size, 1 if mnemonic.startswith("ld") else 0,
+        register_code & 63, base_code & 63, index_code & 63, shift != 0,
+    )
+
+
+def _register_offset_operand(tok: str) -> tuple[str, str, int] | None:
+    """``[Xn, Xm{, lsl #s}]`` -> (base, index, s); None for an immediate form."""
+    t = tok.strip()
+    if not t.startswith("["):
+        return None
+    inner = t[1:-2] if t.endswith("]!") else t[1:-1]
+    parts = [p.strip() for p in inner.split(",")]
+    if len(parts) < 2 or parts[1].startswith("#") or "@" in parts[1]:
+        return None
+    if t.endswith("]!") or not t.endswith("]"):
+        raise EncodeError(f"register-offset address cannot write back: {tok!r}")
+    shift = 0
+    if len(parts) == 3:
+        words = parts[2].split()
+        if len(words) != 2 or words[0].lower() != "lsl":
+            raise EncodeError(f"unsupported register-offset extend {tok!r}")
+        shift = _imm(words[1])
+    elif len(parts) != 2:
+        raise EncodeError(f"unsupported memory operand {tok!r}")
+    return parts[0].lower(), parts[1].lower(), shift
+
+
 def encode_emitted_load_store_parts(
     mnemonic: str,
     register: str,
@@ -3595,6 +3667,11 @@ def _encode_one(line, at, labels, resolve_branch, relocations, undefined,
             if mn != "ldr" or not t64:
                 raise EncodeError("@GOTPAGEOFF only proven for 64-bit ldr")
             return _enc_ldst_unsigned(3, 1, rt, base, 0)
+        register_form = _register_offset_operand(memop)
+        if register_form is not None:
+            return encode_emitted_load_store_register_parts(
+                mn, ops[0].strip().lower(), register_form[0], register_form[1], register_form[2],
+            )
         base, imm, mode = _mem(memop)
         if mode:
             raise EncodeError(f"{mn} with writeback not in the proven subset")

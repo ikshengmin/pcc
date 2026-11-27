@@ -9,8 +9,11 @@ half). Expected words were cross-checked once with llvm-mc.
 Addresses: a getelementptr with constant indices is one add/sub of its
 total byte offset, and one 64-bit register index over a power-of-two element
 is one add with a shifted register, both between the allocated homes of the
-base, index and result. The program is emitted by the production object
-path, linked by pcc's owned linker and executed.
+base, index and result. When that indexed address only feeds the next load
+of the element, the load takes it as ``[base, index, lsl #3]`` and no add
+remains (tests/python/test_aarch64_register_offset_addressing.py). The
+program is emitted by the production object path, linked by pcc's owned
+linker and executed.
 """
 
 import platform
@@ -91,6 +94,12 @@ entry:
   ret i64 %sum
 }
 
+define ptr @element_address(ptr %base, i64 %index) {
+entry:
+  %slot = getelementptr i64, ptr %base, i64 %index
+  ret ptr %slot
+}
+
 define i32 @main() {
 entry:
   %records = alloca [2 x %pair], align 8
@@ -106,7 +115,11 @@ entry:
   %a4 = getelementptr [8 x i64], ptr %array, i64 0, i64 4
   store i64 2, ptr %a4, align 8
   %e = call i64 @element(ptr %array, i64 3)
-  %ok2 = icmp eq i64 %e, 42
+  %e2 = icmp eq i64 %e, 42
+  %ea = call ptr @element_address(ptr %array, i64 5)
+  %a5 = getelementptr [8 x i64], ptr %array, i64 0, i64 5
+  %ea_ok = icmp eq ptr %ea, %a5
+  %ok2 = and i1 %e2, %ea_ok
   %m1 = call i64 @minus_one()
   %ok3 = icmp eq i64 %m1, -1
   %m16 = call i32 @minus_sixteen()
@@ -138,7 +151,10 @@ def test_short_forms_are_emitted(optimize):
     assert re.search(r"^  add x\d+, x\d+, #46$", field, re.M), field
     assert re.search(r"^  add x\d+, x\d+, #8$", field, re.M), field
     element = _body(asm, "element")
-    assert re.search(r"^  add x\d+, x\d+, x\d+, lsl #3$", element, re.M), element
+    assert re.search(r"^  ldr x\d+, \[x\d+, x\d+, lsl #3\]$", element, re.M), element
+    assert not re.search(r"^  add x\d+, x\d+, x\d+, lsl #3$", element, re.M), element
+    address = _body(asm, "element_address")
+    assert re.search(r"^  add x\d+, x\d+, x\d+, lsl #3$", address, re.M), address
 
 
 @pytest.mark.pcc_gate(probe=lambda: sys.platform == "darwin" and platform.machine() == "arm64")

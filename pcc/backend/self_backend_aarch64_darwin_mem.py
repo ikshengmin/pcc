@@ -25,6 +25,7 @@ from .arm64_encode import (
     encode_emitted_adrp_parts,
     encode_emitted_ldr_got_pageoff_parts,
     encode_emitted_load_store_parts,
+    encode_emitted_load_store_register_parts,
     encode_emitted_move_register_parts,
     encode_emitted_movewide_parts,
 )
@@ -173,6 +174,32 @@ def emitted_memory_instruction_line(
         return DIRECT_INSTRUCTION_PLACEHOLDER
     suffix = "" if offset == 0 and not explicit_offset else ", #" + str(offset)
     return "  " + mnemonic + " " + register + ", [" + base + suffix + "]"
+
+
+def emitted_register_offset_memory_line(
+    mnemonic: str,
+    register: str,
+    base: str,
+    index: str,
+    shift: int = 0,
+) -> str:
+    """``ldr/str{b,h} Rt, [Xbase, Xindex{, lsl #shift}]`` as text or one record."""
+
+    records = _DIRECT_INSTRUCTION_RECORDS
+    if records is not None:
+        word = encode_emitted_load_store_register_parts(mnemonic, register, base, index, shift)
+        operands = [
+            _semantic_register(register),
+            CompilerInt4(semantics.TOKEN_ADDRESS, semantics.ADDRESS_REGISTER, 3 if shift else 2, 0),
+            _semantic_register(base),
+            _semantic_register(index),
+        ]
+        if shift:
+            operands.append(CompilerInt4(semantics.TOKEN_SHIFT, 0, shift, 1))
+        _capture_direct_instruction(word, EMITTED_INSTRUCTION_SCALAR, 0, -1, mnemonic, operands)
+        return DIRECT_INSTRUCTION_PLACEHOLDER
+    suffix = ", lsl #" + str(shift) if shift else ""
+    return "  " + mnemonic + " " + register + ", [" + base + ", " + index + suffix + "]"
 
 
 def emitted_move_register_line(destination: str, source: str) -> str:

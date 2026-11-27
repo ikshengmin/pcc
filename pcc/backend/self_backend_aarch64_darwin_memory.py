@@ -15,6 +15,7 @@ from .self_backend_aarch64_darwin_mem import (
     emitted_fixed_instruction_line,
     emitted_memory_instruction_line,
     emitted_move_register_line,
+    emitted_register_offset_memory_line,
     mem_load_op,
     mem_store_op,
 )
@@ -184,6 +185,17 @@ def _cmpxchg_merged_ordering(success: str, failure: str) -> str:
     return success
 
 
+def _x_register(number: int) -> str:
+    # A typed int parameter: a standalone --python-library compile treats
+    # this package's imports as CPython, and str() of such a call result
+    # inside the large emitters cannot publish into its output slot.
+    return "x" + str(number)
+
+
+def _w_register(number: int) -> str:
+    return "w" + str(number)
+
+
 def _indexed_scalar_mem_load_op(type_header: CompilerInt4) -> str:
     if type_header.first == TYPE_KIND_INT and type_header.second <= 8:
         return "ldrb"
@@ -266,6 +278,84 @@ def adjacent_gep_memory_address(
     return CompilerInt4(definition.first, header.third, header.second, offset)
 
 
+def _register_index_name(kernel: IndexedFunctionKernel, index_ref: int) -> str:
+    # adjacent_gep_register_address admitted only an i64 index with a
+    # register, so its name is the X register.
+    type_id = kernel.value_type_id(index_ref)
+    register = allocated_scalar_register_indexed(kernel, index_ref, type_id)
+    if register < 0:
+        raise BackendUnavailable("register-offset index lost its register")
+    return reg_name_indexed(kernel, type_id, register)
+
+
+def adjacent_gep_register_address(
+    kernel: IndexedFunctionKernel, block_id: int, position: int,
+) -> CompilerInt4:
+    """Return (base ref, pointer type, index ref, shift), or first=-1.
+
+    ``gep T, ptr %p, i64 %i`` whose only use is the directly following
+    non-volatile integer/pointer load or store address is selected as
+    ``[Xp, Xi]`` (T one byte) or ``[Xp, Xi, lsl #log2(size)]`` (T's size equal
+    to the access size), when %p and %i both have registers. The GEP then
+    emits nothing. Both the GEP and its access query this, so the decision
+    depends only on the kernel and the finished register assignment.
+    """
+    missing = CompilerInt4(-1, -1, -1, 0)
+    block: CompilerInt4 = kernel.block_fact(block_id)
+    if position < 0 or position + 1 >= block.second:
+        return missing
+    producer: CompilerInt4 = kernel.instruction_metadata_by_id(block.first + position)
+    consumer: CompilerInt4 = kernel.instruction_metadata_by_id(block.first + position + 1)
+    if producer.first != PARSED_INSTRUCTION_KIND_GEP or consumer.third:
+        return missing
+    if consumer.first not in (PARSED_INSTRUCTION_KIND_LOAD, PARSED_INSTRUCTION_KIND_STORE):
+        return missing
+    definition: CompilerInt4 = kernel.instruction_fact_by_id(block.first + position)
+    if definition.first < 0 or kernel.last_use(block_id, definition.first) != position + 1:
+        return missing
+    memory: CompilerInt4 = kernel.instruction_record(consumer.second)
+    pointer = memory.third if consumer.first == PARSED_INSTRUCTION_KIND_LOAD else memory.fourth
+    if pointer != definition.first:
+        return missing
+    if consumer.first == PARSED_INSTRUCTION_KIND_STORE and memory.second == pointer:
+        return missing
+    access: CompilerInt4 = kernel.type_header(memory.first)
+    if access.first not in (TYPE_KIND_INT, TYPE_KIND_PTR):
+        return missing
+    access_bytes = _scalar_access_bytes(access)
+    if access_bytes == 0:
+        return missing
+    header: CompilerInt4 = kernel.gep_header(producer.second)
+    span: CompilerInt4 = kernel.gep_span(producer.second)
+    if span.first != 1 or header.third < 0:
+        return missing
+    element: CompilerInt4 = kernel.type_header(header.first)
+    if element.first not in (TYPE_KIND_INT, TYPE_KIND_PTR):
+        return missing
+    element_bytes = _scalar_access_bytes(element)
+    shift = -1
+    if element_bytes == 1 and element.first == TYPE_KIND_INT and element.second == 8:
+        shift = 0
+    elif element_bytes == access_bytes:
+        if element_bytes == 2:
+            shift = 1
+        elif element_bytes == 4:
+            shift = 2
+        elif element_bytes == 8:
+            shift = 3
+    if shift < 0:
+        return missing
+    index: CompilerInt2 = kernel.gep_index(header.fourth)
+    index_type: CompilerInt4 = kernel.type_header(index.first)
+    if index.second < 0 or index_type.first != TYPE_KIND_INT or index_type.second != 64:
+        return missing
+    if allocated_scalar_register_indexed(kernel, header.third, header.second) < 0:
+        return missing
+    if allocated_scalar_register_indexed(kernel, index.second, index.first) < 0:
+        return missing
+    return CompilerInt4(header.third, header.second, index.second, shift)
+
+
 def _indexed_scalar_stack_load_op(type_header: CompilerInt4) -> str:
     if type_header.first == TYPE_KIND_INT and type_header.second <= 8:
         return "ldurb"
@@ -344,6 +434,8 @@ def emit_memory_instruction_by_id(
     pointer_override_ref: int = -1,
     pointer_override_type: int = -1,
     memory_offset: int = 0,
+    memory_index_ref: int = -1,
+    memory_index_shift: int = 0,
 ) -> list[str] | None:
     if kind_id == _PARSED_INSTRUCTION_KIND_IDS["syscall6"]:
         from .self_backend_target_match import is_aarch64_linux_triple
@@ -463,7 +555,7 @@ def emit_memory_instruction_by_id(
                     "0", "null", "false", "zeroinitializer",
                 )
                 base_register = -1
-                if store_record.second >= 0 or zero_value:
+                if store_record.second >= 0 or zero_value or memory_index_ref >= 0:
                     base_register = allocated_scalar_register_indexed(
                         indexed_kernel, pointer_ref, pointer_type,
                     )
@@ -487,6 +579,13 @@ def emit_memory_instruction_by_id(
                         module_symbols, value_id=store_record.second,
                     ))
                 memory_op = _indexed_scalar_mem_store_op(value_type_header)
+                if memory_index_ref >= 0:
+                    lines.append(emitted_register_offset_memory_line(
+                        memory_op, value_name, base_name,
+                        _register_index_name(indexed_kernel, memory_index_ref),
+                        memory_index_shift,
+                    ))
+                    return lines
                 access_bytes = _scalar_access_bytes(value_type_header)
                 if memory_offset < 0 or (access_bytes and memory_offset % access_bytes):
                     memory_op = _indexed_scalar_stack_store_op(value_type_header)
@@ -607,7 +706,7 @@ def emit_memory_instruction_by_id(
                 indexed_kernel, record.third, record.second,
             )
             if base_register >= 0:
-                address_register = "x" + str(base_register)
+                address_register = _x_register(base_register)
         else:
             address_register = allocated_register_name(func, ptr_name, _ptr_type)
         lines = []
@@ -667,7 +766,7 @@ def emit_memory_instruction_by_id(
                     indexed_kernel, record.fourth, record.third,
                 )
             if base_register >= 0:
-                address_register = "x" + str(base_register)
+                address_register = _x_register(base_register)
             else:
                 lines = materialize_scalar_value_indexed(
                     func, indexed_kernel, ptr_name, record.third, 9, module_symbols,
@@ -803,7 +902,7 @@ def emit_memory_instruction_by_id(
         lines = []
         # Register donation may put the observed result in the address's old
         # home. Preserve that address for the store/retry before overwriting it.
-        if address_register is None or address_register == "x" + str(old_register):
+        if address_register is None or address_register == _x_register(old_register):
             address_register = "x9"
             lines = materialize_pointer(func, ptr_name, 9, module_symbols)
         if _lse_atomics_available(module_symbols) and value_type.width in (32, 64):
@@ -885,7 +984,7 @@ def emit_memory_instruction_by_id(
                     lines.extend(store_value_regs_to_value_slot(func, projected_name, old_register))
             else:
                 flag_register = projected_register if projected_register >= 0 else 14
-                lines.append(emitted_cset_line("w" + str(flag_register), "eq"))
+                lines.append(emitted_cset_line(_w_register(flag_register), "eq"))
                 if projected_register < 0:
                     lines.extend(store_value_regs_to_value_slot(func, projected_name, flag_register))
             return lines
@@ -985,16 +1084,25 @@ def emit_memory_instruction_by_id(
                         ))
                     memory_op = _indexed_scalar_mem_load_op(value_type_header)
                     access_bytes = _scalar_access_bytes(value_type_header)
-                    if memory_offset < 0 or (access_bytes and memory_offset % access_bytes):
-                        memory_op = _indexed_scalar_stack_load_op(value_type_header)
-                    lines.append(
-                        emitted_memory_instruction_line(
+                    if memory_index_ref >= 0:
+                        lines.append(emitted_register_offset_memory_line(
                             memory_op,
                             reg_name_indexed(indexed_kernel, value_type_id, load_register),
                             base_name,
-                            memory_offset,
+                            _register_index_name(indexed_kernel, memory_index_ref),
+                            memory_index_shift,
+                        ))
+                    else:
+                        if memory_offset < 0 or (access_bytes and memory_offset % access_bytes):
+                            memory_op = _indexed_scalar_stack_load_op(value_type_header)
+                        lines.append(
+                            emitted_memory_instruction_line(
+                                memory_op,
+                                reg_name_indexed(indexed_kernel, value_type_id, load_register),
+                                base_name,
+                                memory_offset,
+                            )
                         )
-                    )
                 if result_register >= 0:
                     # LDRB/LDRH already perform the narrow zero extension;
                     # the allocated value is ready without a move/mask chain.
