@@ -5848,6 +5848,23 @@ in the relevant section or issue and removes the entry.
    cost attribution and test-first local snapshot reuse, no
    persistent cache or broad route changes.
 
+   Next independent Stage2 lexical pair scan reuse: existing exact old
+   source attribution shows single local duplicate attribute mask565
+   calls/17.23MB and multi587/17.51MB; single same-flag from-spec
+   duplicates565/13.02MB. Large native transform smoke 380,087B source
+   had10,878 ordinary lines max320, still scanning at30s (unqualified).
+   Test-first local relative/absolute pair only, preserve both original
+   file opens and second post-first-resolution read; compare exact raw
+   snapshot, reuse masked source and same-flag specs only with original
+   hooks, otherwise original calls. Changed source or hooks must force
+   fresh scan. Distinct root resolution/order and top-level-only flags,
+   unsafe imports and error semantics unchanged; no persistent cache.
+   Require exact current graph/order, strict native context and actual
+   scoped CPU/RSS paired controls, no full bootstrap/relaxed limits.
+   GC diagnostic and Stage1 formal priority; source-only prep.
+
+   Claims:
+   - Stage2 local lexical pair scan reuse: Codex, Linux, 2026-11-27T00:07Z, area selfhost
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
