@@ -5391,6 +5391,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend toward LLVM parity: locate the LLVM step the self passes lack (pcc_perf reference ablations, scripts/pcc_perf.py), then implement it in pcc's own AArch64 passes (shrink-wrapping, allocation or selection, whichever the ablation ranks first); IR-pass changes are target-neutral and reach x64; avoids the typed x64 MIR files: Claude, macOS, 2026-11-27T06:46Z, area backend
+   - Strict native owned AST V2 compact scanner + packed direct-top5 reader production integration (only py_json_runtime.py, pipeline_ast_wire.py, test_owned_ast_json_fast.py, test_py_frontend_ast_wire.py; NO py_runtime.h/runtime_abi.py overlap with Mac U11; full preflight, actual fallback/public semantics and strict latest source/formal 1/4 native proof before publication; no CI): Codex, Linux, 2026-11-27T13:39Z, area runtime-codegen
 
 
 
