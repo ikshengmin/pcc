@@ -3874,13 +3874,26 @@ in the relevant section or issue and removes the entry.
        even eliminated entirely ceilings at ~0.5% whole class worker,
        complete type proof~1.4%; no standalone source change, no
        global cache and no native inference risk incurred. Release
-       verifier proof unit. Next (latest actual Stage1 codegen priority):
-       (0) attribute repeated per-function module-global exactness proof
-       in dominant general OFF x86 stack-map planning, existing private
-       worker-owned globals-index lifetime only, measure actual
-       source count/CPU before edits; native raw and public/custom
-       observer unchanged, exact plans/ELF and CPU/RSS controls;
-       retain inline OFF default;
+       verifier proof unit.
+       Actual same class OFF PIDX cf4113cc (d222ab42) prepared through
+       exact verifier/layout/target passes, one shared worker globals
+       index as production, all727/727 functions admitted host protocol
+       facts: 7003 globals x727 =5,091,181 repeated exactness checks,
+       CPU .7501s inclusive of 9.6304s planner (7.79%), ~0.94% full
+       class worker ceiling; 184919 records exact plan digest
+       522a76008e3e8a292aae649c7c8a4721973d65670f98c2c753c60f945a06c02b.
+       Diagnostic only, native raw skips proof. Existing globals-index
+       holder can be populated after ineligible/text/custom-first
+       function without initializer exactness; presence cannot certify
+       later direct functions, duplicate-last map may hide earlier invalid
+       rows. New holder marker/arg or tightening native global builder
+       risks semantics/hot parity for bounded ceiling. Reject standalone,
+       no source change or cache. Next (latest actual Stage1 codegen
+       priority): (0) profile current actual general OFF x64 function
+       emission after landed copy/dead-move/frame/global/packed owners,
+       identify materially repeated work on exact frozen large compiler
+       PIDX before editing; native strict parity and exact ELF, CPU/RSS
+       controls; retain inline OFF default;
        (1) ARM typed
        prepare memory: quantify retained prior run history and
        private CFG owner retirement with public snapshot/callback
@@ -4484,7 +4497,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
-   - Actual general OFF x86 stackmap repeated module-global proof attribution (private worker globals-index lifetime, native/public unchanged): Codex, Linux, 2026-11-27T01:05Z, area backend (self_backend_precise_stackmaps, no overlap with CI TLS/Stage2 dependency owner)
+   - Actual current general OFF x64 function emission attribution after landed sparse/packed owners (exact same-input ELF, native hot parity): Codex, Linux, 2026-11-27T01:08Z, area backend (x64 emitter/late pass attribution, no overlap with current CI TLS/Stage2 lexical owner)
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
