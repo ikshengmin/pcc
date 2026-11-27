@@ -1557,6 +1557,7 @@ in the relevant section or issue and removes the entry.
    Claims:
    - Stage1 AArch64 private pre-first-pass initial rope retirement, true CPython-only adapter (typed_peepholes.py single guarded boundary/import, new self_backend_aarch64_host_initial_span.py and existing test_aarch64_span_owner_transfer.py only; exact native closure exclusion/hot parity; no generic arena/emitter/selector edits): Codex, Linux, 2026-11-27T18:25Z, area backend
    - Stage2 exact owned subclass override scan empty-base negative MRO pruning (class_gen.py method_overridden_by_subclass and adjacent private exact-owner helper only; new test_owned_subclass_override_scan.py; no class layout/ABI/runtime/lowerer edits): Codex, Linux, 2026-11-27T18:16Z, area selfhost-mro-scan
+   - #653 stale source observer for PID publication expression (test_worker_current_rss.py only, existing original stale guard diagnostic forwarding; no PID implementation or gate changes): Codex, Linux, 2026-11-27T18:35Z, area selfhost-ci
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
