@@ -165,6 +165,90 @@ class _SpanOwnerTransfer:
         self.owner = None
 
 
+class _PeepholeBoundaryRetirement:
+    """Private permission for the one peephole-to-CFG ownership boundary."""
+
+    def __init__(self, fragments: AArch64EmissionFragments) -> None:
+        self.valid: bool = True
+        self.fragments: AArch64EmissionFragments | None = fragments
+
+    def revoke(self) -> None:
+        self.valid = False
+        self.fragments = None
+
+
+def _observe_peephole_boundary_permission(permission, phase_timing) -> None:
+    if permission is not None and permission.valid and not _owned_timer_is_canonical(phase_timing):
+        permission.revoke()
+
+
+def _retire_owned_peephole_span(fragments, span, permission, phase_timing):
+    """Copy only the latest checked private run into a fresh owner once.
+
+    Never mutate or close the previous owner: independently retained roots and
+    cursors retain their original generation and sequence. Public/custom paths
+    retain the existing persistent owner and validation behavior.
+    """
+    _observe_peephole_boundary_permission(permission, phase_timing)
+    if permission is None or not permission.valid:
+        return span
+    if permission.fragments is not fragments:
+        permission.revoke()
+        return span
+    permission.revoke()
+    old: CompilerRecordSpanArena = fragments.spans
+    if (type(fragments) is not AArch64EmissionFragments
+            or type(old) is not CompilerRecordSpanArena
+            or old.closed or type(old.generation) is not int
+            or old.generation < 1 or old.generation >= 0x7fffffff
+            or type(span) is not type(CompilerInt2(0, 0))
+            or type(span.first) is not int or type(span.second) is not int
+            or span.second != old.generation):
+        return span
+    for arena in (old.nodes, old.spans, old.runs, fragments.records):
+        if (type(arena) is not CompilerIntArena or arena._address != 0
+                or arena._closed or type(arena._values) is not list
+                or arena._length != len(arena._values)):
+            return span
+    if span.first < 0 or span.first >= old.spans._length // 2:
+        return span
+    root = old._root(span)
+    if (type(root.first) is not int or type(root.second) is not int
+            or root.first < 0 or root.first >= old.nodes._length // 3):
+        return span
+    node = old.nodes.get3_unchecked(root.first)
+    start = node.second
+    count = node.third
+    if (type(node.first) is not int or type(start) is not int or type(count) is not int
+            or node.first != -3 or count != root.second or count <= 0
+            or start < 0 or start + count > old.runs._length
+            or count >= old.runs._length):
+        return span
+    # The preceding owned pass certified this run. Still exclude malformed
+    # records or subclass hooks rather than change their validation order.
+    record_count = fragments.records._length // 4
+    index = start
+    while index < start + count:
+        value = old.runs._values[index]
+        if type(value) is not int or value < 0 or value >= record_count:
+            return span
+        index += 1
+    pending = CompilerRecordSpanArena()
+    try:
+        pending.generation = old.generation + 1
+        result = pending.new_span()
+        pending.runs.extend_from(old.runs, start, count)
+        pending._publish_run(result, pending._root(result), 0, count, -3)
+    except BaseException:
+        try:
+            pending.close()
+        except Exception:
+            pass
+        raise
+    fragments.spans = pending
+    return result
+
+
 class _Pass:
     # A pass built without __init__ shares no decoded records.
     decoded_limit: int = 0
@@ -909,24 +993,31 @@ def _run_aarch64_typed_peepholes(
     fragments: AArch64EmissionFragments, semantics: sem.AArch64InstructionSemantics,
     span: CompilerInt2, *, phase_timing=None, owned_stack_windows: bool = False,
     span_owner_transfer: _SpanOwnerTransfer | None = None,
+    boundary_retirement: _PeepholeBoundaryRetirement | None = None,
 ) -> CompilerInt2:
     """Apply the original ordered first-fourteen module-stream passes."""
     try:
         if span_owner_transfer is not None and not _owned_timer_is_canonical(phase_timing):
             span_owner_transfer.revoke()
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             started = phase_timing.begin_backend_finalize("typed_peephole_validate")
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         if span_owner_transfer is not None and not _owned_timer_is_canonical(phase_timing):
             span_owner_transfer.revoke()
         semantics.require_complete(fragments.records, len(fragments.symbol_names))
         if span_owner_transfer is not None and not _owned_timer_is_canonical(phase_timing):
             span_owner_transfer.revoke()
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             phase_timing.complete_backend_finalize("typed_peephole_validate", started)
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         if span_owner_transfer is not None and not _owned_timer_is_canonical(phase_timing):
             span_owner_transfer.revoke()
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             started = phase_timing.begin_backend_finalize("typed_forward_adjacent_stack_store_load")
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         if owned_stack_windows and _owned_timer_is_canonical(phase_timing):
             if span_owner_transfer is not None and span_owner_transfer.valid:
                 span = _run_owned_stack(fragments, semantics, span, 1, span_owner_transfer)
@@ -937,82 +1028,143 @@ def _run_aarch64_typed_peepholes(
                 span_owner_transfer.revoke()
             span = forward_adjacent_stack_store_load(fragments, semantics, span)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             phase_timing.complete_backend_finalize("typed_forward_adjacent_stack_store_load", started)
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             started = phase_timing.begin_backend_finalize("typed_forward_one_intervening_stack_store_load")
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         span = _run_owned_stack(fragments, semantics, span, 2) if owned_stack_windows and _owned_timer_is_canonical(phase_timing) else forward_one_intervening_stack_store_load(fragments, semantics, span)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             phase_timing.complete_backend_finalize("typed_forward_one_intervening_stack_store_load", started)
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             started = phase_timing.begin_backend_finalize("typed_fold_zero_store_source")
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         span = _run_owned_store(fragments, semantics, span, 3) if owned_stack_windows and _owned_timer_is_canonical(phase_timing) else fold_zero_store_source(fragments, semantics, span)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             phase_timing.complete_backend_finalize("typed_fold_zero_store_source", started)
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             started = phase_timing.begin_backend_finalize("typed_fold_mov_store_source")
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         span = _run_owned_store(fragments, semantics, span, 4) if owned_stack_windows and _owned_timer_is_canonical(phase_timing) else fold_mov_store_source(fragments, semantics, span)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             phase_timing.complete_backend_finalize("typed_fold_mov_store_source", started)
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             started = phase_timing.begin_backend_finalize("typed_fold_zero_compare_immediate")
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         span = _run_owned_zero_compare(fragments, semantics, span) if owned_stack_windows and _owned_timer_is_canonical(phase_timing) else fold_zero_compare_immediate(fragments, semantics, span)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             phase_timing.complete_backend_finalize("typed_fold_zero_compare_immediate", started)
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             started = phase_timing.begin_backend_finalize("typed_fold_mov_compare_source")
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         span = _run_owned_move_matchers(fragments, semantics, span, 6) if owned_stack_windows and _owned_timer_is_canonical(phase_timing) else fold_mov_compare_source(fragments, semantics, span)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             phase_timing.complete_backend_finalize("typed_fold_mov_compare_source", started)
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             started = phase_timing.begin_backend_finalize("typed_fold_mov_zero_branch_source")
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         span = _run_owned_move_matchers(fragments, semantics, span, 7) if owned_stack_windows and _owned_timer_is_canonical(phase_timing) else fold_mov_zero_branch_source(fragments, semantics, span)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             phase_timing.complete_backend_finalize("typed_fold_mov_zero_branch_source", started)
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             started = phase_timing.begin_backend_finalize("typed_fold_mov_arith_self_update")
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         span = _run_owned_arith(fragments, semantics, span) if owned_stack_windows and _owned_timer_is_canonical(phase_timing) else fold_mov_arith_self_update(fragments, semantics, span)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             phase_timing.complete_backend_finalize("typed_fold_mov_arith_self_update", started)
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             started = phase_timing.begin_backend_finalize("typed_fold_scratch_def_into_move")
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         span = _run_owned_sparse(fragments, semantics, span, 9) if owned_stack_windows and _owned_timer_is_canonical(phase_timing) else fold_scratch_def_into_move(fragments, semantics, span)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             phase_timing.complete_backend_finalize("typed_fold_scratch_def_into_move", started)
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             started = phase_timing.begin_backend_finalize("typed_fold_mov_mov_chain")
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         span = _run_owned_move_matchers(fragments, semantics, span, 10) if owned_stack_windows and _owned_timer_is_canonical(phase_timing) else fold_mov_mov_chain(fragments, semantics, span)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             phase_timing.complete_backend_finalize("typed_fold_mov_mov_chain", started)
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             started = phase_timing.begin_backend_finalize("typed_fold_zero_test_branch")
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         span = _run_owned_zero_branch(fragments, semantics, span) if owned_stack_windows and _owned_timer_is_canonical(phase_timing) else fold_zero_test_branch(fragments, semantics, span)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             phase_timing.complete_backend_finalize("typed_fold_zero_test_branch", started)
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             started = phase_timing.begin_backend_finalize("typed_fold_forwarded_cset_branch")
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         span = _run_owned_cset(fragments, semantics, span) if owned_stack_windows and _owned_timer_is_canonical(phase_timing) else fold_forwarded_cset_branch(fragments, semantics, span)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             phase_timing.complete_backend_finalize("typed_fold_forwarded_cset_branch", started)
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             started = phase_timing.begin_backend_finalize("typed_fold_cset_zero_branch")
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         span = _run_owned_sparse(fragments, semantics, span, 13) if owned_stack_windows and _owned_timer_is_canonical(phase_timing) else fold_cset_zero_branch(fragments, semantics, span)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             phase_timing.complete_backend_finalize("typed_fold_cset_zero_branch", started)
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             started = phase_timing.begin_backend_finalize("typed_drop_dead_cset_branch_stores")
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         span = _run_owned_move_matchers(fragments, semantics, span, 14) if owned_stack_windows and _owned_timer_is_canonical(phase_timing) else drop_dead_cset_branch_stores(fragments, semantics, span)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             phase_timing.complete_backend_finalize("typed_drop_dead_cset_branch_stores", started)
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             started = phase_timing.begin_backend_finalize("typed_fold_sign_extending_load")
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         span = fold_sign_extending_load(fragments, semantics, span)
         if phase_timing is not None:
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             phase_timing.complete_backend_finalize("typed_fold_sign_extending_load", started)
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
         return span
+    except BaseException:
+        if boundary_retirement is not None:
+            boundary_retirement.revoke()
+        raise
     finally:
         if span_owner_transfer is not None:
             span_owner_transfer.revoke()
-
 
 def run_aarch64_typed_peepholes(fragments: AArch64EmissionFragments, semantics: sem.AArch64InstructionSemantics, span: CompilerInt2, *, phase_timing=None) -> CompilerInt2:
     return _run_aarch64_typed_peepholes(fragments, semantics, span, phase_timing=phase_timing)

@@ -221,3 +221,115 @@ def test_begin_revokes_before_validation_can_restore_timer(monkeypatch, phase):
         assert sink.fragments.spans is old and not cap.valid and cap.owner is None
     factory(monkeypatch, stack.items(1, 'basic'), action, timer)
     assert seen == [phase]
+
+
+def test_private_peephole_boundary_retires_history_keeps_old_cursor(monkeypatch):
+    seen = []
+    from pcc.backend import self_backend_aarch64_typed_cfg as cfg
+    original = p._run_aarch64_typed_peepholes
+    def observe(*args, **kwargs):
+        result = original(*args, **kwargs)
+        f = args[0]; old = f.spans
+        cursor = CompilerIntArena(); old.start_cursor(result, cursor)
+        before = ids(old, result)
+        # Add an independent history run; the latest checked root is unchanged.
+        extra = old.new_span(); history = CompilerIntArena()
+        try:
+            history.extend_list(before); old.append_ids(extra, history, True)
+        finally: history.close()
+        seen.append((f, old, result, cursor, before))
+        return result
+    monkeypatch.setattr(p, '_run_aarch64_typed_peepholes', observe)
+    def stop(f, s, span, *args, **kwargs):
+        _, old, old_span, cursor, before = seen[0]
+        try:
+            assert f.spans is not old, 'boundary history must retire exactly once'
+            assert ids(f.spans, span) == before
+            assert f.spans.runs._length == len(before)
+            assert f.spans.is_checked_run(span)
+            assert ids(old, old_span) == before
+            assert stack.read_cursor(old, cursor) == before
+        finally: cursor.close(); old.close()
+        raise RuntimeError('after boundary')
+    monkeypatch.setattr(cfg, 'run_aarch64_typed_cfg_passes', stop)
+    def action(sink, cap):
+        previous = sink.module_span; sink.module_span = sink.fragments.new_fragment()
+        sink.append_code_directive(EMISSION_DIRECTIVE_TEXT_SECTION)
+        sink.fragments.extend_fragment(sink.module_span, previous)
+        with pytest.raises(RuntimeError, match='^after boundary$'):
+            sink.finish_optimized_instructions([], [])
+    factory(monkeypatch, stack.items(1, 'basic'), action)
+
+
+def test_private_boundary_public_constructor_has_no_permission(monkeypatch):
+    def action(sink, cap):
+        public = darwin._NativeAArch64Emission(optimize=True, owned_stack_windows=True)
+        try:
+            assert public._peephole_boundary_retirement is None
+            assert sink._peephole_boundary_retirement.valid
+        finally: public.close()
+    factory(monkeypatch, [], action)
+
+
+@pytest.mark.parametrize('damage', ['bad_scalar', 'allocation', 'no_history'])
+def test_private_boundary_failure_and_fallback_preserve_owner(monkeypatch, damage):
+    def action(sink, initial):
+        f = sink.fragments; s = f.semantics
+        before = f.spans
+        result = p._run_owned_stack(f, s, sink.module_span, 1, initial)
+        old = f.spans; current = ids(old, result)
+        cap = sink._peephole_boundary_retirement
+        try:
+            if damage != 'no_history':
+                scratch = CompilerIntArena()
+                try:
+                    scratch.extend_list(current); old.append_ids(old.new_span(), scratch, True)
+                finally: scratch.close()
+            if damage == 'bad_scalar':
+                class Bad(int):
+                    def __lt__(self, other): raise RuntimeError('subclass comparison')
+                root = old._root(result); node = old.nodes.get3_unchecked(root.first)
+                bad = Bad(current[0])
+                old.runs._values[node.second] = bad
+            if damage == 'allocation':
+                def fail(self): raise MemoryError('new owner failed')
+                with monkeypatch.context() as patch:
+                    patch.setattr(CompilerRecordSpanArena, '__init__', fail)
+                    with pytest.raises(MemoryError, match='new owner failed'):
+                        p._retire_owned_peephole_span(f, result, cap, None)
+            else:
+                assert p._retire_owned_peephole_span(f, result, cap, None) == result
+            assert f.spans is old and not cap.valid and cap.fragments is None
+            if damage == 'bad_scalar':
+                assert old.runs._values[node.second] is bad
+                old.runs._values[node.second] = current[0]
+            assert ids(old, result) == current
+        finally:
+            before.close()
+    factory(monkeypatch, stack.items(1, 'basic'), action)
+
+
+def test_private_boundary_timer_mutation_then_restoration_revokes(monkeypatch):
+    timer = timing.ModulePhaseTiming('boundary-revoke'); observed = []
+    from pcc.backend import self_backend_aarch64_typed_cfg as cfg
+    def action(sink, initial):
+        cap = sink._peephole_boundary_retirement
+        saved = timer.start
+        def event(*args):
+            if args[1] == 'typed_fold_zero_store_source':
+                if args[3] == 'begin': timer.start = lambda: 0
+                if args[3] == 'complete': timer.start = saved
+        monkeypatch.setattr(timing, '_write_event', event)
+        original = p._run_aarch64_typed_peepholes
+        def observe(*args, **kwargs):
+            result = original(*args, **kwargs)
+            observed.append(args[0].spans)
+            return result
+        monkeypatch.setattr(p, '_run_aarch64_typed_peepholes', observe)
+        def stop(f, *args, **kwargs):
+            assert f.spans is observed[0] and not cap.valid and cap.fragments is None
+            raise RuntimeError('after fourteen')
+        monkeypatch.setattr(cfg, 'run_aarch64_typed_cfg_passes', stop)
+        with pytest.raises(RuntimeError, match='^after fourteen$'):
+            sink.finish_optimized_instructions([], [], timer)
+    factory(monkeypatch, stack.items(1, 'basic'), action, timer)

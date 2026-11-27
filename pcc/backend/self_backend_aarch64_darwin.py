@@ -229,7 +229,7 @@ def _owned_publish_semantics_can_retire(sink, phase_timing) -> bool:
     return True
 
 
-from .self_backend_aarch64_typed_peepholes import _SpanOwnerTransfer
+from .self_backend_aarch64_typed_peepholes import _SpanOwnerTransfer, _PeepholeBoundaryRetirement
 
 
 class _NativeAArch64Emission:
@@ -245,6 +245,7 @@ class _NativeAArch64Emission:
     def __init__(self, *, optimize: bool = False, owned_stack_windows: bool = False) -> None:
         self._owned_stack_windows = owned_stack_windows
         self._span_owner_transfer: _SpanOwnerTransfer | None = None
+        self._peephole_boundary_retirement: _PeepholeBoundaryRetirement | None = None
         direct_semantics = borrow_direct_instruction_semantics() if optimize else None
         self.symbol_names: list[str] = []
         self.symbol_ids: dict[str, int] = {}
@@ -295,6 +296,8 @@ class _NativeAArch64Emission:
         self._family_scalar = EMITTED_INSTRUCTION_SCALAR
 
     def close(self) -> None:
+        if self._peephole_boundary_retirement is not None:
+            self._peephole_boundary_retirement.revoke()
         if self._span_owner_transfer is not None:
             self._span_owner_transfer.revoke()
         self.builder.close()
@@ -497,15 +500,19 @@ class _NativeAArch64Emission:
         raise BackendUnavailable("optimized native instruction lacks typed producer provenance")
 
     def finish_optimized_instructions(self, metadata_labels, cold_fallthrough_edges, phase_timing=None) -> None:
-        from .self_backend_aarch64_typed_peepholes import _run_aarch64_typed_peepholes, run_aarch64_typed_peepholes, _owned_timer_is_canonical
+        from .self_backend_aarch64_typed_peepholes import _run_aarch64_typed_peepholes, run_aarch64_typed_peepholes, _owned_timer_is_canonical, _observe_peephole_boundary_permission, _retire_owned_peephole_span
         from .self_backend_aarch64_typed_cfg import run_aarch64_typed_cfg_passes
         try:
+            boundary_retirement = self._peephole_boundary_retirement
+            _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             if not self.collecting_optimized or self.fragments.semantics is None:
                 raise BackendUnavailable("optimized module capture is not active")
             if self._span_owner_transfer is not None and not _owned_timer_is_canonical(phase_timing):
                 self._span_owner_transfer.revoke()
             if phase_timing is not None:
+                _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
                 started = phase_timing.begin_backend_finalize("typed_validate")
+                _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             if self._span_owner_transfer is not None and not _owned_timer_is_canonical(phase_timing):
                 self._span_owner_transfer.revoke()
             require_closed_aarch64_memory_pair_barrier(self.barrier_depth)
@@ -513,18 +520,24 @@ class _NativeAArch64Emission:
             if self._span_owner_transfer is not None and not _owned_timer_is_canonical(phase_timing):
                 self._span_owner_transfer.revoke()
             if phase_timing is not None:
+                _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
                 phase_timing.complete_backend_finalize("typed_validate", started)
+                _observe_peephole_boundary_permission(boundary_retirement, phase_timing)
             if self._owned_stack_windows:
                 span = _run_aarch64_typed_peepholes(
                     self.fragments, self.fragments.semantics, self.module_span,
                     phase_timing=phase_timing, owned_stack_windows=True,
                     span_owner_transfer=self._span_owner_transfer,
+                    boundary_retirement=boundary_retirement,
                 )
             else:
                 span = run_aarch64_typed_peepholes(
                     self.fragments, self.fragments.semantics, self.module_span,
                     phase_timing=phase_timing,
                 )
+            span = _retire_owned_peephole_span(
+                self.fragments, span, boundary_retirement, phase_timing,
+            )
             span = run_aarch64_typed_cfg_passes(
                 self.fragments, self.fragments.semantics, span, metadata_labels,
                 cold_fallthrough_edges, phase_timing=phase_timing,
@@ -543,9 +556,10 @@ class _NativeAArch64Emission:
             if phase_timing is not None:
                 phase_timing.complete_backend_finalize("typed_publish", started)
         finally:
+            if self._peephole_boundary_retirement is not None:
+                self._peephole_boundary_retirement.revoke()
             if self._span_owner_transfer is not None:
                 self._span_owner_transfer.revoke()
-
     def _publish_directive(self, record: CompilerInt4) -> None:
         kind = record.first
         if kind == EMISSION_DIRECTIVE_TEXT_SECTION and record.third == 0 and record.fourth == -1:
@@ -1083,6 +1097,7 @@ def _emit_prepared_aarch64_darwin_lines(
                         and native_sink.fragments.spans.nodes._address == 0
                         and native_sink.fragments.spans.spans._address == 0):
                     native_sink._span_owner_transfer = _SpanOwnerTransfer(native_sink.fragments.spans)
+                    native_sink._peephole_boundary_retirement = _PeepholeBoundaryRetirement(native_sink.fragments)
             return _emit_prepared_aarch64_darwin_lines_active(
                 prepared,
                 optimize,
