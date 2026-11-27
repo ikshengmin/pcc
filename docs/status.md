@@ -4360,6 +4360,38 @@ in the relevant section or issue and removes the entry.
        change, no repeat of prior trim/sparse prototypes.
        Stop minor host-only dataflow points; next structural
        production Stage1 wall owner or actual native profile.
+       Stage1 wall scheduling/startup residual attribution
+       (2026-11-27; no production): #647 x64 exact629 singleton
+       admissions total4713.451 worker-s, actual span1179.307s
+       vs ideal4 1178.363s (gap.944s); scheduler near optimal.
+       Sum infer+codegen4108.613 worker-s; residual604.838
+       worker-s includes manifest/import/sparse exports/AST/
+       contexts/cleanup, not all startup. All629 indexed_exports=1;
+       79 one-export residual median.573s,125 exports2-10 .619,
+       188 exports11-50 .783,199 exports51-150 .861,34>400
+       median2.777s. Existing opt-in host batch2 requires legacy
+       full graph, cannot serve current sparse root semantics;
+       no default switch. Existing source200KB/AST6MB thresholds
+       eligible619/629, ideal max309 pairs, ≥.503s reusable work
+       per avoided process required for3% whole Stage1 1295.102s
+       before per-root decode/reset/admission/scheduling cost.
+       Actual historical626 sparse graph exports SHA70be22dc,
+       v4 standard worker (current owner SHA1735f6be), selected
+       six real module roots with actual exports1/3/20/97/150/443.
+       First coarse poll missed a rapid atomic phase (native PCO
+       success, retained observation failure). Corrected external
+       .2ms poll guard12.20s/213MB,12/12 exact paired PCOs,
+       all12 manifest reports, spawn->manifest median.2247s/
+       max.3685; manifest->exports varies.16-1.47s; two exports
+       snapshots overwritten, explicitly unknown. Four extra
+       standard importtime diagnostic process runs exact in2.90s;
+       nonnested total imports .306/.374/.364/.405s incl CLI,
+       post-manifest layer1 .0665-.0886 and later backend imports.
+       Even ideal all-import reuse max.405s x309 /4=31.3s
+       (~2.4% whole stage), below threshold before reset; cannot
+       add spawn->manifest (overlapping imports). Reject sparse
+       batch2 current proposal; no source/default/guard changes,
+       no new CI. Pause small host-only directions.
        Next measure current combined generator/ownership IR
        reduction and packed allocator on the actual giant, then
        sparse live planes/streamed lowering only if measured
@@ -5154,7 +5186,6 @@ in the relevant section or issue and removes the entry.
    - 2026-11-27 actual compiler-function same-PIDX MIR/legacy evidence (a143947b). Clean d1df09ea both arms; frame/copies sources SHA523f6764/857dc94a exact #647 source26d6fb08; historical strict contextual closure626 PIDX d818fdb2/1b2e1403 fallback0. Eight functions, seven admitted compact MIR: static instructions58,388→53,431 (−8.49%), total104,829→99,872 (−4.73%), bytes548144→523432, rbp-local loads5688→4798/stores10932→9386, calls17048 exact. Largest keep_frame_slots_in_registers 46441 static instructions exact fallback; admission width−1 non-CAS aggregate value4724, not resource cap. Exact inventory only two aggregate values, direct llvm.smul.with.overflow.i64 {i64,i1} immediate extracts0/1/no other uses. Historical selected host sample weight1406/1920 admitted, not native PC/time share. No native execution or production/default change. Close attribution claim; next distinct exact arithmetic pair unit. No CI.
 
    Claims:
-   - Stage1 actual sparse singleton startup residual phase attribution (historical exact626 graph, standard host worker command/atomic phase receipt; no batching/default/resource change, ≥0.503s reusable work threshold): Codex, Linux, 2026-11-27T07:43Z, area backend
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
    - Typed x64 MIR exact ephemeral signed i64 overflow-intrinsic pair admission (opt-in only; self_backend_x86_mir.py, self_backend_x86_mir_emit.py, self_backend_x86_mir_frame.py, focused typed MIR tests; exact direct llvm.smul.with.overflow.i64 {i64,i1}, adjacent ordered nonescaping extracts, no safepoint/GC/root/home overlap, existing CAS unchanged, all other aggregates rejected; signed semantics, fallback, strict actual native compiler-function execution before qualification): Codex, Linux, 2026-11-27T06:33Z, area runtime-codegen
 4. **Source-language frontends**, in parallel with item 2 (different files;
