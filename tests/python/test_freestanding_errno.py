@@ -37,11 +37,16 @@ def test_linux_errno_ir_has_pcc_tls_and_no_libc_or_loader_imports(
     monkeypatch.setattr(
         UnsafeIntrinsicMixin, "_target_machine_text", lambda self: "x86_64"
     )
-    ir_text = _emit_ir(tmp_path)
-    assert "thread_local global i32 0" in ir_text
+    ir_text = _emit_ir(tmp_path, "x86_64-unknown-linux-gnu")
+    # The freestanding x64 Linux runtime explicitly owns initial-exec TLS;
+    # the generic spelling can ask a PIC LLVM emitter for __tls_get_addr.
+    assert "@pcc_errno_storage = thread_local(initialexec) global i32 0" in ir_text
+    assert "@pcc_errno_storage = thread_local global i32 0" not in ir_text
+    assert "@llvm.threadlocal.address.p0(ptr @pcc_errno_storage)" in ir_text
     for forbidden in (
         "@__error",
         "@__errno_location",
+        "@__tls_get_addr",
         "@strerror",
         "@strerror_r",
         "@dlopen",
