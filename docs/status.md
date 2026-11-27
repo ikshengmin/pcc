@@ -6064,6 +6064,23 @@ in the relevant section or issue and removes the entry.
    exact text/line endings/identity/hook contract before candidate;
    if no exact safe predicate, reject. No persistent state.
 
+   Independent marker-absent attribute mask attribution:
+   exact #638 graph586/625 files,15,085,973/17,906,133B do not
+   contain literal except AttributeError. Existing tests already
+   cover a return-original shortcut contract, so do not repeat it.
+   Distinct exact-str candidate only if measured/proven: direct
+   join(splitlines(keepends=True)) when literal marker absent,
+   preserving original split/join content and identity semantics
+   while skipping every strip/lstrip/indent and second out list.
+   Exact custom subclass/duck callbacks and marker-present full
+   scanner unchanged. Actual call-weighted source/line count,
+   explicit identity/separator/handler tests, strict actual context,
+   source-matched native scanner 5 paired controls CPU/RSS required.
+   No retained state or broad cache. Stage1 attribution priority;
+   source-only prep until direct release.
+
+   Claims:
+   - Stage2 marker-absent exact split/join attribution: Codex, Linux, 2026-11-27T01:04Z, area selfhost
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
