@@ -507,7 +507,9 @@ def _local_symbol_renames(symbol_tables) -> list[dict[str, str]]:
     entering that API.  Reserve every external spelling up front so the
     result is independent of input order.
     """
-    external_names = {
+    # The external spellings are already the initial used-name set.
+    # Do not keep a second full set alive throughout local renaming.
+    used_names = {
         _symbol_name(symbol)
         for symbols in symbol_tables
         for symbol in symbols
@@ -518,7 +520,6 @@ def _local_symbol_renames(symbol_tables) -> list[dict[str, str]]:
         for symbols in symbol_tables
         for symbol in symbols
     }
-    used_names = set(external_names)
     renames: list[dict[str, str]] = []
 
     for input_index, symbols in enumerate(symbol_tables):
@@ -549,6 +550,8 @@ def _local_symbol_renames(symbol_tables) -> list[dict[str, str]]:
             used_names.add(candidate)
             reserved_names.add(candidate)
         renames.append(mapping)
+        del local_names
+    del used_names, reserved_names
     return renames
 
 

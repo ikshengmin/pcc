@@ -1433,13 +1433,42 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None, *
         # definitions need symbol-count mappings. Canonical rows are never
         # constructed here; final-index/address lookups start after the
         # provenance and duplicate/reference owners have actually retired.
-        symbol_metadata = 3 * ledger.mapping(symbol_count) + 5 * ledger.budget._set_bytes(symbol_count)
+        symbol_metadata = 3 * ledger.mapping(symbol_count)
         symbol_metadata += ledger.sequence(symbol_count) + symbol_count * 256
+        external_count = local_count = max_input_locals = 0
+        weak_count = strong_count = 0
         # Every occurrence can get a distinct collision suffix. Do not use
         # a distinct-name census to charge repeated source name ownership.
         for item in descriptors:
+            input_locals = 0
             for symbol in item.symbols:
                 symbol_metadata += ledger.rounded(_STRING + len(link._symbol_name(symbol)) + 64)
+                sym_type = link._symbol_type(symbol)
+                if sym_type & spec.N_EXT:
+                    external_count += 1
+                elif sym_type & spec.N_TYPE == spec.N_SECT:
+                    input_locals += 1
+                if sym_type & spec.N_TYPE == spec.N_UNDF:
+                    if link._symbol_is_weak_reference(symbol):
+                        weak_count += 1
+                    else:
+                        strong_count += 1
+            local_count += input_locals
+            max_input_locals = max(max_input_locals, input_locals)
+        # Rename scratch retires before the placement reference sets exist.
+        # Reserve all source names plus at most one new collision name per
+        # local occurrence, used externals plus locals, and one-input duplicate
+        # detector. The per-input and final scratch owners explicitly retire.
+        # Placement can reference at most one resolved spelling per source
+        # symbol occurrence; each undefined occurrence enters one binding set.
+        # Both final unresolved outputs filter by membership, not temporary sets.
+        set_bytes = ledger.budget._set_bytes
+        rename_sets = (set_bytes(symbol_count + local_count)
+                       + set_bytes(external_count + local_count)
+                       + set_bytes(max_input_locals))
+        placement_sets = (set_bytes(symbol_count)
+                          + set_bytes(weak_count) + set_bytes(strong_count))
+        symbol_metadata += max(rename_sets, placement_sets)
         plan_metadata = 6 * ledger.sequence(section_count) + ledger.integers(6 * section_count)
         plan_metadata += ledger.mapping(section_count) + 4096 * len(descriptors)
         plan_metadata += ledger.mapping(function_count) + ledger.sequence(function_count)
@@ -1495,8 +1524,11 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None, *
                    for section, functions in zip(item.sections, item.stack_functions)) for item in descriptors):
             merged[_STACK_KEY] = link._MergedSection(_STACK_KEY[0], _STACK_KEY[1], spec.S_REGULAR, align_log2=3)
             order.append(_STACK_KEY)
-        unresolved = sorted(referenced - set(defined))
-        weak_unresolved = tuple(sorted(set(unresolved) & (weak_references - strong_references)))
+        unresolved = sorted(name for name in referenced if name not in defined)
+        # Already sorted, unique unresolved names. Retain no duplicate
+        # set/difference/intersection tables during weak binding selection.
+        weak_unresolved = tuple(name for name in unresolved
+                                if name in weak_references and name not in strong_references)
         appearance = {key: index for index, key in enumerate(order)}
         rank = {"__TEXT": 0, "__DATA_CONST": 1, "__DATA": 2}
         order.sort(key=lambda key: (rank.get(key[0], 3), bool(merged[key].zerofill_size and not merged[key].data_size), appearance[key]))

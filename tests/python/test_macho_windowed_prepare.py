@@ -61,16 +61,18 @@ def _write_inputs(tmp_path, count=32, relocations=1024):
     return paths
 
 
-def _write_symbol_inputs(tmp_path, count=4, symbols=256):
+def _write_symbol_inputs(tmp_path, count=4, symbols=256, *, local_symbols=False):
     paths = []
     for index in range(count):
-        names = ["_main" if index == offset == 0 else f"_unit{index}_{offset}"
+        names = ["_main" if index == offset == 0 else (
+            f"_repeat{offset}" if local_symbols else f"_unit{index}_{offset}")
                  for offset in range(symbols)]
         value = native.NativeObject.from_sections([
             obj.Section(
                 "__text", "__TEXT", data=b"\xc0\x03\x5f\xd6" * symbols,
                 flags=obj.TEXT_SECTION_FLAGS, align_log2=2,
-                symbols=tuple(obj.TextSymbol(name, offset * 4)
+                symbols=tuple(obj.TextSymbol(name, offset * 4,
+                                             external=not local_symbols or name == "_main")
                               for offset, name in enumerate(names)),
             ),
             obj.Section(
@@ -291,7 +293,7 @@ def test_windowed_error_reports_only_current_budget_refusal(tmp_path, monkeypatc
     assert budget.retained_bytes == 123
 
 
-def test_symbol_phase_retirement_admits_and_emits_identical_image(tmp_path):
+def test_symbol_phase_retirement_admits_and_emits_identical_image(tmp_path, monkeypatch):
     from pathlib import Path
     from pcc.backend import macho_host_prepare as host
 
@@ -300,6 +302,15 @@ def test_symbol_phase_retirement_admits_and_emits_identical_image(tmp_path):
     # though the phase-separated owners and final validation fit it.
     budget = _budget(5_000_000)
     budget.retained_bytes = 1024
+    placement_peaks = []
+    check_peak = budget.check_peak
+
+    def record(raw_bytes, **kwargs):
+        if kwargs.get("label") == "Mach-O detached merge metadata":
+            placement_peaks.append(raw_bytes)
+        return check_peak(raw_bytes, **kwargs)
+
+    monkeypatch.setattr(budget, "check_peak", record)
     prepared = host.prepare_executable_from_paths(paths, compact_budget=budget)
     assert budget.retained_bytes == 1024
     actual = macho_exec.link_prepared_executable(prepared, compact_budget=budget)
@@ -311,6 +322,52 @@ def test_symbol_phase_retirement_admits_and_emits_identical_image(tmp_path):
     assert actual == expected
     assert spec.parse_object(actual).header["filetype"] == spec.MH_EXECUTE
     assert budget.retained_bytes == 1024
+    # This real all-external PCO group should not reserve simultaneously
+    # absent local-rename and temporary unresolved/difference sets.
+    assert len(placement_peaks) == 1
+    assert placement_peaks[0] < 3_450_000
+    # The original complete image remains identical with this tighter
+    # synthetic allowance; production budget selection is untouched.
+    tighter = _budget(3_600_000)
+    tighter.retained_bytes = 1024
+    tight_view = host.prepare_executable_from_paths(paths, compact_budget=tighter)
+    assert macho_exec.link_prepared_executable(tight_view, compact_budget=tighter) == expected
+    assert tighter.retained_bytes == 1024
+
+    # Repeated local names can create one new spelling per local occurrence.
+    # The bound must charge the expanded reserved set, not a distinct-name
+    # census or an unconditionally reduced multiplier.
+    local_dir = tmp_path / "locals"
+    local_dir.mkdir()
+    local_paths = _write_symbol_inputs(local_dir, count=2, symbols=256, local_symbols=True)
+    local_budget = _budget(5_000_000)
+    local_peaks, set_counts = [], []
+    local_check, set_bytes = local_budget.check_peak, local_budget._set_bytes
+
+    def record_local(raw_bytes, **kwargs):
+        if kwargs.get("label") == "Mach-O detached merge metadata":
+            local_peaks.append(raw_bytes)
+        return local_check(raw_bytes, **kwargs)
+
+    def record_set(count):
+        set_counts.append(count)
+        return set_bytes(count)
+
+    monkeypatch.setattr(local_budget, "check_peak", record_local)
+    monkeypatch.setattr(local_budget, "_set_bytes", record_set)
+    local_view = host.prepare_executable_from_paths(local_paths, compact_budget=local_budget)
+    local_actual = macho_exec.link_prepared_executable(local_view, compact_budget=local_budget)
+    local_eager = macho_exec.prepare_executable_object(
+        [native.decode_packed_native_object(Path(path).read_bytes()) for path in local_paths],
+        _consume_inputs=True, _source_view=True, compact_budget=_budget(20_000_000),
+    )
+    assert local_actual == macho_exec.link_prepared_executable(
+        local_eager, compact_budget=_budget(20_000_000))
+    assert 512 + 511 in set_counts  # union of original spellings and possible suffixes
+    assert 256 in set_counts  # one input's duplicate detector
+    assert len(local_peaks) == 1
+    with pytest.raises(macho_link.LinkError, match="Mach-O detached merge metadata"):
+        host.prepare_executable_from_paths(local_paths, compact_budget=_budget(local_peaks[0] - 1))
 
 
 def test_symbol_planning_owners_retire_before_payload_windows(tmp_path, monkeypatch):
