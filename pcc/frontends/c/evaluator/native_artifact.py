@@ -181,6 +181,16 @@ def run_native_c_artifact(request_path, output_path):
         kind = "ParseError" if isinstance(error, ParseError) else type(error).__name__
         response.update(outcome="failed", error_type=kind, error_message=str(error))
         status = 1
+        # Private opt-in diagnostics must never replace the genuine worker
+        # response or its exit status, including when the printer fails.
+        try:
+            if str(os.environ.get("PCC_DEBUG_BOOTSTRAP_TRACE", "") or "").strip().lower() in (
+                "1", "true", "yes", "on",
+            ):
+                import traceback
+                traceback.print_exc()
+        except Exception:
+            pass
     # The caller owns a fresh private directory. Exclusive creation refuses a
     # pre-existing file/symlink; a killed partial write cannot be read as PASS.
     with open(output_path, "x", encoding="utf-8") as stream:

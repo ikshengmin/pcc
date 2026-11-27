@@ -571,3 +571,47 @@ def test_cache_identity_uses_installed_compiler_binding_not_host_constant(tmp_pa
     assert native_identity["fingerprint"] != host_identity["fingerprint"]
     assert native_identity["key"] != host_identity["key"]
     assert c_evaluator._COMPILER_CACHE_FINGERPRINT == host_identity["fingerprint"]
+
+
+def test_worker_opt_in_failure_trace_preserves_response(tmp_path, monkeypatch, capsys):
+    src = tmp_path / "request.json"
+    src.write_text("{")
+    monkeypatch.delenv("PCC_DEBUG_BOOTSTRAP_TRACE", raising=False)
+    off = tmp_path / "off.json"
+    assert worker.run_native_c_artifact(str(src), str(off)) == 1
+    assert capsys.readouterr().err == ""
+    monkeypatch.setenv("PCC_DEBUG_BOOTSTRAP_TRACE", " YeS ")
+    on = tmp_path / "on.json"
+    assert worker.run_native_c_artifact(str(src), str(on)) == 1
+    assert on.read_bytes() == off.read_bytes()
+    captured = capsys.readouterr()
+    assert "run_native_c_artifact" in captured.err
+    assert "JSONDecodeError" in captured.err
+    assert captured.out == ""
+
+
+def test_worker_failure_trace_is_best_effort_and_not_on_success(tmp_path, monkeypatch, capsys):
+    import traceback
+
+    calls = []
+
+    def broken_logger():
+        calls.append(True)
+        raise RuntimeError("unavailable diagnostic")
+
+    monkeypatch.setattr(traceback, "print_exc", broken_logger)
+    src = tmp_path / "request.json"
+    src.write_text("{")
+    monkeypatch.setenv("PCC_DEBUG_BOOTSTRAP_TRACE", "0")
+    off = tmp_path / "off.json"
+    assert worker.run_native_c_artifact(str(src), str(off)) == 1
+    assert calls == []
+    monkeypatch.setenv("PCC_DEBUG_BOOTSTRAP_TRACE", "1")
+    on = tmp_path / "on.json"
+    assert worker.run_native_c_artifact(str(src), str(on)) == 1
+    assert on.read_bytes() == off.read_bytes()
+    assert calls == [True]
+    src.write_text(json.dumps(request(tmp_path)))
+    assert worker.run_native_c_artifact(str(src), str(tmp_path / "success.json")) == 0
+    assert calls == [True]
+    assert capsys.readouterr().err == ""
