@@ -5322,9 +5322,11 @@ in the relevant section or issue and removes the entry.
 
    - 2026-11-27 #650 actual class_gen frontend owner diagnostic: exact f2a870a4 clean full629 context, two guarded arms both rc0, identical CFG727/87118/335663, fallback0 and 90,228,084B serialized digest09438222. CPU21.213→19.870s (host drift, not speed), RSS640660→643796KiB, samples4388 frontend3240/capture1148. Scope correction: old context wrapper omitted hosted PCC_DIRECT_INDEXED_KERNEL_FUSE_USES=1, so capture attribution is FUSE0 and cannot infer hosted duplicate-use cost. IRBuilder.call 813 inclusive, args helper765, publish493; no removable fraction proven. HOLD no production or CI; receipts retained and claim released, no retry.
 
+   - 2026-11-27 compact V2 tape scratch host model proof: test-first red→green, 5 methods incl all known kind arities and 24+ malformed/unsupported cases; guarded corpus10.809s/142585856B. Actual frozen c_parsetab f777240c accepted, 656868 eight-byte records +32 header =5254976B (5.01MiB) vs observed raw live overlap46.46MiB, format arithmetic only; exact raw value oracle. Real historical task57 7/8 (only depth64 fallback), task53 8/8 and minimal1/1, total16/17, 98.7% bytes. Host model intentionally slow, no native CPU/RSS claim. Preserve scratch and receipts, release; next independent native strict scanner diagnostic before ABI/production.
+
    Claims:
    - Runtime QPS through the self AArch64 backend toward LLVM parity: locate the LLVM step the self passes lack (pcc_perf reference ablations, scripts/pcc_perf.py), then implement it in pcc's own AArch64 passes (shrink-wrapping, allocation or selection, whichever the ablation ranks first); IR-pass changes are target-neutral and reach x64; avoids the typed x64 MIR files: Claude, macOS, 2026-11-27T06:46Z, area backend
-   - Owned AST V2 compact tape scanner scratch host proof (test-first scanner/eligibility and actual c_parsetab/representative frozen V2 corpus census; no tracked source/header/ABI edits, no native rebuild or CI; preserve public/V1/provider fallback/error semantics): Codex, Linux, 2026-11-27T12:53Z, area runtime-codegen
+
 
 
 4. **Source-language frontends**, in parallel with item 2 (different files;
