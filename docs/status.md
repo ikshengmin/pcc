@@ -4970,6 +4970,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
+   - Cost-aware extreme-fanout i1 scalar promotion, exact nonescaping local flags and real compile/runtime controls (mem2reg.py + focused tests; no generator/ backend overlap): Codex, Linux, 2026-11-27T04:56Z, area runtime-codegen
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
