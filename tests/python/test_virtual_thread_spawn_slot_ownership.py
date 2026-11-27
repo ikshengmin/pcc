@@ -291,16 +291,25 @@ def test_spawn_singleton_cleanup_rejects_wrong_owner_or_retirement(
     assert applied == [mutation], "the negative case must reach the singleton ownership validator"
 
 
+@pytest.mark.parametrize("mapped", ("0", "1"), ids=("registered", "mapped"))
 @pytest.mark.parametrize("runtime, diagnostic", [
     ("py_cleanup_one_root_preserving_exception", "singleton cleanup needs helper before"),
     ("py_cleanup_two_roots_preserving_exception", "singleton cleanup needs helper before"),
-    ("pcc_gc_frame_enter_lifo_mapped", "singleton helper requires the caller's lexical registration"),
-    ("pcc_gc_frame_leave_lifo_mapped", "singleton cleanup needs helper before"),
+    ("pcc_gc_frame_enter_lifo_local", "singleton helper requires the caller's lexical registration"),
+    ("pcc_gc_frame_leave_lifo_local", "singleton cleanup needs helper before"),
 ])
 def test_spawn_singleton_cleanup_rejects_same_name_indirect_calls(
-    singleton_spawn_ir, runtime, diagnostic,
+    runtime, diagnostic, mapped, monkeypatch,
 ):
+    # The local ABI is independently selected by activation-private ownership.
+    # Exercise both table policies explicitly instead of relying on runner host
+    # defaults to choose the mapped symbol spelling.
+    monkeypatch.setenv("PCC_DIRECT_GENERATOR_TASKS", "0")
+    monkeypatch.setenv("PCC_PRECISE_STACKMAP_TABLES", mapped)
+    singleton_spawn_ir = _emit(_spawn_source(generator=False, sink=True))
     _assert_spawn_contract(singleton_spawn_ir)
+    if mapped == "1" and runtime.startswith("pcc_gc_frame_"):
+        runtime += "_mapped"
     body = _probe_function(singleton_spawn_ir)
     direct, indirect = "@" + runtime + "(", "%" + runtime + "("
     line = next(line for line in body.splitlines(keepends=True)

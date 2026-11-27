@@ -30,10 +30,19 @@ def test_explicit_linux_target_keeps_registered_frames_on_a_darwin_host(monkeypa
     assert precise_stackmap_tables_enabled("x86_64-unknown-linux-gnu") is False
     codegen, text = _emit("def probe(f, x):\n    return f(x)\n")
     calls = [line for line in text.splitlines() if "call " in line]
-    assert any("@pcc_gc_frame_enter_lifo(" in line for line in calls)
-    assert any("@pcc_gc_frame_leave_lifo(" in line for line in calls)
+    assert any("@pcc_gc_frame_enter_lifo_local(" in line for line in calls)
+    assert any("@pcc_gc_frame_leave_lifo_local(" in line for line in calls)
     assert not any("@pcc_gc_frame_" in line and "_mapped(" in line for line in calls)
     assert codegen._target_triple == "x86_64-unknown-linux-gnu"
+    # Verify the actual explicit-target frame pairs and every exit, not only
+    # the spellings. The independent stack-map analysis must accept the IR.
+    prepared = prepare_module_for_target(
+        text, aggregate_returned_indirect=_aggregate_returned_indirect,
+    )
+    plans = build_stack_map_plans(
+        prepared.functions, prepared.globals_, target="x86_64-linux",
+    )
+    assert len(plans) == len(prepared.functions)
 
 
 @pytest.mark.parametrize("source", (
