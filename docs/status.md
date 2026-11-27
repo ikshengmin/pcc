@@ -5033,7 +5033,7 @@ in the relevant section or issue and removes the entry.
    Claims:
    - Actual packed MIR CSR wide-mask event enumeration (private 256-bit skip-empty packed-only iteration, exact edge sequence/rank/PCO and five owner controls, no gate relax): Codex, Linux, 2026-11-27T05:02Z, area backend
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
-   - Actual direct-native large-module verifier structural cost attribution (exact phi-free/terminator/edge inventory, pcc/ir verifier only; distinct from CSR and closure, no edits before ceiling): Codex, Linux, 2026-11-27T06:04Z, area runtime-codegen
+   - Actual direct-native large-module verifier structural cost attribution (exact phi-free/terminator/edge inventory, pcc/backend/self_backend_verify.py and focused verifier tests only; distinct from CSR and closure, no edits before ceiling or verification weakening): Codex, Linux, 2026-11-27T06:04Z, area runtime-codegen
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
