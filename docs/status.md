@@ -4029,6 +4029,38 @@ in the relevant section or issue and removes the entry.
        native semantic/handler CPU/req w1 five alternating control
        pairs and RSS before default change, w4 final if noise permits;
        no new CI snapshots, retain inline OFF;
+       2026-11-27 source-local opt-in prototype results, **all
+       rejected, no production**. Same 29 actual receipt-verified IR
+       body hashes/default four ELF hashes unchanged: local r8/r9
+       integer-only11702->11699 instructions (tiny); competing
+       whole-function integer r12-r15/write-through with exact CFG
+       and PHI/ABI native tests11702->12892(+10.17%); register-only
+       all-use/private pointer/direct memory/parallel-edge variant
+       11702->12802(+9.40%), 17 focused incl native call/loop/ABI pass,
+       not qualified full source. Existing late physical-slot plan
+       oracle exact29:486/652 ranked offsets assigned,2742 SSA
+       generations incl844 ptr,817 i1,901 i64;1880 reads/2947 stores,
+       1805 dead stores,553 retirement decisions, explaining competing
+       SSA pool regression. Same-plan origin-group direct lowering
+       195 intact groups,377 raw instructions avoided, existing
+       copy pass already removes293; final11702->11618(-.72%),
+       bytes53929->53664, all owned encoded, no runtime speed claim.
+       Whole-slot caller eligibility union24/166 unassigned, maximum
+       40 loads/23 stores; same machine CFG per-generation proof
+       only12 local unassigned generations/28 accesses(16 loads,
+       12 stores), 4 pointer gens, baseline exact, no allocation
+       implementation. Stop retrofits. Raw guarded diagnostic
+       receipts/scripts under local stage1-cross-static, old
+       prototypes retained, source restored clean. Latest next
+       coherent opt-in per-function typed x64 MIR: virtual values,
+       register classes, immediate/address/pinned homes, precise
+       machine call+flags+implicit clobbers, CFG interference/live
+       range splitting and parallel PHIs, one allocation owner,
+       exact root writes/reloads/retirement, compact safe spill
+       homes, entire-function legacy fallback for unsupported shape.
+       Same58 real hot static functions >=10% net target before
+       expensive native semantic/handler CPU/RSS controls; no
+       default switch/no production until broad evidence.
        (1) ARM typed
        prepare memory: quantify retained prior run history and
        private CFG owner retirement with public snapshot/callback
@@ -4695,7 +4727,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
-   - Opt-in generic x64 pre-selection register/operand prototype (safe block-local integer SSA first, eventual whole-function saved-register/PHI; actual static/native/handler CPU/RSS gates): Codex, Linux, 2026-11-27T01:52Z, area backend (x64 emitter/regalloc, GC alias audit and Stage2 design support, CI metric tool disjoint)
+   - Opt-in per-function typed x64 machine IR and unified register allocation (large structural design, full-function legacy fallback; real 58-function static >=10% target before native/handler CPU/RSS qualification): Codex, Linux, 2026-11-27T02:19Z, area backend (x64 MIR/selector/register allocation, Stage2 corpus and GC root audit support; CI independent)
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
