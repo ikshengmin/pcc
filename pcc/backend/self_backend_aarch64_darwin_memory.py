@@ -16,6 +16,8 @@ from .self_backend_aarch64_darwin_mem import (
     emitted_memory_instruction_line,
     emitted_move_register_line,
     emitted_register_offset_memory_line,
+    emitted_page_line,
+    emitted_pageoff_memory_line,
     mem_load_op,
     mem_store_op,
 )
@@ -55,7 +57,7 @@ from .self_backend_aarch64_darwin_slots import (
     zero_slot,
     zero_slot_parts,
 )
-from .self_backend_aarch64_darwin_symbols import sanitize_label
+from .self_backend_aarch64_darwin_symbols import asm_symbol, sanitize_label
 from .self_backend_ir import (
     PARSED_INSTRUCTION_KIND_ALLOCA,
     PARSED_INSTRUCTION_KIND_ATOMICRMW,
@@ -80,7 +82,11 @@ from .self_backend_ir import (
     _PARSED_INSTRUCTION_KIND_IDS,
 )
 from .self_backend_module_symbols import PreparedModuleSymbols
-from .self_backend_parse import const_int_from_value, is_aggregate_literal_value
+from .self_backend_parse import (
+    const_int_from_value,
+    decode_global_name,
+    is_aggregate_literal_value,
+)
 from .self_backend_value_arena import CompilerInt2, CompilerInt4
 from .self_backend_kernel import (
     _scalar_window_is_complete,
@@ -276,6 +282,34 @@ def adjacent_gep_memory_address(
     if not scaled and not -256 <= offset <= 255:
         return missing
     return CompilerInt4(definition.first, header.third, header.second, offset)
+
+
+def _page_access_symbol(
+    kernel: IndexedFunctionKernel,
+    pointer_ref: int,
+    module_symbols: PreparedModuleSymbols,
+) -> str:
+    """Assembler symbol of a global a scalar access may address with
+    ``adrp`` + PAGEOFF, or "".
+
+    The global must resolve in this linkage unit (defined here or an
+    ``external dso_local`` declaration) and not be thread-local; anything
+    else keeps its GOT or TLV address sequence.
+    """
+    if pointer_ref >= 0:
+        return ""
+    text = kernel.call_texts[-pointer_ref - 1]
+    if text.startswith("gep0:"):
+        name = text[5:]
+    elif text.startswith("@"):
+        name = decode_global_name(text)
+    else:
+        return ""
+    if name in module_symbols.thread_local_symbols:
+        return ""
+    if name not in module_symbols.defined_symbols and name not in module_symbols.local_external_symbols:
+        return ""
+    return asm_symbol(name, module_symbols)
 
 
 def _register_index_name(kernel: IndexedFunctionKernel, index_ref: int) -> str:
@@ -561,7 +595,13 @@ def emit_memory_instruction_by_id(
                     )
                 lines = []
                 base_name = "x9"
-                if base_register >= 0:
+                page_symbol = ""
+                if (memory_index_ref < 0 and memory_offset == 0
+                        and value_type_header.first in (TYPE_KIND_INT, TYPE_KIND_PTR)):
+                    page_symbol = _page_access_symbol(indexed_kernel, pointer_ref, module_symbols)
+                if page_symbol:
+                    lines.append(emitted_page_line("x9", page_symbol))
+                elif base_register >= 0:
                     base_name = reg_name_indexed(indexed_kernel, pointer_type, base_register)
                 else:
                     lines.extend(materialize_scalar_value_indexed(
@@ -579,6 +619,9 @@ def emit_memory_instruction_by_id(
                         module_symbols, value_id=store_record.second,
                     ))
                 memory_op = _indexed_scalar_mem_store_op(value_type_header)
+                if page_symbol:
+                    lines.append(emitted_pageoff_memory_line(memory_op, value_name, "x9", page_symbol))
+                    return lines
                 if memory_index_ref >= 0:
                     lines.append(emitted_register_offset_memory_line(
                         memory_op, value_name, base_name,
@@ -710,7 +753,15 @@ def emit_memory_instruction_by_id(
         else:
             address_register = allocated_register_name(func, ptr_name, _ptr_type)
         lines = []
-        if address_register is None:
+        page_symbol = ""
+        if (address_register is None and indexed_kernel is not None and isinstance(data, int)
+                and ordering not in ("acquire", "seq_cst")
+                and (value_type.is_int or value_type.is_ptr)):
+            page_symbol = _page_access_symbol(indexed_kernel, record.third, module_symbols)
+        if page_symbol:
+            address_register = "x9"
+            lines.append(emitted_page_line("x9", page_symbol))
+        elif address_register is None:
             address_register = "x9"
             if indexed_kernel is not None and isinstance(data, int):
                 lines = materialize_scalar_value_indexed(
@@ -732,13 +783,20 @@ def emit_memory_instruction_by_id(
             "ldar" + _atomic_size_suffix(value_type)
             if ordering in ("acquire", "seq_cst") else mem_load_op(value_type)
         )
-        lines.append(
-            emitted_memory_instruction_line(
+        if page_symbol:
+            lines.append(emitted_pageoff_memory_line(
                 load_op,
                 result_register_name if result_register_name is not None else reg_name(value_type, 10),
-                address_register,
+                "x9", page_symbol,
+            ))
+        else:
+            lines.append(
+                emitted_memory_instruction_line(
+                    load_op,
+                    result_register_name if result_register_name is not None else reg_name(value_type, 10),
+                    address_register,
+                )
             )
-        )
         if result_register_name is None:
             lines.extend(store_value_regs_to_value_slot(func, dest, 10))
         return lines
@@ -1075,7 +1133,13 @@ def emit_memory_instruction_by_id(
                     )
                     lines = []
                     base_name = "x9"
-                    if base_register >= 0:
+                    page_symbol = ""
+                    if (memory_index_ref < 0 and memory_offset == 0 and base_register < 0
+                            and value_type_header.first in (TYPE_KIND_INT, TYPE_KIND_PTR)):
+                        page_symbol = _page_access_symbol(indexed_kernel, pointer_ref, module_symbols)
+                    if page_symbol:
+                        lines.append(emitted_page_line("x9", page_symbol))
+                    elif base_register >= 0:
                         base_name = reg_name_indexed(indexed_kernel, pointer_type, base_register)
                     else:
                         lines.extend(materialize_scalar_value_indexed(
@@ -1084,7 +1148,13 @@ def emit_memory_instruction_by_id(
                         ))
                     memory_op = _indexed_scalar_mem_load_op(value_type_header)
                     access_bytes = _scalar_access_bytes(value_type_header)
-                    if memory_index_ref >= 0:
+                    if page_symbol:
+                        lines.append(emitted_pageoff_memory_line(
+                            memory_op,
+                            reg_name_indexed(indexed_kernel, value_type_id, load_register),
+                            "x9", page_symbol,
+                        ))
+                    elif memory_index_ref >= 0:
                         lines.append(emitted_register_offset_memory_line(
                             memory_op,
                             reg_name_indexed(indexed_kernel, value_type_id, load_register),

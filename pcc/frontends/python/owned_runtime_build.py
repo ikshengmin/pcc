@@ -232,8 +232,93 @@ def runtime_build_jobs(module_count: int) -> int:
     return max(1, min(jobs, module_count))
 
 
-def _build_runtime_module(runtime_dir, name, target, output_dir, passes, config) -> bytes:
-    """Compile, optimize and emit one runtime module; write its object and receipt."""
+_IMAGE_LOCAL_GLOBALS_FILE = "image-local-globals.txt"
+_NOT_IMAGE_DEFINITIONS = ("external", "extern_weak", "internal", "private", "available_externally")
+
+
+def _global_line_prefix(line: str) -> tuple[str, list[str], str]:
+    """(``@name``, linkage/attribute words before global/constant, rest)."""
+    head, sep, rest = line.partition(" = ")
+    if not sep:
+        return "", [], ""
+    prefix: list[str] = []
+    found = False
+    for word in rest.split():
+        if word == "global" or word == "constant":
+            found = True
+            break
+        prefix.append(word)
+    if not found:
+        return "", [], ""
+    return head, prefix, rest
+
+
+def runtime_image_local_globals(ir_texts: list[str]) -> frozenset[str]:
+    """``@name`` of every data global a runtime module defines publicly.
+
+    The runtime archive is linked whole into one image, so a declaration of
+    such a name in another runtime module resolves inside that image.
+    Thread-local globals keep their TLV path and are not listed.
+    """
+    names: set[str] = set()
+    for text in ir_texts:
+        for line in text.splitlines():
+            if not line.startswith("@"):
+                continue
+            head, prefix, _rest = _global_line_prefix(line)
+            if not head:
+                continue
+            local = True
+            for word in prefix:
+                if word in _NOT_IMAGE_DEFINITIONS or word.startswith("thread_local"):
+                    local = False
+            if local:
+                names.add(head)
+    return frozenset(names)
+
+
+def mark_image_local_declarations(ir_text: str, image_local: frozenset[str]) -> str:
+    """Mark ``external`` declarations of image-local globals ``dso_local``.
+
+    LLVM's "resolved within this linkage unit": the backend then addresses
+    them with adrp + PAGEOFF instead of a GOT load. Other declarations (the
+    platform's ``environ``) are unchanged.
+    """
+    lines = ir_text.split("\n")
+    changed = False
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if line.startswith("@"):
+            head, prefix, rest = _global_line_prefix(line)
+            if (head in image_local and prefix and prefix[0] == "external"
+                    and "dso_local" not in prefix and rest.startswith("external ")):
+                thread_local = False
+                for word in prefix:
+                    if word.startswith("thread_local"):
+                        thread_local = True
+                if not thread_local:
+                    lines[index] = head + " = external dso_local " + rest[len("external "):]
+                    changed = True
+        index += 1
+    if not changed:
+        return ir_text
+    return "\n".join(lines)
+
+
+def _read_image_local_globals(path: str) -> frozenset[str]:
+    with open(path, encoding="utf-8") as stream:
+        return frozenset(line.strip() for line in stream.read().split("\n") if line.strip())
+
+
+def _build_runtime_module(runtime_dir, name, target, output_dir, passes, config,
+                          phase: str = "all", image_local_globals: frozenset[str] | None = None) -> bytes:
+    """Compile, optimize and emit one runtime module; write its object and receipt.
+
+    ``phase`` "ir" stops after writing the optimized IR; "object" emits from
+    that IR. ``image_local_globals`` (from ``runtime_image_local_globals``)
+    marks their declarations ``dso_local`` before emission.
+    """
     from pcc.backend.owned_object_emit import emit_owned_object
     from pcc.ir.optimization.driver import optimize_ir
     from pcc.tools.runtime_archive_provenance import write_pcc_python_receipt
@@ -243,6 +328,27 @@ def _build_runtime_module(runtime_dir, name, target, output_dir, passes, config)
     object_path = os.path.join(output_dir, name + ".o")
     source_transform = None
     pressure_every = config.get("gc_stress_every", 0)
+    if phase == "object":
+        if pressure_every:
+            from pcc.frontends.python.runtime_gc_pressure import instrument_source, KIND
+            import hashlib
+            with open(source, encoding="utf-8") as stream:
+                original = stream.read()
+            effective = instrument_source(original, name, pressure_every)
+            if effective != original:
+                source_transform = {
+                    "kind": KIND,
+                    "interval": pressure_every,
+                    "effective_source_sha256": hashlib.sha256(effective.encode("utf-8")).hexdigest(),
+                }
+        # Phase "ir" wrote this file in host text mode; take it back as LF
+        # text, as the single-phase build kept it in memory.
+        with open(ir_path, "rb") as stream:
+            ir_text = stream.read().decode("utf-8").replace("\r\n", "\n")
+        return _emit_runtime_module_object(
+            name, source, ir_path, object_path, ir_text, target, runtime_dir, config,
+            source_transform, image_local_globals,
+        )
     if pressure_every:
         from pcc.frontends.python.runtime_gc_pressure import instrument_source, KIND
         import hashlib
@@ -283,6 +389,26 @@ def _build_runtime_module(runtime_dir, name, target, output_dir, passes, config)
         ir_text = optimize_ir(ir_text, remaining_passes)
     with open(ir_path, "w", encoding="utf-8") as stream:
         stream.write(ir_text)
+    if phase == "ir":
+        return b""
+    return _emit_runtime_module_object(
+        name, source, ir_path, object_path, ir_text, target, runtime_dir, config,
+        source_transform, image_local_globals,
+    )
+
+
+def _emit_runtime_module_object(name, source, ir_path, object_path, ir_text, target, runtime_dir,
+                                config, source_transform, image_local_globals) -> bytes:
+    from pcc.backend.owned_object_emit import emit_owned_object
+    from pcc.tools.runtime_archive_provenance import write_pcc_python_receipt
+
+    if image_local_globals:
+        marked = mark_image_local_declarations(ir_text, image_local_globals)
+        if marked != ir_text:
+            ir_text = marked
+            # The receipt hashes the IR the object was emitted from.
+            with open(ir_path, "w", encoding="utf-8") as stream:
+                stream.write(ir_text)
     data = emit_owned_object(ir_text, target)
     with open(object_path, "wb") as stream:
         stream.write(data)
@@ -301,13 +427,19 @@ def run_runtime_module_worker(manifest_path: str) -> int:
     with open(manifest_path, encoding="utf-8") as stream:
         manifest = json.loads(stream.read())
     config = runtime_build_config()
+    phase = manifest.get("phase", "all")
+    image_local = None
+    if manifest.get("image_local_path"):
+        image_local = _read_image_local_globals(manifest["image_local_path"])
     for name in manifest["names"]:
         _build_runtime_module(manifest["runtime_dir"], name, manifest["target"],
-                              manifest["output_dir"], manifest["passes"], config)
+                              manifest["output_dir"], manifest["passes"], config,
+                              phase=phase, image_local_globals=image_local)
     return 0
 
 
-def _build_runtime_modules_in_workers(runtime_dir, names, target, output_dir, passes, jobs):
+def _build_runtime_modules_in_workers(runtime_dir, names, target, output_dir, passes, jobs,
+                                      phase="all", image_local_path=""):
     """Compile *names* in worker batches; a failed worker fails the build."""
     from pcc.frontends.python.pipeline import _python_frontend_worker_command_prefix, _shell_quote_arg
 
@@ -333,7 +465,8 @@ def _build_runtime_modules_in_workers(runtime_dir, names, target, output_dir, pa
         with open(manifest, "w", encoding="utf-8") as stream:
             stream.write(json.dumps({
                 "runtime_dir": runtime_dir, "target": target, "output_dir": output_dir,
-                "passes": passes, "names": batch,
+                "passes": passes, "names": batch, "phase": phase,
+                "image_local_path": image_local_path,
             }))
         argv = list(prefix) + [RUNTIME_MODULE_WORKER_ARG, manifest]
         commands.append(" ".join(_shell_quote_arg(arg) for arg in argv))
@@ -381,15 +514,34 @@ def build_runtime_archive(runtime_dir: str, archive: str, target: str) -> None:
         capi = set()
         names = runtime_modules(runtime_dir, target, threads, config.get("gc_stress_every", 0))
         jobs = runtime_build_jobs(len(names))
+        # Two phases: every module's optimized IR first, then objects, so each
+        # module learns which declared globals the archive defines.
         if jobs > 1:
-            _build_runtime_modules_in_workers(runtime_dir, names, target, output_dir, passes, jobs)
+            _build_runtime_modules_in_workers(runtime_dir, names, target, output_dir, passes, jobs,
+                                              phase="ir")
+        else:
+            for name in names:
+                _build_runtime_module(runtime_dir, name, target, output_dir, passes, config, phase="ir")
+        ir_texts = []
+        for name in names:
+            with open(os.path.join(output_dir, name + ".ll"), encoding="utf-8") as stream:
+                ir_texts.append(stream.read())
+        image_local = runtime_image_local_globals(ir_texts)
+        ir_texts = []
+        image_local_path = os.path.join(output_dir, _IMAGE_LOCAL_GLOBALS_FILE)
+        with open(image_local_path, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write("".join(name + "\n" for name in sorted(image_local)))
+        if jobs > 1:
+            _build_runtime_modules_in_workers(runtime_dir, names, target, output_dir, passes, jobs,
+                                              phase="object", image_local_path=image_local_path)
         for name in names:
             object_path = os.path.join(output_dir, name + ".o")
             if jobs > 1:
                 with open(object_path, "rb") as stream:
                     data = stream.read()
             else:
-                data = _build_runtime_module(runtime_dir, name, target, output_dir, passes, config)
+                data = _build_runtime_module(runtime_dir, name, target, output_dir, passes, config,
+                                             phase="object", image_local_globals=image_local)
             members.append((name + ".o", data))
             objects.append(Path(object_path))
             _kind, definitions = _defined_symbols(data)

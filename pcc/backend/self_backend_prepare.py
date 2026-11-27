@@ -111,7 +111,10 @@ def prepare_parsed_module_for_target(
             ),
             materialize_legacy_slots=materialize_legacy_slots,
         )
-    module_symbols = prepare_module_symbols("", globals_, functions, module.triple)
+    module_symbols = prepare_module_symbols(
+        "", globals_, functions, module.triple,
+        local_external_symbols=module.local_external_symbols,
+    )
     prepared = PreparedSelfBackendModule(
         triple=module.triple,
         globals_=globals_,

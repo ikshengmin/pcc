@@ -14,6 +14,10 @@ class PreparedModuleSymbols:
     internal_symbols: frozenset[str]
     thread_local_symbols: frozenset[str]
     target_triple: str = ""
+    # External data declarations marked ``dso_local``: defined elsewhere in
+    # the same linkage unit, so addressed directly (adrp + PAGEOFF) instead
+    # of through the GOT, as LLVM does.
+    local_external_symbols: frozenset[str] = frozenset()
     type_context: TypeParseContext | None = field(default=None, repr=False, compare=False)
 
 
@@ -38,11 +42,40 @@ def _stable_symbol_digest(text: str) -> str:
     return out
 
 
+def local_external_symbols_from_ir(ir_text: str) -> frozenset[str]:
+    """Names of non-TLS ``external dso_local`` global declarations."""
+    from .self_backend_parse import decode_global_name
+
+    names: set[str] = set()
+    for line in ir_text.splitlines():
+        if not line.startswith("@"):
+            continue
+        head, sep, rest = line.partition(" = ")
+        if not sep:
+            continue
+        prefix: list[str] = []
+        for word in rest.split():
+            if word == "global" or word == "constant":
+                break
+            prefix.append(word)
+        if "external" not in prefix or "dso_local" not in prefix:
+            continue
+        thread_local = False
+        for word in prefix:
+            if word.startswith("thread_local"):
+                thread_local = True
+        if thread_local:
+            continue
+        names.add(decode_global_name(head))
+    return frozenset(names)
+
+
 def prepare_module_symbols(
     ir_text: str,
     globals_: list[GlobalDef],
     functions: list[ParsedFunction],
     target_triple: str = "",
+    local_external_symbols: frozenset[str] = frozenset(),
 ) -> PreparedModuleSymbols:
     type_context = None
     for global_ in globals_:
@@ -80,4 +113,5 @@ def prepare_module_symbols(
         defined_symbols=defined_symbols,
         internal_symbols=internal_symbols,
         thread_local_symbols=frozenset(global_.name for global_ in globals_ if global_.tls_model),
+        local_external_symbols=local_external_symbols,
     )

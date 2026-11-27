@@ -1352,6 +1352,10 @@ class ParsedModule:
     globals_: tuple[GlobalDef, ...]
     functions: tuple["ParsedFunction", ...]
     type_context: TypeParseContext | None = field(default=None, repr=False, compare=False)
+    # Non-TLS ``external dso_local`` data declarations (see
+    # PreparedModuleSymbols.local_external_symbols). A transport that drops
+    # them only falls back to GOT addressing.
+    local_external_symbols: frozenset[str] = frozenset()
 
 
 @dataclass

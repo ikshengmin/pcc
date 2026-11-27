@@ -3337,6 +3337,41 @@ in the relevant section or issue and removes the entry.
    claims above therefore rely on the medians agreeing across separate
    measurements, and a deterministic counter (stepped instructions per
    request, or Linux Callgrind) is the reference for small changes.
+   Exact per-request counts (Claude, 2026-11-28): `pcc_perf.py steps` now
+   prints the instructions between successive marker hits, one whole
+   request on the stepped thread, which does not depend on machine load.
+   h10-rot2 118285 (four consecutive requests identical), clang-codegen
+   reference h11-cg 101321 (self +16.7%); h13-base (after (t)-(v))
+   116543. Executed-class excess of h10-rot2 over h11-cg, scaled to equal
+   program work: register copies +24.3k per 600k (26.2% of the gap), ALU
+   +17.4k (18.8%; `add` reg +6.3k, `lsl` +5.0k mostly shifts feeding
+   addresses, `eor` +2.6k), immediates +16.6k (17.9%; constant-left `add`,
+   large `cmp` constants, `eor/orr` immediates, constant returns), stack
+   slots +12.2k (13.2%), conditional branches +10.2k, branches +8.1k,
+   global addresses +4.1k; callee-saved saves/restores -1.1k (fewer than
+   clang).
+   (w) Merged (Claude, 2026-11-28): a scalar integer/pointer load or store
+   of a global resolved in the linkage unit, at offset 0, is `adrp x9,
+   g@PAGE` + `ldr/str Rt, [x9, g@PAGEOFF]` (ARM64_RELOC_PAGEOFF12, scaled
+   by the linker) instead of `adrp` + `add` + `[x9]`, including
+   monotonic atomic loads (acquire keeps `ldar` through the address).
+   "Resolved in the linkage unit" is LLVM's `dso_local`: defined in the
+   module, or an `external dso_local` declaration
+   (`PreparedModuleSymbols.local_external_symbols`, carried on
+   `ParsedModule`). The owned runtime build now runs in two phases: every
+   module's optimized IR, then `runtime_image_local_globals` (data globals
+   some runtime module defines publicly; 5020 in the arm64 Darwin
+   runtime, all but `environ` and `mach_task_self_` of the 227 declared
+   ones), `mark_image_local_declarations`, then objects; the Makefile build
+   is unchanged and keeps GOT loads. Exact per-request instructions,
+   h13-base -> h13-page: 116543 -> 113420 (-2.68%). Tests: clang 20 words
+   and relocations for every access width, re-encoding, typed/text
+   agreement, two objects linked by pcc's linker and executed (dso_local,
+   GOT and offset cases), marking rules; backend, Mach-O, TLS and
+   runtime-build files 8563 passed with (r)'s four nodes deselected (the
+   archive one passed alone with the h13-page2 runtime). The phase split
+   first failed the CRLF-emulating capi inventory test (IR read back with
+   host newlines); phase "object" now reads LF text.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2

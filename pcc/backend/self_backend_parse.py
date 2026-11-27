@@ -402,10 +402,12 @@ def parse_self_backend_module(ir_text: str) -> ParsedModule:
     reset_operand_intern()
     _parse_named_types(ir_text, type_context=type_context)
     _resolve_declaration_type_attributes(ir_text, type_context=type_context)
+    from .self_backend_module_symbols import local_external_symbols_from_ir
     return ParsedModule(
         triple=triple,
         globals_=tuple(_parse_globals(ir_text, type_context=type_context)),
         functions=tuple(_parse_functions(ir_text, type_context=type_context)), type_context=type_context,
+        local_external_symbols=local_external_symbols_from_ir(ir_text),
     )
 
 

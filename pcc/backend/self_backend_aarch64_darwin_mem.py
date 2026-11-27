@@ -516,6 +516,43 @@ def _capture_direct_symbol(symbol: str) -> int:
     return symbol_id
 
 
+def emitted_page_line(register: str, symbol: str) -> str:
+    """``adrp register, symbol@PAGE`` alone (a PAGEOFF access follows)."""
+    if _DIRECT_INSTRUCTION_RECORDS is not None:
+        symbol_id = _capture_direct_symbol(symbol)
+        _capture_direct_instruction(
+            encode_emitted_adrp_parts(register),
+            EMITTED_INSTRUCTION_SCALAR,
+            STRUCTURED_RELOCATION_PAGE21,
+            symbol_id,
+            "adrp",
+            [_semantic_register(register), CompilerInt4(semantics.TOKEN_SYMBOL, symbol_id, semantics.SYMBOL_PAGE, 0)],
+        )
+        return DIRECT_INSTRUCTION_PLACEHOLDER
+    return "  adrp " + register + ", " + symbol + "@PAGE"
+
+
+def emitted_pageoff_memory_line(mnemonic: str, register: str, base: str, symbol: str) -> str:
+    """``ldr/str{b,h} register, [base, symbol@PAGEOFF]`` (ARM64_RELOC_PAGEOFF12)."""
+    if _DIRECT_INSTRUCTION_RECORDS is not None:
+        symbol_id = _capture_direct_symbol(symbol)
+        _capture_direct_instruction(
+            encode_emitted_load_store_parts(mnemonic, register, base, 0),
+            EMITTED_INSTRUCTION_SCALAR,
+            STRUCTURED_RELOCATION_PAGEOFF12,
+            symbol_id,
+            mnemonic,
+            [
+                _semantic_register(register),
+                CompilerInt4(semantics.TOKEN_ADDRESS, semantics.ADDRESS_OFFSET, 2, 0),
+                _semantic_register(base),
+                CompilerInt4(semantics.TOKEN_SYMBOL, symbol_id, semantics.SYMBOL_PAGEOFF, 0),
+            ],
+        )
+        return DIRECT_INSTRUCTION_PLACEHOLDER
+    return "  " + mnemonic + " " + register + ", [" + base + ", " + symbol + "@PAGEOFF]"
+
+
 def emitted_global_address_lines(
     register: str,
     symbol: str,

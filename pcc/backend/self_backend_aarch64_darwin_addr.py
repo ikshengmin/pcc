@@ -53,7 +53,7 @@ def materialize_global_address(
                           emitted_addsub_immediate_line("add", "sp", "sp", 16)])
             return lines
         return _materialize_thread_local_address(symbol, reg)
-    if name not in module_symbols.defined_symbols:
+    if name not in module_symbols.defined_symbols and name not in module_symbols.local_external_symbols:
         return emitted_global_address_lines(reg, symbol, True)
     return emitted_global_address_lines(reg, symbol, False)
 

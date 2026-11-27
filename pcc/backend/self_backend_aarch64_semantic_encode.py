@@ -112,11 +112,17 @@ def encode_semantic_instruction(opcode_id: int, operands: list[CompilerInt4]) ->
         base = _register(operands[2])
         if count == 4 and operands[3].first == TOKEN_SYMBOL:
             target = operands[3]
-            if mnemonic != "ldr" or target.third != SYMBOL_GOTPAGEOFF or target.fourth != 0:
-                raise encoder.EncodeError("typed symbolic load is unsupported")
-            word = encoder.encode_emitted_ldr_got_pageoff_parts(register, base)
-            kind = encoder.STRUCTURED_RELOCATION_GOT_LOAD_PAGEOFF12
-            symbol = target.second
+            if (target.third == SYMBOL_PAGEOFF and target.fourth == 0
+                    and mnemonic in ("ldr", "str", "ldrb", "strb", "ldrh", "strh")):
+                word = encoder.encode_emitted_load_store_parts(mnemonic, register, base, 0)
+                kind = encoder.STRUCTURED_RELOCATION_PAGEOFF12
+                symbol = target.second
+            else:
+                if mnemonic != "ldr" or target.third != SYMBOL_GOTPAGEOFF or target.fourth != 0:
+                    raise encoder.EncodeError("typed symbolic load is unsupported")
+                word = encoder.encode_emitted_ldr_got_pageoff_parts(register, base)
+                kind = encoder.STRUCTURED_RELOCATION_GOT_LOAD_PAGEOFF12
+                symbol = target.second
         else:
             if count not in (3, 4):
                 raise encoder.EncodeError("typed scalar memory operands are invalid")

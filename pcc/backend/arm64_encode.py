@@ -3667,6 +3667,20 @@ def _encode_one(line, at, labels, resolve_branch, relocations, undefined,
             if mn != "ldr" or not t64:
                 raise EncodeError("@GOTPAGEOFF only proven for 64-bit ldr")
             return _enc_ldst_unsigned(3, 1, rt, base, 0)
+        if "@PAGEOFF" in memop:
+            # LDR/STR (unsigned offset) whose imm12 the linker fills with the
+            # symbol's page offset scaled by the access size.
+            inner = memop.strip()[1:-1]
+            base_tok, sym_tok = [p.strip() for p in inner.split(",")]
+            base_name = base_tok.lower()
+            symbol = sym_tok.split("@")[0]
+            if not sym_tok.endswith("@PAGEOFF") or "+" in symbol or "-" in symbol:
+                raise EncodeError(f"unsupported @PAGEOFF operand {memop!r}")
+            word = encode_emitted_load_store_parts(mn, ops[0].strip().lower(), base_name, 0)
+            undefined_or_local(symbol, labels, undefined)
+            relocations.append(Relocation(
+                at, symbol, spec.ARM64_RELOC_PAGEOFF12, pcrel=False))
+            return word
         register_form = _register_offset_operand(memop)
         if register_form is not None:
             return encode_emitted_load_store_register_parts(
