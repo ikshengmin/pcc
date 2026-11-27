@@ -5367,11 +5367,13 @@ in the relevant section or issue and removes the entry.
 
    - 2026-11-27 bounded actual smaller historical ARM worker_resource_plan cross-Darwin exact clean184f51f0 diagnostic COMPLETE both arms, final PCO6149696B SHA75affd65 both. Baseline23.638s/221720576B, census22.660/221757440 (not speed). Final latest295556 IDs vs retained3874300, obsolete3578744 (92.37%, min28629952B pointer refs); allocated run list32208792B (14.5% measured peak), latest list ~2.36MB. First transfer299286 latest/retained; six changed peepholes retained1794850 then seven CFG passes append runs. Actual RSS167→221.50MB at final CFG→194.79 after publish semantics retirement. Cross-target Linux-host evidence not hosted Mac measurement; no production/CI, release; next narrow private pass ownership renewal test-first without public persistence change.
 
+   - 2026-11-27 packed compact tape native formal HOLD: host8 pass, actual record reads1313743 vs prior3241463 source count; strict25 ELF469f10af, 1/4 native exact, 5 triples all15 canonical f777240c. Decode median3.036267→3.240482s paired+7.202%, normalized+15.027%; wholeCPU6.552245→7.074864 paired+5.241%, norm+11.681%, 0/5 wins; whole RSS233888→230984KiB paired−1.592/norm−1.486%, guard +.252/+0.530%. Decode-return RSS164163584→53395456 −67.499% all5, mapped−71.61%, requested−29.45%, STW680→597. Preserve exact formal receipts, no merge or retry. Next distinct side-plan to remove149944 repeated label/file-id token calls only after source/ownership proof; no ABI or CI. Release.
+
    Claims:
    - Runtime QPS through the self AArch64 backend toward LLVM parity: locate the LLVM step the self passes lack (pcc_perf reference ablations, scripts/pcc_perf.py), then implement it in pcc's own AArch64 passes (shrink-wrapping, allocation or selection, whichever the ablation ranks first); IR-pass changes are target-neutral and reach x64; avoids the typed x64 MIR files: Claude, macOS, 2026-11-27T06:46Z, area backend
    - Stage1 AArch64 private peephole-history retirement at peepholes-to-CFG boundary (one-shot private canonical authority; preserve old roots/cursors/observer/malformed/error semantics; source finalizer and scoped tests only, actual small exact PCO/RSS/CPU before merge, no cap or CI): Codex, Linux, 2026-11-27T13:17Z, area backend
 
-   - Owned AST V2 compact tape packed-record reader scratch host proof (one checked 64-bit read per record and carry child record, exact validation/fallback/constructor/error/root semantics; no side-plan/runtime/header/ABI/production reader edits, no native/CI until separate approval): Codex, Linux, 2026-11-27T13:10Z, area runtime-codegen
+
 
 
 
