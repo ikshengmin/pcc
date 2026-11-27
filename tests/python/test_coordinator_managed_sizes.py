@@ -49,6 +49,7 @@ class Snapshot:
         }
         load_functions(ALLOCATOR, {
             "pcc_allocator_size_class",
+            "pcc_allocator_object_size_class",
             "_live_object_size_snapshot_add",
             "pcc_allocator_live_object_size_snapshot_stopped",
         }, self.ns, local_helpers=False)
@@ -87,7 +88,7 @@ class Snapshot:
     def object(self, requested, *, usable=None, marker=-1, state=None):
         obj = self.stack(128)
         if usable is None:
-            usable = self.ns["pcc_allocator_size_class"](requested)
+            usable = self.ns["pcc_allocator_object_size_class"](requested)
         if state is None:
             state = self.ns["GC_STATE_LIVE"]
         self.store(obj, self.ns["GRANULE_MAPPING_SIZE_OFFSET"], marker)
@@ -130,7 +131,7 @@ def expected(requests):
         row = rows[bucket_index(n)]
         row[0] += 1
         row[1] += n
-        row[2] += max(16, 1 << max(0, (n-1).bit_length()))
+        row[2] += 48 if 32 < n <= 48 else max(16, 1 << max(0, (n-1).bit_length()))
         row[3] += max(16, (n+15)//16*16)
     return [tuple(row) for row in rows]
 
@@ -182,7 +183,7 @@ def test_bad_enumerator_count_restores_stop(count):
     assert m.sample()==-1 and (m.starts,m.resumes,m.owns)==(1,1,False)
 
 
-@pytest.mark.parametrize("field,increment",[(0,1),(1,40),(2,64),(3,48)])
+@pytest.mark.parametrize("field,increment",[(0,1),(1,40),(2,48),(3,48)])
 def test_each_counter_overflow_fails_closed(field,increment):
     m=Snapshot()
     m.object(40)

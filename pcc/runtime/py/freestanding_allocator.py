@@ -909,6 +909,39 @@ def pcc_allocator_size_class(size: i64) -> i64:
     return 0
 
 
+@c_abi_export("pcc_allocator_object_size_class")
+def pcc_allocator_object_size_class(size: i64) -> i64:
+    # Object-only dense class. The raw malloc ABI, free lists and raw cache
+    # classes keep their existing powers of two.
+    # Mirror the raw selector's fixed branch chain so native inlining does
+    # not add a second selector call to ordinary object allocations.
+    if size <= 16:
+        return 16
+    if size <= 32:
+        return 32
+    if size <= 48:
+        return 48
+    if size <= 64:
+        return 64
+    if size <= 128:
+        return 128
+    if size <= 256:
+        return 256
+    if size <= 512:
+        return 512
+    if size <= 1024:
+        return 1024
+    if size <= 2048:
+        return 2048
+    if size <= 4096:
+        return 4096
+    if size <= 8192:
+        return 8192
+    if size <= 16384:
+        return 16384
+    return 0
+
+
 @c_abi_export("pcc_allocator_take_small")
 def pcc_allocator_take_small(usable: i64) -> c_ptr:
     if usable == 16:
@@ -1096,17 +1129,18 @@ SPAN_LIST_DENSE = 1
 SPAN_LIST_SPARSE = 2
 SPAN_LIST_EMPTY = 3
 SPAN_LIST_DISCARDED = 4
-# List heads: eleven size classes, four lists each (class * 4 + list - 1).
+# List heads: twelve object size classes, four lists each (class * 4 + list - 1).
 define_global_i64_array(
     "pcc_allocator_object_span_lists",
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0,
 )
 # Object slabs given back so far, carved again so far, and the bytes
 # given back at the moment.
-define_global_i64_array("pcc_allocator_sparse_trim_heads", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+define_global_i64_array("pcc_allocator_sparse_trim_heads", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 define_global_i64("pcc_allocator_partial_discarded_bytes", 0)
 define_global_i64("pcc_allocator_object_slabs_discarded", 0)
 define_global_i64("pcc_allocator_object_slabs_reused", 0)
@@ -1130,6 +1164,8 @@ def _granule_stride_count(stride: i64) -> i64:
         return 1024
     if stride == 80:
         return 819
+    if stride == 96:
+        return 682
     if stride == 112:
         return 585
     if stride == 176:
@@ -1987,8 +2023,8 @@ def pcc_allocator_trim_objects() -> i64:
     state = global_load_ptr("pcc_allocator_object_magazine")
     discarded: i64 = 0
     index: i64 = 0
-    usable: i64 = 16
     while index < OBJECT_MAGAZINE_CLASSES:
+        usable: i64 = _object_magazine_usable(index)
         pcc_allocator_lock_acquire()
         if ptr_is_null(state) == 0:
             _object_magazine_drain_locked(state, index, usable, 0)
@@ -2004,7 +2040,6 @@ def pcc_allocator_trim_objects() -> i64:
             _trim_sparse_span_locked(pending)
             pcc_allocator_lock_release()
             pending = following
-        usable = usable * 2
         index = index + 1
     return discarded
 
@@ -2134,6 +2169,9 @@ def pcc_allocator_refill_small_object(usable: i64) -> c_ptr:
     if usable == 32:
         stride: i64 = 80
         count: i64 = 819
+    elif usable == 48:
+        stride: i64 = 96
+        count: i64 = 682
     elif usable == 64:
         stride: i64 = 112
         count: i64 = 585
@@ -2193,6 +2231,20 @@ def pcc_allocator_refill_small_object(usable: i64) -> c_ptr:
         # allocating another slab here would leak this one.  free() misses
         # the granule and routes the cells to the raw family, matching the
         # carve; provenance stays exact via the per-object set.
+        # The managed-only class has no raw 48-byte list. Registration
+        # failed before any descriptor or free-list publication: re-carve
+        # this same private mapping into the existing raw 64-byte class.
+        # The returned cell's own header records the actual usable size.
+        if usable == 48:
+            usable = 64
+            stride = 112
+            count = 585
+            raw_cursor = first
+            raw_index: i64 = 0
+            while raw_index < count:
+                pcc_allocator_initialize_small(raw_cursor, slab, usable)
+                raw_cursor = ptr_add(raw_cursor, stride)
+                raw_index = raw_index + 1
         fallback_first = first
         fallback_cursor = first
         fallback_index: i64 = 1
@@ -2869,7 +2921,7 @@ def _live_object_size_snapshot_add(obj, out) -> i64:
         return -1
     requested: i64 = load_i64(obj, GRANULE_REQUESTED_SIZE_OFFSET)
     usable: i64 = load_i64(obj, GRANULE_USABLE_SIZE_OFFSET)
-    if requested < 0 or requested > 16384 or usable <= 0 or usable != pcc_allocator_size_class(requested):
+    if requested < 0 or requested > 16384 or usable <= 0 or usable != pcc_allocator_object_size_class(requested):
         return -1
     aligned: i64 = (requested + 15) & -16
     if aligned < 16:
@@ -2966,11 +3018,11 @@ def pcc_allocator_granule_span_cache_set_fill(enabled: i64) -> i64:
 # Each registered thread owns one page with disjoint object/raw cache views.
 # Object descriptors never retire. Raw cached cells reserve their slab counts
 # until a central drain, so trim cannot reclaim storage underneath a cache.
-OBJECT_MAGAZINE_CLASSES = 11
+OBJECT_MAGAZINE_CLASSES = 12
 OBJECT_MAGAZINE_HEADS = 0
-OBJECT_MAGAZINE_COUNTS = 88
+OBJECT_MAGAZINE_COUNTS = 96
 OBJECT_MAGAZINE_PAGE_BYTES = 4096
-RAW_MAGAZINE_BASE = 176
+RAW_MAGAZINE_BASE = 192
 RAW_MAGAZINE_CLASSES = 8
 RAW_MAGAZINE_MAX_USABLE = 2048
 
@@ -2992,6 +3044,8 @@ def _object_magazine_class(usable: i64) -> i64:
     if usable <= 32:
         return 1
     if usable <= 64:
+        if usable == 48:
+            return 11
         return 2
     if usable <= 128:
         return 3
@@ -3008,6 +3062,13 @@ def _object_magazine_class(usable: i64) -> i64:
     if usable <= 8192:
         return 9
     return 10
+
+
+@c_abi_export("pcc_allocator_object_magazine_usable")
+def _object_magazine_usable(index: i64) -> i64:
+    if index == 11:
+        return 48
+    return 16 << index
 
 
 @c_abi_export("pcc_allocator_object_magazine_limit")
@@ -3235,10 +3296,8 @@ def pcc_allocator_thread_cache_drain() -> None:
     global_store_ptr("pcc_allocator_object_magazine", null())
     pcc_allocator_lock_acquire()
     index: i64 = 0
-    usable: i64 = 16
     while index < OBJECT_MAGAZINE_CLASSES:
-        _object_magazine_drain_locked(state, index, usable, 0)
-        usable = usable * 2
+        _object_magazine_drain_locked(state, index, _object_magazine_usable(index), 0)
         index = index + 1
     _raw_magazine_drain_all_locked(state)
     pcc_allocator_lock_release()
@@ -3257,7 +3316,7 @@ def pcc_allocator_alloc_object(size: i64) -> c_ptr:
     mapping path; those objects keep per-object provenance registration."""
     if size < 0:
         return null()
-    usable: i64 = pcc_allocator_size_class(size)
+    usable: i64 = pcc_allocator_object_size_class(size)
     if usable != 0:
         magazine = _object_magazine_current()
         if ptr_is_null(magazine) == 0:
@@ -3276,6 +3335,10 @@ def pcc_allocator_alloc_object(size: i64) -> c_ptr:
         if ptr_is_null(user):
             return null()
         store_i64(user, GRANULE_REQUESTED_SIZE_OFFSET, size)
+        # A 48-byte refill may have fallen back to an unregistered raw
+        # 64-byte carve. Debit the same actual usable size free() will see.
+        if usable == 48:
+            usable = load_i64(user, GRANULE_USABLE_SIZE_OFFSET)
         pcc_allocator_account_allocate(size, usable, 0)
         return user
     return pcc_allocator_allocate_raw(size, 16)

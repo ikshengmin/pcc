@@ -4,6 +4,11 @@
 #include <stdlib.h>
 
 extern void *pcc_allocator_alloc_object(int64_t);
+extern size_t malloc_usable_size(void *);
+extern int64_t pcc_allocator_trim_objects(void);
+extern int64_t pcc_allocator_object_slab_counter(int64_t);
+extern int64_t pcc_gc_granule_is_object_start(void *);
+extern int64_t pcc_allocator_object_publish_fresh(void *);
 extern void pcc_allocator_lock_acquire(void);
 extern void pcc_allocator_lock_release(void);
 extern void pcc_allocator_thread_cache_drain(void);
@@ -13,15 +18,16 @@ extern int64_t pcc_allocator_live_requested_bytes(void);
 extern int64_t pcc_allocator_live_usable_bytes(void);
 extern int64_t pcc_thread_start(void **, void *(*)(void *), void *);
 extern int64_t pcc_thread_join(void *, void **);
-static void *cells[11][32];
+static void *cells[12][32];
 static int64_t published;
 
 static void *producer(void *unused) {
     if (pcc_current_thread_id() <= 0) return (void *)1;
     int64_t size = 16;
-    for (int k = 0; k < 11; k++, size *= 2) {
+    for (int k = 0; k < 12; k++, size *= 2) {
         for (int i = 0; i < 32; i++) {
-            cells[k][i] = pcc_allocator_alloc_object(size);
+            cells[k][i] = pcc_allocator_alloc_object(k == 11 ? 40 : size);
+            if (cells[k][i] && malloc_usable_size(cells[k][i]) != (size_t)(k == 11 ? 48 : size)) return (void *)5;
             if (!cells[k][i]) return (void *)2;
             for (int j = 0; j < i; j++) {
                 if (cells[k][j] == cells[k][i]) return (void *)3;
@@ -35,7 +41,7 @@ static void *producer(void *unused) {
 static void *consumer(void *unused) {
     if (pcc_current_thread_id() <= 0) return (void *)4;
     while (!__atomic_load_n(&published, __ATOMIC_ACQUIRE)) pcc_thread_safepoint();
-    for (int k = 0; k < 11; k++) {
+    for (int k = 0; k < 12; k++) {
         for (int i = 0; i < 32; i++) free(cells[k][i]);
     }
     return 0;
@@ -48,6 +54,36 @@ int main(void) {
     free(warm);
     int64_t requested = pcc_allocator_live_requested_bytes();
     int64_t usable = pcc_allocator_live_usable_bytes();
+    /* Boundary, raw ABI, exact provenance, exhaustion (more than two 682
+       cell slabs), trim/recarve and the byte-aligned 48-byte object payload. */
+    for (int n = 32; n <= 49; n++) {
+        void *obj = pcc_allocator_alloc_object(n);
+        void *raw = malloc(n);
+        if (!obj || !raw || ((uintptr_t)obj & 15) || ((uintptr_t)raw & 15)) return 30;
+        size_t expected = n == 32 ? 32 : (n <= 48 ? 48 : 64);
+        if (malloc_usable_size(obj) != expected || malloc_usable_size(raw) != (size_t)(n == 32 ? 32 : 64)) return 31;
+        if (pcc_gc_granule_is_object_start(obj) == 1 || pcc_allocator_object_publish_fresh(obj) != 1) return 32;
+        if (pcc_gc_granule_is_object_start(obj) != 1 || pcc_gc_granule_is_object_start((char *)obj+16) == 1) return 33;
+        free(obj); free(raw);
+    }
+    void *burst48[1400];
+    int64_t reused_before = pcc_allocator_object_slab_counter(1);
+    for (int round = 0; round < 2; round++) {
+        for (int i = 0; i < 1400; i++) {
+            burst48[i] = pcc_allocator_alloc_object(48);
+            if (!burst48[i] || malloc_usable_size(burst48[i]) != 48) return 34;
+            for (int j = 0; j < i; j++) if (burst48[i] == burst48[j]) return 35;
+        }
+        if (round == 1 && pcc_allocator_object_slab_counter(1) <= reused_before) return 39;
+        for (int i = 0; i < 1400; i++) free(burst48[i]);
+        if (pcc_allocator_trim_objects() <= 0) return 36;
+    }
+    if (pcc_allocator_live_requested_bytes() != requested || pcc_allocator_live_usable_bytes() != usable) return 37;
+
+    /* trim drained the warm magazines; rewarm before lock-only control. */
+    warm = pcc_allocator_alloc_object(64);
+    if (!warm) return 38;
+    free(warm);
     /* A warmed single-cell churn must not touch the central lock. The
        subprocess timeout makes a regression fail instead of hanging pytest. */
     pcc_allocator_lock_acquire();
@@ -91,12 +127,12 @@ int main(void) {
     if (faults != 0) return 25;
     requested = pcc_allocator_live_requested_bytes();
     usable = pcc_allocator_live_usable_bytes();
-    void *duplicate = pcc_allocator_alloc_object(64);
+    void *duplicate = pcc_allocator_alloc_object(48);
     free(duplicate);
     free(duplicate);
     if (pcc_gc_telemetry(PCC_GC_COUNTER_ALLOCATOR_DOUBLE_FREES) != faults + 1) return 21;
-    void *one = pcc_allocator_alloc_object(64);
-    void *two = pcc_allocator_alloc_object(64);
+    void *one = pcc_allocator_alloc_object(48);
+    void *two = pcc_allocator_alloc_object(48);
     if (!one || !two || one == two) return 22;
     free(one);
     free(two);

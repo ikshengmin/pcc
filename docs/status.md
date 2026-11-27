@@ -4727,6 +4727,60 @@ in the relevant section or issue and removes the entry.
    all roots immutable or all references safe merely from nonmoving GC.
    No source/runtime changes; support backend/Stage1 alias proof only.
 
+   2026-11-27 managed-only 48-byte object-slab class (Linux, Codex;
+   memory unit approved, not handler throughput or full Stage2 acceptance).
+   Actual hosted #646 source 500e1ab6, artifact15167443571, x64 Stage2
+   manifests-ready log SHA256 9b999dd38fd3c5426aa150022bdd3aac1feb024564fa9ecd708ed035ed3220e0:
+   4,346,829 LIVE object slab cells, requested250,295,285B,
+   usable362,013,376B, hypothetical16-aligned282,694,880B. The largest
+   waste bin B48 was 2,228,549 cells (requested91,680,172B,
+   usable142,627,136B). B64 733,115 cells (requested40,939,941B).
+   48-byte managed class only, old raw malloc selector/ABI unchanged;
+   existing object indexes 0..10 stable, appended index11, stride96
+   and 682 cells per 64KiB slab; separate raw/object magazine views,
+   explicit reverse mapping for trim/thread exit, exact registered
+   provenance/recarve. On failed pre-publication granule registration
+   re-carve the same private mapping into existing raw64 geometry and
+   account actual usable64; no duplicate mapping or new raw class.
+   Baseline 014a6b37 exact owned archive 8b0dd1b51c9f77f0dbfc322f67406b74db65967c9203c6e6adeb8eb698fafb2a;
+   rebuilt allocator original byte-identical. Candidate archive
+   7be0997503b449afdfe31050bcf71198513c378923a1f2c880ad503737ca6ef7,
+   only allocator member changed (f38a031b), CAPI inventory unchanged,
+   actual optimized allocation IR selector fully inlined. Host 28 PASS,
+   two integration tests deselected; separate exact native boundary/raw ABI,
+   1400-cell exhaustion, actual discard/recarve, 12 class cross-thread
+   free, drain and duplicate audit red baseline rc31 twice, candidate
+   exact OBJECT_MAGAZINES_OK twice; both arms exact raw magazines,
+   four-carrier managed histogram and production cycle weakref/finalizer
+   sync under provenance2 passed. No external LLVM/host-cc or runtime
+   provisioning fallback.
+   Exact synthetic LIVE replay matches #646 B48/B64 counts/requested sums
+   (2,961,664 cells, requested132,620,113B every arm), not actual Stage2
+   arrival order or object graph. Five alternating triples plus2 smoke,
+   guarded16.583s/415.7MB; base/candidate/unchanged usable
+   189,546,496/153,889,712/189,546,496B (-18.81%,5/5), mapped
+   341,966,848/306,413,568/341,966,848B (-10.40%,5/5), peakRSS
+   372,477,952/336,801,792/372,477,952B (-9.58%,34.02MiB,5/5,
+   unchanged 0). Paired whole process CPU -8.25%,4/5, unchanged median
+   abs3.57%; free phase noisy; no production CPU gain claim.
+   Actual gateway handler once-compiled same25 digest-receipted app IR
+   modules linked twice; base ELF c7f14595, candidate6466fc13, exact
+   response bytes checked for every 100k-request arm. w1 five triples:
+   QPS17789.7->17936.1, paired -0.203%,2/5, max unchanged2.808%;
+   CPU71.607->70.968us, paired -0.281%,4/5, max unchanged2.642%;
+   RSS61,923,328->61,927,424B (+1 page within max unchanged0.013%),
+   maxSTW2049->1848us, p99 5.014->5.094ms within controls. w4 five
+   triples QPS39473.8->39162.6, paired+1.179%,3/5; CPU105.308->105.054us,
+   paired-0.242%,3/5; RSS66,818,048->66,813,952B; STW2172->2177us,
+   p99 1.483->1.463ms. w4 unchanged max QPS21.499%/CPU13.29%,
+   INCONCLUSIVE (no reproducible regression; no throughput claim).
+   All30 native handler arms complete, no exception/body mismatch.
+   This is a scoped live-density memory improvement, not full Stage2
+   RSS or Stage2<=Stage1 qualification. Next retain actual hosted
+   per-phase histogram/peak evidence; do not add further size classes
+   or repeat noisy throughput-only tests without a new owner rationale.
+   No dedicated CI dispatch; all intervening claims preserved.
+
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
    - Opt-in per-function typed x64 machine IR and unified register allocation (large structural design, full-function legacy fallback; real 58-function static >=10% target before native/handler CPU/RSS qualification): Codex, Linux, 2026-11-27T02:19Z, area backend (x64 MIR/selector/register allocation, Stage2 corpus and GC root audit support; CI independent)
