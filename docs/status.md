@@ -3926,12 +3926,48 @@ in the relevant section or issue and removes the entry.
        because native actual semantics/perf unqualified and small full
        worker ceiling, despite robust host owner and unchanged native
        hot parity. No source production/whole Stage1/2 claim.
-       Next (latest actual Stage1 codegen priority): (0) attribute
-       actual OFF x64 dead-move liveness repeated dense neutral/effect
-       events after landed sparse block owners; quantify exact neutral
-       line count, dense array retention and per-iteration scan cost,
-       no sparse edit unless real ceiling, exact ABI/CFG/assembly/ELF
-       and CPU/RSS controls; retain inline OFF default;
+       Actual current c912 post-landed sparse x64 dead-move attribution
+       same exact d222 class OFF PIDX cf4113cc, emitted ELF SHA122f82e5
+       exact; all727 liveness calls followable, independent instrumented
+       replay exact masks. 1,491,222 lines,925090 effectful(62.03%),
+       554271 neutral(37.17%),11861 already-dead; dense3 arrays
+       35.91MB aggregate list storage. Worklist877648 pops/421778
+       blocks,2,909,457 line steps incl1,216,094 skip/neutral(41.80%),
+       final1491222 incl554271 neutral; canonical owner CPU1.9845s
+       (~4.5% backend44s, directional). Frozen exact727 input masks
+       48.25MB SHA85dd1a745527558b3906536172bfce333980d3c13a336239a3c1743712beaf3f.
+       Packed sparse event prototype all727 exact, CPU1.426->1.548s
+       (+8.57%), estimated list/scalar bytes62.43->37.89MB (not
+       measured RSS), reject CPU. No-array boundary trim prototype
+       removes554159/554271 neutral (99.98%) from existing block
+       ranges after CFG ownership, CPU1.511->1.343s directional.
+       Candidate private parser only, original observer8-arg path,
+       kind2/zero-write kind1/unknown target preserved; test-first3
+       intended red->168 focused pass incl512 padded random CFGs.
+       Strict native current closure626 both, fallback0/no libpython;
+       33 unchanged non-target hot methods exact, target dead4300
+       ->4648 instr/forward5833->5915; native adapter17->21 and
+       optional vector removed, module init/fini literals only.
+       Actual frozen727 owner5 alternating triples all15 exact
+       mask SHA2106422e311ac3619efcbcc82ef00ab4b0bd6f7ba817fe428cab9e97a352f807,
+       CPU1.430475->1.300189s control1.442300, norm−10.967%5/5
+       vs control1.206% median/2.482% max. **Reject stable RSS
+       regression** median49912->50484KiB (control49912), norm
+       +1.146%0/5 vs max unchanged .016%, despite no new array
+       (new boundary scalar objects plausible; not causal proof).
+       No source production/full worker claim, no further native
+       build. Maintainer 2026-11-27 new priority same-post-pass-IR
+       cross-backend static hot-function codegen analysis (no external
+       backend, actual instruction/stack/spill/scratch count) before
+       any new allocator design; local [skip ci], no new complete CI
+       snapshot/dispatch/rerun while queue/running. Next (latest
+       actual Stage1 codegen priority): (0) same Linux runtime
+       post-pass IR exact receipt/source SHA across owned x64 and
+       AArch64 Linux (triple-only substitution, optimized ARM flag
+       separate); exclude architecture-specific inline asm rather
+       than conflate platform lowering, compare actual named
+       GC/allocator/JSON/scheduler hot functions and relocation root
+       contract; static counts not dynamic req/s; retain inline OFF;
        (1) ARM typed
        prepare memory: quantify retained prior run history and
        private CFG owner retirement with public snapshot/callback
@@ -4535,7 +4571,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
-   - Actual general OFF x64 dead-move liveness dense neutral/effect attribution (after landed sparse block owner, exact CFG/assembly/ELF): Codex, Linux, 2026-11-27T01:31Z, area backend (x86_64_register_copies; no overlap with CI Unicode/Stage2 lexical owner)
+   - Actual same post-pass Linux runtime IR x64 vs AArch64 static hot-function comparison (GC/allocator/JSON/scheduler; no allocator edit): Codex, Linux, 2026-11-27T01:44Z, area backend (read-only owned emit attribution, Stage2 complementary container/TLS; CI metric tool disjoint)
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
