@@ -72,6 +72,32 @@ _NO_IMPLICIT_POLL_MODULES = (
 )
 
 
+_CROSS_MODULE_INLINE_FILE = "cross-module-inline.json"
+
+
+def cross_module_inline_target(target: str) -> bool:
+    """Targets whose archive imports small definitions across modules
+    (runtime_cross_module_inline). Only arm64 Darwin's owned linker is
+    executed here with a thread-local variable another object defines; the
+    other targets keep each module's own definitions."""
+    return target.startswith(("arm64-apple-darwin", "aarch64-apple-darwin"))
+
+
+def _imports_cross_module_definitions(runtime_dir, name: str) -> bool:
+    """Freestanding modules allow no helper beyond their exports, the kernel
+    keeps its uninlined paths and modules without implicit polls must not
+    gain a copy's polls."""
+    if name in _NO_IMPLICIT_POLL_MODULES:
+        return False
+    source = os.path.join(runtime_dir, "py", name + ".py")
+    try:
+        with open(source, encoding="utf-8") as stream:
+            text = stream.read()
+    except OSError:
+        return False
+    return "\n__pcc_freestanding__ = True" not in text
+
+
 def runtime_ir_passes(runtime_dir: str) -> str:
     """The Makefile's PCC_RUNTIME_IR_PASSES; like its ``?=``, the environment wins."""
     explicit = str(os.environ.get("PCC_RUNTIME_IR_PASSES", "") or "").strip()
@@ -312,7 +338,8 @@ def _read_image_local_globals(path: str) -> frozenset[str]:
 
 
 def _build_runtime_module(runtime_dir, name, target, output_dir, passes, config,
-                          phase: str = "all", image_local_globals: frozenset[str] | None = None) -> bytes:
+                          phase: str = "all", image_local_globals: frozenset[str] | None = None,
+                          inline_table: dict | None = None) -> bytes:
     """Compile, optimize and emit one runtime module; write its object and receipt.
 
     ``phase`` "ir" stops after writing the optimized IR; "object" emits from
@@ -345,6 +372,17 @@ def _build_runtime_module(runtime_dir, name, target, output_dir, passes, config,
         # text, as the single-phase build kept it in memory.
         with open(ir_path, "rb") as stream:
             ir_text = stream.read().decode("utf-8").replace("\r\n", "\n")
+        if inline_table and _imports_cross_module_definitions(runtime_dir, name):
+            from pcc.frontends.python.runtime_cross_module_inline import (
+                IMPORT_PASSES,
+                import_cross_module_definitions,
+            )
+            imported, copies = import_cross_module_definitions(ir_text, inline_table, name)
+            if copies:
+                ir_text = optimize_ir(imported, IMPORT_PASSES)
+                # The receipt hashes the IR the object is emitted from.
+                with open(ir_path, "w", encoding="utf-8") as stream:
+                    stream.write(ir_text)
         return _emit_runtime_module_object(
             name, source, ir_path, object_path, ir_text, target, runtime_dir, config,
             source_transform, image_local_globals,
@@ -431,15 +469,20 @@ def run_runtime_module_worker(manifest_path: str) -> int:
     image_local = None
     if manifest.get("image_local_path"):
         image_local = _read_image_local_globals(manifest["image_local_path"])
+    inline_table = None
+    if manifest.get("inline_table_path"):
+        with open(manifest["inline_table_path"], encoding="utf-8") as stream:
+            inline_table = json.loads(stream.read())
     for name in manifest["names"]:
         _build_runtime_module(manifest["runtime_dir"], name, manifest["target"],
                               manifest["output_dir"], manifest["passes"], config,
-                              phase=phase, image_local_globals=image_local)
+                              phase=phase, image_local_globals=image_local,
+                              inline_table=inline_table)
     return 0
 
 
 def _build_runtime_modules_in_workers(runtime_dir, names, target, output_dir, passes, jobs,
-                                      phase="all", image_local_path=""):
+                                      phase="all", image_local_path="", inline_table_path=""):
     """Compile *names* in worker batches; a failed worker fails the build."""
     from pcc.frontends.python.pipeline import _python_frontend_worker_command_prefix, _shell_quote_arg
 
@@ -467,6 +510,7 @@ def _build_runtime_modules_in_workers(runtime_dir, names, target, output_dir, pa
                 "runtime_dir": runtime_dir, "target": target, "output_dir": output_dir,
                 "passes": passes, "names": batch, "phase": phase,
                 "image_local_path": image_local_path,
+                "inline_table_path": inline_table_path,
             }))
         argv = list(prefix) + [RUNTIME_MODULE_WORKER_ARG, manifest]
         commands.append(" ".join(_shell_quote_arg(arg) for arg in argv))
@@ -527,13 +571,22 @@ def build_runtime_archive(runtime_dir: str, archive: str, target: str) -> None:
             with open(os.path.join(output_dir, name + ".ll"), encoding="utf-8") as stream:
                 ir_texts.append(stream.read())
         image_local = runtime_image_local_globals(ir_texts)
+        inline_table = None
+        inline_table_path = ""
+        if cross_module_inline_target(target):
+            from pcc.frontends.python.runtime_cross_module_inline import cross_module_inline_table
+            inline_table = cross_module_inline_table(dict(zip(names, ir_texts)))
+            inline_table_path = os.path.join(output_dir, _CROSS_MODULE_INLINE_FILE)
+            with open(inline_table_path, "w", encoding="utf-8", newline="\n") as stream:
+                stream.write(json.dumps(inline_table, sort_keys=True))
         ir_texts = []
         image_local_path = os.path.join(output_dir, _IMAGE_LOCAL_GLOBALS_FILE)
         with open(image_local_path, "w", encoding="utf-8", newline="\n") as stream:
             stream.write("".join(name + "\n" for name in sorted(image_local)))
         if jobs > 1:
             _build_runtime_modules_in_workers(runtime_dir, names, target, output_dir, passes, jobs,
-                                              phase="object", image_local_path=image_local_path)
+                                              phase="object", image_local_path=image_local_path,
+                                              inline_table_path=inline_table_path)
         for name in names:
             object_path = os.path.join(output_dir, name + ".o")
             if jobs > 1:
@@ -541,7 +594,8 @@ def build_runtime_archive(runtime_dir: str, archive: str, target: str) -> None:
                     data = stream.read()
             else:
                 data = _build_runtime_module(runtime_dir, name, target, output_dir, passes, config,
-                                             phase="object", image_local_globals=image_local)
+                                             phase="object", image_local_globals=image_local,
+                                             inline_table=inline_table)
             members.append((name + ".o", data))
             objects.append(Path(object_path))
             _kind, definitions = _defined_symbols(data)

@@ -3501,6 +3501,31 @@ in the relevant section or issue and removes the entry.
    the merge copied with its successor phis, a merge whose value is used
    further kept, natively executed before and after; optimizer files
    538 passed (the same 3 HEAD failures).
+   (af) Merged (Claude, 2026-11-28): the owned runtime archive inlines
+   across its modules on arm64 Darwin (`runtime_cross_module_inline`,
+   LLVM's (Thin)LTO import). Between the "ir" and "object" phases the
+   build selects external definitions of at most 64 instructions that
+   reference nothing private to their module (no allocas, metadata,
+   exception edges, variadic or musttail calls, frame-address
+   intrinsics); each ordinary importing module (not freestanding, not
+   the thread kernel, not a module without implicit polls) gets internal
+   copies of those it calls, with declarations, and runs
+   `inline-defined-wide` twice, jump threading, instcombine and dce. Exact
+   h25-dup -> h26-xinl 104565 -> 99312 (-5.02%; on h23 -5.23%): container
+   lock/unlock, `py_decref`, `_list_is_sane` and the GC retain/release
+   disappear as calls. Throughput A/B (5 pairs, control h25c, local Mac,
+   two lldb sessions running): w1 71915 -> 75807 req/s (+5.4%, 5/5, floor
+   1.7%, gain; 16.0 -> 15.2 us per request), w4 -1.5% inconclusive
+   (floor 14.9%). Costs: runtime archive 15.9 -> 25.7 MB, handler binary
+   30.9 -> 37.0 MB, runtime build 40 -> 124 s on CPython (the import
+   passes; pcc1's own runtime build pays the same factor). Follow-ups:
+   enable for Linux and Windows once a cross-object thread-local
+   reference is executed there; tune the 64-instruction bound against
+   size and build time. Tests: selection rules, declarations (aggregate
+   and thread-local globals), call retargeting with address-taken uses
+   kept, two modules sharing a thread-local linked and run before and
+   after; 20 container/GC test files give the same failure set with and
+   without the import (h23 and h24 snapshots).
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2
