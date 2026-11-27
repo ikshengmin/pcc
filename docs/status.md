@@ -3301,6 +3301,40 @@ in the relevant section or issue and removes the entry.
    and kept form natively under both allocators; backend files 8240
    passed with (r)'s four nodes deselected (the archive one passed alone
    with the h11-shift runtime).
+   (u) Merged (Claude, 2026-11-28): a value takes x19-x28 only where it is
+   live across a call. The function-wide allocator's single linear
+   interval counted every call between definition and last use, including
+   calls in blocks where the value is dead (the `abort` path laid out
+   between the thread-state load and its use in `pcc_container_unlock`).
+   `_PreciseCallCrossing` keeps the linear rule for calls at the interval's
+   ends and counts an interior call only if the value is used later in
+   that block or is live out of it (per-value backward walk; fused `madd`
+   operands count as read at the consumer). Functions above 2000 blocks
+   keep the linear rule. Callee-saved saves per entry in the h11-shift ->
+   h12-cross objects: `pcc_container_lock` 2 -> 1, `pcc_container_unlock`
+   1 -> 0, `pcc_gc_retain_known` 2 -> 1, `pcc_gc_release_known` 5 -> 4.
+   The new h10-rot2 step record put callee-saved saves and restores at
+   7.0% of executed instructions (`pcc_gc_store_root` 6 per entry, `free`
+   10, `pcc_thread_safepoint` 10). Instructions per request, median of
+   five runs, two separate measurements under load (run spread up to 31%,
+   so these are indications, not ab results): -1.18% and -1.17%.
+   (v) Merged (Claude, 2026-11-28): `zext` of an i8/i16/i32 load result to
+   i64 is the loaded register (LDRB/LDRH/LDR W and their unscaled,
+   acquire and reload forms zero the upper bits); the backend emitted
+   `mov w4, w4` after the byte loads of memchr, memcmp and
+   `py_obj_eq_value` (about 3.1k per 600000 stepped instructions). A zext
+   of an argument or call result keeps `mov w, w` (unspecified upper bits
+   under AAPCS64; the test returns a truncated 0x100000005). Together with
+   (u), median of five runs in the same two measurements: -2.03% and
+   -1.77%. Tests for (u) and (v): new files execute natively under both
+   allocators and check typed/text agreement; backend files 8259 passed
+   with (r)'s four nodes deselected (the archive one passed alone with
+   the h12-zext runtime).
+   Measurement note: `instr` medians moved by 1-2% between repeated runs
+   of the same arm while an lldb step job ran; per-change instruction
+   claims above therefore rely on the medians agreeing across separate
+   measurements, and a deterministic counter (stepped instructions per
+   request, or Linux Callgrind) is the reference for small changes.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2

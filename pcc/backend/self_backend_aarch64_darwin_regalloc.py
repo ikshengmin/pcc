@@ -550,6 +550,195 @@ def _needs_callee_saved(
     return _interval_touches_call(start, end - 1, call_positions)
 
 
+# Functions above this block count keep the linear-interval rule: the
+# refinement walks each flagged value's live blocks once more.
+_PRECISE_CALL_CROSSING_BLOCK_LIMIT = 2000
+
+
+class _PreciseCallCrossing:
+    """Whether a value is live across a call strictly inside its interval.
+
+    The linear interval runs from the definition to the last use in layout
+    position order; a call in a block between them where the value is dead
+    (a cold ``abort`` path) does not clobber anything the value needs. LLVM's
+    live intervals have holes there. Liveness is the per-value backward walk
+    of ``_function_liveness_facts`` (uses outside the defining block, through
+    predecessors, stopping at the defining block), built lazily for the
+    values the linear rule flags.
+    """
+
+    def __init__(self, kernel, block_base: list[int]) -> None:
+        self.kernel = kernel
+        self.block_base = block_base
+        self.ready = False
+        self.predecessors: list[list[int]] = []
+        self.def_block: dict[int, int] = {}
+        self.use_positions: dict[int, list[int]] = {}
+        self.use_blocks: dict[int, list[int]] = {}
+        self.extra_uses: list[tuple[int, int]] = []
+
+    def note_extra_use(self, value_id: int, position: int) -> None:
+        """A read the instruction stream does not show (a fused ``madd``
+        reads its multiply operands at the consumer)."""
+        self.extra_uses.append((value_id, position))
+
+    def _block_of(self, position: int) -> int:
+        low = 0
+        high = len(self.block_base)
+        while low + 1 < high:
+            middle = (low + high) // 2
+            if self.block_base[middle] <= position:
+                low = middle
+            else:
+                high = middle
+        return low
+
+    def _note(self, value_id: int, block_id: int, position: int) -> None:
+        if value_id < 0:
+            return
+        if value_id not in self.use_positions:
+            self.use_positions[value_id] = []
+            self.use_blocks[value_id] = []
+        self.use_positions[value_id].append(position)
+        self.use_blocks[value_id].append(block_id)
+
+    def _build(self) -> None:
+        kernel = self.kernel
+        block_count = len(kernel.block_names)
+        block_id = 0
+        while block_id < block_count:
+            self.predecessors.append([])
+            block_id += 1
+        block_id = 0
+        while block_id < block_count:
+            successor_count = kernel.cfg_successor_count(block_id)
+            successor_index = 0
+            while successor_index < successor_count:
+                target = kernel.cfg_successor_id(block_id, successor_index)
+                if 0 <= target < block_count:
+                    self.predecessors[target].append(block_id)
+                successor_index += 1
+            block_fact: CompilerInt4 = kernel.block_fact(block_id)
+            position = self.block_base[block_id]
+            instruction_index = 0
+            while instruction_index < block_fact.second:
+                fact: CompilerInt4 = kernel.instruction_fact_by_id(block_fact.first + instruction_index)
+                if fact.first >= 0:
+                    self.def_block[fact.first] = block_id
+                use_count = kernel.instruction_use_count(block_id, instruction_index)
+                use_index = 0
+                while use_index < use_count:
+                    self._note(kernel.instruction_use_id(block_id, instruction_index, use_index),
+                               block_id, position + instruction_index)
+                    use_index += 1
+                instruction_index += 1
+            end = position + block_fact.second
+            terminator_uses = kernel.terminator_use_count(block_id)
+            use_index = 0
+            while use_index < terminator_uses:
+                self._note(kernel.terminator_use_id(block_id, use_index), block_id, end)
+                use_index += 1
+            error_span = kernel.inline_error_edge_span(block_id)
+            error_index = 0
+            while error_index < error_span.second:
+                self._note(kernel.inline_error_edge_condition(error_span.first + error_index), block_id, end)
+                error_index += 1
+            phi_fact = kernel.block_phi_fact(block_id)
+            phi_index = 0
+            while phi_index < phi_fact.second:
+                phi: CompilerInt4 = kernel.phi_record(phi_fact.first + phi_index)
+                if phi.first >= 0:
+                    self.def_block[phi.first] = block_id
+                phi_index += 1
+            block_id += 1
+        # A phi input is read by the edge copy at its predecessor's end.
+        block_id = 0
+        while block_id < block_count:
+            phi_fact = kernel.block_phi_fact(block_id)
+            phi_index = 0
+            while phi_index < phi_fact.second:
+                phi = kernel.phi_record(phi_fact.first + phi_index)
+                incoming_index = 0
+                while incoming_index < phi.fourth:
+                    incoming = kernel.phi_incoming(phi.third + incoming_index)
+                    if 0 <= incoming.second < block_count:
+                        predecessor_fact: CompilerInt4 = kernel.block_fact(incoming.second)
+                        self._note(incoming.first, incoming.second,
+                                   self.block_base[incoming.second] + predecessor_fact.second)
+                    incoming_index += 1
+                phi_index += 1
+            block_id += 1
+        for value_id, position in self.extra_uses:
+            self._note(value_id, self._block_of(position), position)
+        self.ready = True
+
+    def _live_out_blocks(self, value_id: int) -> set[int]:
+        home = self.def_block.get(value_id, 0)
+        live_in: set[int] = set()
+        live_out: set[int] = set()
+        pending: list[int] = []
+        for block_id in self.use_blocks.get(value_id, []):
+            if block_id != home and block_id not in live_in:
+                live_in.add(block_id)
+                pending.append(block_id)
+        while pending:
+            block_id = pending.pop()
+            for predecessor in self.predecessors[block_id]:
+                live_out.add(predecessor)
+                if predecessor != home and predecessor not in live_in:
+                    live_in.add(predecessor)
+                    pending.append(predecessor)
+        return live_out
+
+    def crosses(self, value_id: int, start: int, end: int, calls: list[int],
+                simple_calls: set[int] | None) -> bool:
+        """The linear rule, except that an interior call needs the value live after it."""
+        if not self.ready:
+            self._build()
+        low = 0
+        high = len(calls)
+        while low < high:
+            middle = (low + high) // 2
+            if calls[middle] < start:
+                low = middle + 1
+            else:
+                high = middle
+        live_out: set[int] | None = None
+        while low < len(calls) and calls[low] <= end:
+            call = calls[low]
+            low += 1
+            if call == end:
+                if simple_calls is not None and end in simple_calls:
+                    continue
+                return True
+            if call == start:
+                return True
+            if live_out is None:
+                live_out = self._live_out_blocks(value_id)
+            block_id = self._block_of(call)
+            if block_id in live_out:
+                return True
+            for position in self.use_positions.get(value_id, []):
+                if position > call and self._block_of(position) == block_id:
+                    return True
+        return False
+
+
+def _call_crossing_needs_callee_saved(
+    precise: _PreciseCallCrossing | None,
+    value_id: int,
+    start: int,
+    end: int,
+    call_positions: list[int],
+    simple_calls: set[int] | None,
+) -> bool:
+    if not _needs_callee_saved(start, end, call_positions, simple_calls):
+        return False
+    if precise is None:
+        return True
+    return precise.crosses(value_id, start, end, call_positions, simple_calls)
+
+
 def _extend_aarch64_madd_operand_liveness(
     func: ParsedFunction,
     block_id: int,
@@ -1655,6 +1844,7 @@ def _append_argument_intervals(
     intervals: list[tuple[int, int, int, bool]],
     fixed_registers: dict[int, int],
     simple_calls: set[int] | None = None,
+    precise: _PreciseCallCrossing | None = None,
 ) -> None:
     """Add register-passed scalar arguments as candidates.
 
@@ -1700,7 +1890,9 @@ def _append_argument_intervals(
             continue
         if _interval_touches_call(0, last_use, hard_barriers):
             continue
-        crosses_call = _needs_callee_saved(0, last_use, call_barriers, simple_calls)
+        crosses_call = _call_crossing_needs_callee_saved(
+            precise, value_id, 0, last_use, call_barriers, simple_calls,
+        )
         if not crosses_call:
             fixed_registers[value_id] = int(regs[0][1:])
         intervals.append((-1, last_use, value_id, crosses_call))
@@ -1717,6 +1909,7 @@ def _append_phi_intervals(
     reload_offsets: set[int],
     intervals: list[tuple[int, int, int, bool]],
     simple_calls: set[int] | None = None,
+    precise: _PreciseCallCrossing | None = None,
 ) -> None:
     """Add a block's scalar phi results as candidates.
 
@@ -1784,7 +1977,9 @@ def _append_phi_intervals(
                 start,
                 last_use,
                 value_id,
-                _needs_callee_saved(base, last_use, call_barriers, simple_calls),
+                _call_crossing_needs_callee_saved(
+                    precise, value_id, base, last_use, call_barriers, simple_calls,
+                ),
             )
         )
 
@@ -2293,6 +2488,7 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
     x0_hints: list[int] = []
     cast_pairs: list[tuple[int, int]] = []
     returned_values: set[int] = set()
+    precise: _PreciseCallCrossing | None = None
     if callee_saved:
         returned_values = _returned_value_ids(kernel)
     if function_level:
@@ -2311,6 +2507,8 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
                 call_barriers = [position for position in call_barriers
                                  if position not in forwarding_positions]
             simple_calls = _simple_call_positions(kernel, block_base)
+            if len(kernel.block_names) <= _PRECISE_CALL_CROSSING_BLOCK_LIMIT:
+                precise = _PreciseCallCrossing(kernel, block_base)
         # A fused multiply reads its inputs at the consumer, not at the mul.
         # The per-block overrides below cover instruction results; arguments
         # and phis take their intervals straight from these last uses.
@@ -2326,6 +2524,8 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
                 known = global_last_use.get(operand_id)
                 if known is None or known < consumer_position:
                     global_last_use[operand_id] = consumer_position
+                if precise is not None:
+                    precise.note_extra_use(operand_id, consumer_position)
 
     for block_id in range(len(kernel.block_names)):
         block_name = kernel.block_names[block_id]
@@ -2361,6 +2561,7 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
                 reload_offsets,
                 pool_intervals,
                 simple_calls,
+                precise,
             )
 
         call_positions: list[int] = []
@@ -2571,8 +2772,8 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
                 if _interval_touches_call(barrier_start, last_use, hard_barriers):
                     position += 1
                     continue
-                needs = _needs_callee_saved(
-                    barrier_start, last_use, call_barriers, simple_calls
+                needs = _call_crossing_needs_callee_saved(
+                    precise, dest_id, barrier_start, last_use, call_barriers, simple_calls,
                 )
                 pool_intervals.append((live_start, last_use, dest_id, needs))
                 if not needs and (is_call_result or dest_id in returned_values):
@@ -2621,7 +2822,7 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
         _append_argument_intervals(
             func, kernel, phi_input_ids, global_last_use, hard_barriers,
             call_barriers, reload_offsets, pool_intervals, fixed_registers,
-            simple_calls,
+            simple_calls, precise,
         )
         for hinted in x0_hints:
             if hinted not in fixed_registers:
