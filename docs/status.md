@@ -5089,6 +5089,7 @@ in the relevant section or issue and removes the entry.
    Claims:
    - Actual default MIR-OFF indexed x64 CFG-shell/PHI emission attribution (self_backend_x86_64_linux.py + self_backend_emit.py, exact branch/PHI projection and per-edge scan upper bound, no source edit before evidence; verifier/CI disjoint): Codex, Linux, 2026-11-27T06:42Z, area backend
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
+   - Direct indexed packed operand projection repeated-work attribution (actual class_gen OFF PIDX counts, duplicate call-argument reads and top-level intern identities; pcc/backend/self_backend_ir.py and self_backend_kernel.py plus focused bridge tests only; no emitter/CFG/CSR or persistent cache): Codex, Linux, 2026-11-27T06:17Z, area runtime-codegen
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
