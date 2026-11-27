@@ -6243,8 +6243,56 @@ in the relevant section or issue and removes the entry.
    native scanner CPU/RSS 5-pair controls only if credible.
    CI/Stage1 heavy priority, source-only prep.
 
+   Stage2 uncached TYPE_CHECKING negative lexical shortcut
+   (rejected, no production): actual current public9605 calls,
+   uncached624, eligible502/624 misses (80.45%, only5.23% public),
+   raw12,044,219B/alias8,870,578B/282,113 alias lines. All
+   discovery prehit0; actual eligible original second scan0,
+   other122 misses only1 second scan338 lines. Exact corrected
+   predicate raw TYPE_CHECKING absent AND discovery alias text
+   lacks literal from typing import prefix, both exact str.
+   Fragmented parenthesized aliases can synthesize flag text,
+   so marker absence alone unsafe. Original discovery hook/cache,
+   custom callbacks, direct split/join identity and fallback
+   retained. Test-first intended256 strip count red+14 pass
+   ->81/81+56 subtests, exact current graph SHA060ffe8d,
+   strict scanner59 funcs/24,650 inst zero fallback/no libpython.
+   Actual cold scanner fixture12 exact old files262,761B
+   +25 alias/separator controls, host38 rows exact SHA bac06307,
+   native baseline all content/length/cache identity exact host,
+   11 known one-line join identity differences unchanged.
+   Exact baseline archive strict verified, candidate fresh
+   archive byte-identical distinct provenance; static native
+   ELF dd9a813a/361ce4e6, all38 native rows exact SHAedb64215.
+   Exclusive five alternating A/B/control triples all15 exact:
+   CPU.074757->.071370s (-4.531%,4/5, unchanged control
+   -3.875%; paired normalized-2.428%, max unchanged drift
+   .035013s), wall-4.414%4/5 ctrl-3.857%, RSS median13,312
+   unchanged4 ties/one+512KiB within control512. Gain within
+   unchanged control, no reliable native effect: reject,
+   no expensive retry or production. Raw formal SHA256
+   4eefb8435663d8d8c2f261c38c09058fb574c396612e10d9fe6e2b388fc40a80;
+   guard SHA e6074855c05c6ee61a9905605c1e54603f93b5ce33a0594ec1ea436062979350.
+   User latest all pushes skip CI; no new complete CI while
+   any queued/running, no cancellation. Pause low-impact lexical.
+
+   Independent high-priority complementary same-IR backend
+   static comparison (source/read-only attribution): Stage1
+   owns actual py_obj/allocator/JSON/virtual thread corpus.
+   Stage2 owns exact archived Linux post-pass IR container
+   list/dict lock/get/set/append and TLS exception/state helpers,
+   per-object IR and current runtime source SHA verified.
+   Same selected function bodies and globals/types, triple-only
+   x64 Linux vs AArch64 Linux default and optimized. Count
+   static instruction/code bytes/direct stack accesses/scratch
+   moves/branches/calls, not dynamic instruction count or IPC.
+   AArch64 Darwin ABI projection optional only admissible exact
+   TLS bodies, not actual Mac profile. Audit register allocation
+   gates/design independently; no duplicate candidate edits.
+   Stage1 script smoke first, GC/CI priority heavy; no CI.
+
    Claims:
-   - Stage2 uncached TYPE_CHECKING negative lexical attribution: Codex, Linux, 2026-11-27T01:23Z, area selfhost
+   - Stage2 complementary same-IR container/TLS backend static attribution: Codex, Linux, 2026-11-27T01:41Z, area selfhost-cross-backend
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
