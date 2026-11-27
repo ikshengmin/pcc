@@ -1253,3 +1253,87 @@ def test_reference_runtime_adds_codegen_options(tmp_path, monkeypatch):
 def test_reference_runtime_rejects_malformed_kinds(kind):
     with pytest.raises(SystemExit, match="opt:PIPELINE"):
         PERF._reference_plan(kind)
+
+
+# ---- steps: executed instructions per function, by single-stepping ----------
+
+NM_TEXT = """\
+0000000100000000 T __mh_execute_header
+0000000100001000 T _alpha
+0000000100001040 t _beta
+0000000100001080 T _gamma
+0000000100002000 S _data_symbol
+"""
+
+
+def test_step_symbols_keep_text_functions_in_address_order():
+    symbols = PERF.parse_step_symbols(NM_TEXT)
+    assert symbols == [(0x100001000, "alpha"), (0x100001040, "beta"), (0x100001080, "gamma")]
+
+
+OTOOL_TEXT = """\
+Section
+  sectname __text
+   segname __TEXT
+      addr 0x0000000100001000
+      size 0x0000000000000100
+Section
+  sectname __stubs
+   segname __TEXT
+      addr 0x0000000100001100
+      size 0x0000000000000018
+Section
+  sectname __data
+   segname __DATA
+      addr 0x0000000100002000
+      size 0x0000000000000010
+"""
+
+
+def test_stepped_pcs_count_under_the_enclosing_function_after_the_slide():
+    symbols = PERF.parse_step_symbols(NM_TEXT)
+    sections = PERF.parse_step_sections(OTOOL_TEXT)
+    assert sections == [(0x100001000, 0x100001100, "__text"), (0x100001100, 0x100001118, "__stubs")]
+    slide = 0x4000
+    pcs = [0x100005000, 0x10000503C, 0x100005040, 0x100005090, 0x100005090, 0x100004FFF,
+           0x100005104, 0x100005110, 0x180001000]
+    counts = PERF.step_function_counts(symbols, pcs, slide, sections)
+    # Linker stubs after the last function are not that function's, and a
+    # PC outside the image (a system library) is no function of it.
+    assert counts == {"alpha": 2, "beta": 1, "gamma": 2, "<outside>": 2, "<__stubs>": 2}
+
+
+def test_steps_normalize_the_second_arm_by_shared_program_code():
+    first = {"program_a": 600, "program_b": 400, "runtime_x": 900, "<__stubs>": 30}
+    second = {"program_a": 300, "program_b": 200, "runtime_x": 300, "runtime_y": 50}
+    runtime = {"runtime_x", "runtime_y"}
+    scale = PERF.step_program_scale(first, second, runtime)
+    # The second window ran half the program work: count it twice.
+    assert scale == 2.0
+    assert PERF.step_program_scale(first, {"runtime_x": 5}, runtime) is None
+
+
+def test_step_output_reports_markers_slide_and_pcs():
+    text = "markers 3 steps 4 slide 4000 seconds 1.5\n100005000\n100005004\n100005008\n10000500c\n"
+    assert PERF.parse_step_output(text) == (3, 0x4000, [0x100005000, 0x100005004, 0x100005008, 0x10000500C])
+    with pytest.raises(SystemExit, match="marker"):
+        PERF.parse_step_output("markers 0 steps 2 slide 0 seconds 0.1\n1\n2\n")
+
+
+def test_step_rows_are_per_request_and_ordered_by_largest_change():
+    first = {"alpha": 300, "beta": 60, "gamma": 30}
+    second = {"alpha": 100, "beta": 80, "delta": 40}
+    # The second arm's counts arrive already scaled to the first's work.
+    rows = PERF.step_rows(first, 3, second, limit=10)
+    assert rows[0] == ("alpha", 100.0, 100 / 3, 100 / 3 - 100.0)
+    assert [row[0] for row in rows] == ["alpha", "delta", "gamma", "beta"]
+    assert rows[2] == ("gamma", 10.0, 0.0, -10.0)
+    assert rows[1] == ("delta", 0.0, 40 / 3, 40 / 3)
+    alone = PERF.step_rows(first, 3, None, limit=2)
+    assert alone == [("alpha", 100.0, None, None), ("beta", 20.0, None, None)]
+
+
+def test_steps_refuse_hosts_without_lldb(monkeypatch):
+    monkeypatch.setattr(PERF.sys, "platform", "linux")
+    with pytest.raises(SystemExit, match="Darwin"):
+        PERF.main(["steps", "base"])

@@ -21,6 +21,9 @@
                         user instruction reads (Ir), not cycles or IPC;
                         --functions N reports exclusive Ir by reported symbol;
                         a control arm shows how far each moves unchanged
+    steps A [B]         executed instructions per request by function on the
+                        request thread (Darwin, lldb single-stepping); with B,
+                        the functions that differ most
     table NAME          one and four workers, against the recorded asyncio
                         figure for the same worker count
     asyncio             measure the CPython asyncio counterpart with one and
@@ -1824,6 +1827,235 @@ def print_instruction_functions(function_results: dict, limit: int) -> None:
         print("  each run reconciles to total Ir; separate symbol medians need not sum to the total median")
 
 
+# ---- steps: executed instructions per function (Darwin, lldb) --------------
+#
+# Hardware counters give a request's instruction total, not where the
+# instructions run. `steps` single-steps the handler's request thread under
+# lldb after a warm-up, records every PC, and charges each to the function
+# that encloses it; marker hits (a function the handler calls once per
+# request) turn counts into instructions per request. Exact and independent
+# of machine load, but slow: about one request per 230k steps.
+
+_STEP_SCRIPT = r'''
+import os
+import time
+
+import lldb
+
+
+def __lldb_init_module(debugger, internal):
+    debugger.SetAsync(False)
+    target = debugger.GetSelectedTarget()
+    bp = target.BreakpointCreateByName(os.environ["PCC_STEP_MARKER"])
+    bp.SetIgnoreCount(int(os.environ["PCC_STEP_WARM"]))
+    error = lldb.SBError()
+    process = target.Launch(target.GetLaunchInfo(), error)
+    if not error.Success() or process.GetState() != lldb.eStateStopped:
+        print("PCC_STEP_FAILED launch", error, process.GetState())
+        return
+    thread = process.GetSelectedThread()
+    marker = bp.GetLocationAtIndex(0).GetLoadAddress()
+    target.BreakpointDelete(bp.GetID())
+    header = target.FindModule(target.GetExecutable()).GetObjectFileHeaderAddress()
+    slide = header.GetLoadAddress(target) - header.GetFileAddress()
+    pcs = []
+    markers = 0
+    started = time.time()
+    for _ in range(int(os.environ["PCC_STEP_COUNT"])):
+        pc = thread.GetFrameAtIndex(0).GetPC()
+        pcs.append(pc)
+        if pc == marker:
+            markers += 1
+        thread.StepInstruction(False)
+        if process.GetState() != lldb.eStateStopped:
+            break
+    with open(os.environ["PCC_STEP_OUT"], "w") as stream:
+        stream.write("markers %d steps %d slide %x seconds %.1f\n"
+                     % (markers, len(pcs), slide, time.time() - started))
+        for pc in pcs:
+            stream.write("%x\n" % pc)
+    process.Kill()
+'''
+
+
+def parse_step_symbols(nm_text: str) -> list[tuple[int, str]]:
+    """Text symbols of ``nm -n`` output in address order, without the
+    Mach-O leading underscore; the header symbol is not a function."""
+    symbols = []
+    for line in nm_text.splitlines():
+        fields = line.split()
+        if len(fields) != 3 or fields[1] not in ("T", "t"):
+            continue
+        name = fields[2][1:] if fields[2].startswith("_") else fields[2]
+        if name == "_mh_execute_header":
+            continue
+        symbols.append((int(fields[0], 16), name))
+    symbols.sort()
+    return symbols
+
+
+def parse_step_sections(otool_text: str) -> list[tuple[int, int, str]]:
+    """(start, end, name) of each __TEXT section in ``otool -l`` output."""
+    sections = []
+    current: dict = {}
+    for line in otool_text.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[0] in ("sectname", "segname", "addr", "size"):
+            current[fields[0]] = fields[1]
+            if fields[0] == "size" and current.get("segname") == "__TEXT":
+                start = int(current["addr"], 16)
+                sections.append((start, start + int(fields[1], 16), current["sectname"]))
+            if fields[0] == "size":
+                current = {}
+    sections.sort()
+    return sections
+
+
+def step_function_counts(symbols: list[tuple[int, str]], pcs: list[int], slide: int,
+                         sections: list[tuple[int, int, str]] = ()) -> dict:
+    """Each PC under the function enclosing it; a PC in another __TEXT
+    section (linker stubs, veneers) is that section's, not the function's
+    laid out before it."""
+    addresses = [address for address, _name in symbols]
+    other = [(start, end, name) for start, end, name in sections if name != "__text"]
+    low = min((start for start, _end, _name in sections), default=None)
+    high = max((end for _start, end, _name in sections), default=None)
+    counts = collections.Counter()
+    for pc in pcs:
+        address = pc - slide
+        if low is not None and not low <= address < high:
+            counts["<outside>"] += 1
+            continue
+        section = next((name for start, end, name in other if start <= address < end), None)
+        if section is not None:
+            counts["<" + section + ">"] += 1
+            continue
+        index = bisect.bisect_right(addresses, address) - 1
+        counts[symbols[index][1] if index >= 0 else "<outside>"] += 1
+    return dict(counts)
+
+
+def step_program_scale(first: dict, second: dict, runtime: set) -> float | None:
+    """How much more program work the first window ran than the second.
+
+    The benchmark program is self-compiled in every arm, so its functions
+    execute the same instructions per unit of work; only the runtime (and
+    stubs) differs. Scaling the second arm by this ratio compares the two
+    runtimes at equal work even when the stepped windows cover different
+    parts of the requests."""
+    def program(counts: dict) -> int:
+        return sum(count for name, count in counts.items()
+                   if name not in runtime and not name.startswith(("<", "?")))
+    first_program, second_program = program(first), program(second)
+    if not first_program or not second_program:
+        return None
+    return first_program / second_program
+
+
+def parse_step_output(text: str) -> tuple[int, int, list[int]]:
+    lines = text.splitlines()
+    head = lines[0].split() if lines else []
+    if len(head) < 6 or head[0] != "markers":
+        raise SystemExit("steps: lldb wrote no step record")
+    markers, slide = int(head[1]), int(head[5], 16)
+    if markers <= 0:
+        raise SystemExit("steps: the marker was not reached while stepping; step more")
+    return markers, slide, [int(line, 16) for line in lines[1:] if line]
+
+
+def step_rows(first: dict, first_requests: int, second: dict | None, *,
+              limit: int) -> list[tuple]:
+    """Instructions per request by function; against a second arm (counts
+    already scaled to the first arm's work), the largest change first."""
+    per_first = {name: count / first_requests for name, count in first.items()}
+    if second is None:
+        ordered = sorted(per_first.items(), key=lambda item: (-item[1], item[0]))
+        return [(name, value, None, None) for name, value in ordered[:limit]]
+    per_second = {name: count / first_requests for name, count in second.items()}
+    rows = []
+    for name in set(per_first) | set(per_second):
+        before, after = per_first.get(name, 0.0), per_second.get(name, 0.0)
+        rows.append((name, before, after, after - before))
+    rows.sort(key=lambda row: (-abs(row[3]), row[0]))
+    return rows[:limit]
+
+
+def run_steps(name: str, count: int, warm: int, marker: str, rounds: int) -> tuple[dict, int, int]:
+    """(instructions by function, marker hits, steps) for one arm."""
+    binary = binary_of(name)
+    with tempfile.TemporaryDirectory(prefix="pcc-steps-") as scratch:
+        script = Path(scratch) / "pcc_step.py"
+        script.write_text(_STEP_SCRIPT)
+        out = Path(scratch) / "pcs.txt"
+        env = dict(os.environ, PCC_STEP_MARKER=marker, PCC_STEP_WARM=str(warm),
+                   PCC_STEP_COUNT=str(count), PCC_STEP_OUT=str(out))
+        env.update(_sealed_runtime_env(binary, COLLECTORS[0]))
+        env["PATH"] = os.environ.get("PATH", "")
+        ran = subprocess.run(
+            ["xcrun", "lldb", "--batch", "-o", f"command script import {script}",
+             "--", str(binary), "20", "0", str(rounds), "--summary", "1"],
+            capture_output=True, text=True, env=env, timeout=3600)
+        if not out.is_file():
+            raise SystemExit(f"steps: lldb failed on {name}: {ran.stdout[-400:]} {ran.stderr[-400:]}")
+        record = out.read_text()
+        markers, slide, pcs = parse_step_output(record)
+    # Keep the raw record: a new attribution needs no new half-hour of stepping.
+    (arm_dir(name) / f"steps-{count}-{marker}.txt").write_text(record)
+    nm = subprocess.run(["xcrun", "nm", "-n", str(binary)], capture_output=True, text=True,
+                        check=True).stdout
+    otool = subprocess.run(["xcrun", "otool", "-l", str(binary)], capture_output=True, text=True,
+                           check=True).stdout
+    counts = step_function_counts(parse_step_symbols(nm), pcs, slide, parse_step_sections(otool))
+    return counts, markers, len(pcs)
+
+
+def runtime_function_names(name: str) -> set:
+    """Functions the arm's owned runtime archive defines (a reference arm's
+    archive is built from the same members' IR, so the names agree)."""
+    report = _read_arm_json(arm_dir(name) / "build.json")
+    archive = report.get("runtime")
+    if not archive or not Path(archive).is_file():
+        raise SystemExit(f"arm {name} records no runtime archive")
+    nm = subprocess.run(["xcrun", "nm", "-g", "-U", "-j", archive], capture_output=True,
+                        text=True, check=True).stdout
+    return {line[1:] if line.startswith("_") else line
+            for line in nm.splitlines() if line and not line.endswith(":")}
+
+
+def print_steps(names: list[str], count: int, warm: int, marker: str, rounds: int,
+                limit: int) -> None:
+    if sys.platform != "darwin":
+        raise SystemExit("steps single-steps under lldb and needs Darwin")
+    if not 1 <= len(names) <= 2:
+        raise SystemExit("steps takes one arm or two")
+    measured = [run_steps(name, count, warm, marker, rounds) for name in names]
+    for name, (counts, markers, steps) in zip(names, measured):
+        print(f"{name}: {steps} steps, {markers} requests (hits of {marker}), "
+              f"{steps / markers:.0f} instructions per request on the stepped thread")
+    if len(measured) == 1:
+        for function, value, _after, _change in step_rows(measured[0][0], measured[0][1], None,
+                                                          limit=limit):
+            print(f"{value:10.1f}  {function}")
+        return
+    runtime = runtime_function_names(names[0])
+    scale = step_program_scale(measured[0][0], measured[1][0], runtime)
+    if scale is None:
+        raise SystemExit("steps: a window ran no program code; step more")
+    second = {function: count * scale for function, count in measured[1][0].items()}
+    def total(counts: dict, runtime_only: bool) -> float:
+        return sum(count for function, count in counts.items()
+                   if not runtime_only or function in runtime or function.startswith("<"))
+    print(f"program work scale {names[1]} x{scale:.3f}; per request of {names[0]}: "
+          f"all {total(measured[0][0], False) / measured[0][1]:.0f} -> "
+          f"{total(second, False) / measured[0][1]:.0f}, runtime and stubs "
+          f"{total(measured[0][0], True) / measured[0][1]:.0f} -> "
+          f"{total(second, True) / measured[0][1]:.0f}")
+    rows = step_rows(measured[0][0], measured[0][1], second, limit=limit)
+    print(f"instructions per request: {names[0]} -> {names[1]}, largest change first")
+    for function, before, after, change in rows:
+        print(f"{before:10.1f} {after:10.1f} {change:+10.1f}  {function}")
+
+
 def load_note(load: float) -> str:
     """What the machine's one-minute load says about a wall-clock rate."""
     cores = os.cpu_count() or 1
@@ -2513,6 +2745,15 @@ def main(argv: list[str] | None = None) -> int:
     instr.add_argument("--functions", type=int, default=0, metavar="N",
                        help="top N reported symbol groups by exclusive Ir/request (Callgrind only)")
 
+    steps = commands.add_parser("steps")
+    steps.add_argument("names", nargs="+")
+    steps.add_argument("--count", type=int, default=2000000, help="instructions to step")
+    steps.add_argument("--warm", type=int, default=60, help="marker hits before stepping")
+    steps.add_argument("--marker", default="user_json_dumps",
+                       help="a function the handler calls once per request")
+    steps.add_argument("--rounds", type=int, default=400)
+    steps.add_argument("--limit", type=int, default=40)
+
     table = commands.add_parser("table")
     table.add_argument("name")
     table.add_argument("--rounds", type=int, default=100)
@@ -2634,6 +2875,9 @@ def main(argv: list[str] | None = None) -> int:
         print_comparison(rows)
         append_ledger(rows)
         return 0
+    if args.command == "steps":
+        print_steps(args.names, args.count, args.warm, args.marker, args.rounds, args.limit)
+        return
     if args.command == "instr":
         if args.short_rounds < 0 or args.long_rounds <= args.short_rounds:
             raise SystemExit("--long-rounds must exceed nonnegative --short-rounds")

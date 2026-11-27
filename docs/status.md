@@ -3046,6 +3046,71 @@ in the relevant section or issue and removes the entry.
    and the emitted program runs). Focused inliner/runtime-pass files 132
    passed; arm smoke and primitives exact against CPython. Not run: whole
    Python suite, GC integration gate, bootstrap/self-host.
+   Which LLVM step the self passes lack (Claude, local Mac, 2026-11-27,
+   labeled reference experiments built with `pcc_perf.py arm
+   --reference-runtime opt:PIPELINE|llc:OPTIONS`, source 52096e63e, each
+   `ab` five pairs at w1 against arm abl-cg = LLVM code generation alone,
+   control abl-cg2 = a second build of it, load 4.8-8). Self against abl-cg:
+   65005 -> 80974 req/s (+24.6%). Removing one LLVM code generation step:
+   register allocation replaced by `regalloc=fast` -44.7% (0/5; cycles
+   +36%, below self; measured on head-clangcg, control mislabeled, verdict
+   from the pairs and cycles), block placement off -6.3% (0/5, floor 1.3%),
+   shrink-wrapping off +4.5% (5/5, floor 3.7%: LLVM is not faster with it
+   here), machine CSE/sink/LICM off +2.3%, peephole off +1.9%
+   (inconclusive), branch folding and tail duplication off +1.5% (noise);
+   FastISel's runtime failed its smoke (json.dumps), not measured. Adding
+   one LLVM IR pipeline: `cgscc(inline)` +5.2%, `instcombine` +3.7%,
+   `sroa,early-cse,gvn` +1.5% (noise), `simplifycfg` +0.9%, `default<O2>`
+   +13.4%. So register allocation is the step that carries the gap, then
+   block placement and inlining; shrink-wrapping is not. The self allocator
+   already places most scalar values (four hot modules: 15845 assigned, 280
+   lost to pool pressure, about 1200 kept in slots by rule), but its linear
+   scan evicts the furthest-ending interval (a function argument used on the
+   hot entry path loses first, as in `py_obj_eq_value`), has no spill
+   weights, no live-range splitting and no holes. Greedy's parts ranked the
+   same way (source a96e2c9a3, arms ra-cg/ra-cg2): `regalloc=basic` (no
+   splitting or eviction) +0.5% (noise), coalescing off
+   (`join-liveintervals=false`) +2.6%: neither splitting nor coalescing
+   carries the gap here; `regalloc=fast` loses by spilling every value at
+   block boundaries, which the self allocator does not do. Per-function
+   time against abl-cg is flat (15.26 -> 12.03 us; largest
+   `pcc_container_unlock` 0.30 -> 0.11, then `memset`, the granule test,
+   `free`).
+   (j) Not merged, no request-level gain (Claude, 2026-11-27): acquire
+   loads as RCpc `ldapr` on Darwin (LLVM's lowering; `ldar` is RCsc and
+   waits for an earlier `stlr`; 1406 acquire loads in the runtime, none
+   seq_cst; Linux keeps `ldar`). Arms rc-base/rc-base2 (a96e2c9a3) and
+   rc-new, all 2553 `ldar` became `ldapr`: w1 63540 -> 64250 (+1.1%, 5/5,
+   floor 3.2%: noise), w4 -1.4% (floor 7.0%), cycles -1.8% against control
+   -2.3%. Patch, encodings (clang 20 words) and native test kept outside
+   the repository as `p0-rcpc-acquire-loads.diff`. Also not merged, same
+   arms: the runtime pass list on `freestanding_thread_kernel_pthread`
+   (`owned_runtime_build` skips it, mirroring the Makefile rule; no recorded
+   reason besides implicit safepoints): w1 +0.9%, w4 -3.2%, both
+   inconclusive, instructions -0.06%
+   (`p0-thread-kernel-runtime-passes.diff`).
+   Where the executed instructions differ (Claude, 2026-11-27): self and
+   LLVM code generation have the same IPC on this workload (228k/53k and
+   179k/42k per request), so the cycle gap is the instruction gap, and
+   instructions per request (run spread under 1%) are the per-change
+   measure; request rates resolve only accumulated changes on this host.
+   `pcc_perf.py steps A B` single-steps the request thread under lldb,
+   charges each PC to its function (linker stubs, veneers and system
+   libraries separately), keeps the raw record in the arm, and scales the
+   second arm by the shared self-compiled program code to equal work.
+   rc-base against ra-cg, 600000 steps each: runtime 506845 against 381651
+   executed instructions at equal work (+33%), spread over 40+ functions
+   (`str_join_list`, `granule_is_object_start`, container lock/unlock,
+   `py_obj_eq_value`, `free` lead). By class: ALU +37k (`and #imm` +15.7k,
+   mostly a bit or mask test before cbz/cbnz/cmp that LLVM folds into
+   tbz/tbnz/tst; `add` reg+reg +12.5k, address arithmetic LLVM folds into
+   the access; `lsl` +4k, `ubfiz`/shifted operands), value stack slots
+   +23k (`stur`/`ldur [x29]` +12k, alignment-hole `sturb` zeroing +5k,
+   `[sp]` +6k), register copies +22k, unconditional `b` +12k (layout),
+   `cmp #imm` +8.5k (LLVM uses `ccmp` chains, -2.9k), `sxtb`/`sxtw` +6k,
+   immediates +5k; frames entered and calls are not higher (self makes
+   fewer calls). The gap is instruction selection and local placement of
+   values across many patterns, not one pass.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2
