@@ -1803,8 +1803,12 @@ def emit_compute_instruction_by_id(
                             reg_name_indexed(indexed_kernel, value_type_id, rhs_register),
                         )
                     )
-                if indexed_dest_id in func.aarch64_fused_branch_values:
-                    # The block's br_cond branches on these flags directly.
+                if (
+                    indexed_dest_id in func.aarch64_fused_branch_values
+                    or indexed_dest_id in func.aarch64_fused_select_values
+                ):
+                    # The block's br_cond, or the select right after this
+                    # compare, reads these flags directly.
                     return lines
                 result_type_id = indexed_kernel.value_type_id(indexed_dest_id)
                 boolean_registers = boolean_register_lowering_enabled()
@@ -2023,12 +2027,40 @@ def emit_compute_instruction_by_id(
                     if select_record.second >= 0
                     else indexed_kernel.intern_type(I1)
                 )
+                # As for icmp operands: a 32/64-bit or pointer operand already
+                # in its allocated register is selected there, and the result
+                # is selected straight into its own register.
+                true_register = 10
+                false_register = 11
+                result_register = 12
+                if callee_saved_registers_enabled() and (
+                    value_type_header.first == TYPE_KIND_PTR
+                    or (value_type_header.first == TYPE_KIND_INT
+                        and value_type_header.second in (32, 64))
+                ):
+                    if select_record.third >= 0:
+                        allocated = allocated_scalar_register_indexed(
+                            indexed_kernel, select_record.third, value_type_id,
+                        )
+                        if allocated >= 0:
+                            true_register = allocated
+                    if select_record.fourth >= 0:
+                        allocated = allocated_scalar_register_indexed(
+                            indexed_kernel, select_record.fourth, value_type_id,
+                        )
+                        if allocated >= 0:
+                            false_register = allocated
+                    allocated = allocated_scalar_register_indexed(
+                        indexed_kernel, indexed_dest_id, value_type_id,
+                    )
+                    if allocated >= 0:
+                        result_register = allocated
                 lines = materialize_scalar_value_indexed(
                     func,
                     indexed_kernel,
                     true_value,
                     value_type_id,
-                    10,
+                    true_register,
                     module_symbols,
                     value_id=select_record.third,
                 )
@@ -2038,30 +2070,37 @@ def emit_compute_instruction_by_id(
                         indexed_kernel,
                         false_value,
                         value_type_id,
-                        11,
+                        false_register,
                         module_symbols,
                         value_id=select_record.fourth,
                     )
                 )
-                lines.extend(
-                    materialize_scalar_value_indexed(
-                        func,
-                        indexed_kernel,
-                        cond,
-                        cond_type_id,
-                        9,
-                        module_symbols,
-                        value_id=select_record.second,
+                # A compare fused into this select set the flags just before
+                # it (_fusable_select_conditions); the operand moves and
+                # loads above leave them.
+                selected_cc = "ne"
+                if select_record.second >= 0 and select_record.second in func.aarch64_fused_select_values:
+                    selected_cc = aarch64_cc(func.aarch64_fused_select_values[select_record.second])
+                else:
+                    lines.extend(
+                        materialize_scalar_value_indexed(
+                            func,
+                            indexed_kernel,
+                            cond,
+                            cond_type_id,
+                            9,
+                            module_symbols,
+                            value_id=select_record.second,
+                        )
                     )
-                )
-                lines.append(emitted_compare_immediate_line("w9", 0))
+                    lines.append(emitted_compare_immediate_line("w9", 0))
                 mnemonic = (
                     "fcsel"
                     if value_type_header.first == TYPE_KIND_FP
                     else "csel"
                 )
                 lines.append(
-                    emitted_scalar_register_line(mnemonic, reg_name_indexed(indexed_kernel, value_type_id, 12), reg_name_indexed(indexed_kernel, value_type_id, 10), reg_name_indexed(indexed_kernel, value_type_id, 11), 'ne')
+                    emitted_scalar_register_line(mnemonic, reg_name_indexed(indexed_kernel, value_type_id, result_register), reg_name_indexed(indexed_kernel, value_type_id, true_register), reg_name_indexed(indexed_kernel, value_type_id, false_register), selected_cc)
                 )
                 lines.extend(
                     _commit_or_spill_scalar_result_indexed(
@@ -2069,7 +2108,7 @@ def emit_compute_instruction_by_id(
                         indexed_kernel,
                         indexed_dest_id,
                         value_type_id,
-                        reg_name_indexed(indexed_kernel, value_type_id, 12),
+                        reg_name_indexed(indexed_kernel, value_type_id, result_register),
                     )
                 )
                 return lines

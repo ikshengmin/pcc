@@ -1428,6 +1428,10 @@ class ParsedFunction:
     # their block's br_cond: the compare only sets the flags, the terminator
     # branches on them, and the i1 is never materialised.
     aarch64_fused_branch_values: dict[int, int] = field(default_factory=dict)
+    # icmp value id -> its predicate for compares the AArch64 allocator fused
+    # into the select that immediately follows them: the compare only sets
+    # the flags and the select's csel reads them.
+    aarch64_fused_select_values: dict[int, str] = field(default_factory=dict)
     # Fused compares that test a masked value (``tst x, #C``), by icmp value
     # id: the tested value id, the mask, and the condition on the flags that
     # selects the true edge ("eq" when the masked value is zero).  The folded

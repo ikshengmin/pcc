@@ -2059,6 +2059,7 @@ def _parse_functions(ir_text: str, *, type_context=None) -> list[ParsedFunction]
                 aarch64_callee_saved=[],
                 aarch64_reload_slot_offsets=[],
                 aarch64_fused_branch_values={},
+                aarch64_fused_select_values={},
                 aarch64_frameless=False, type_context=type_context,
                 aarch64_dynamic_stack=False,
             )

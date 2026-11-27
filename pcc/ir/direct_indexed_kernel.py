@@ -2167,6 +2167,7 @@ def build_direct_indexed_function(function: _ir.Function, *, type_context=None) 
         aarch64_callee_saved=[],
         aarch64_reload_slot_offsets=[],
         aarch64_fused_branch_values={},
+        aarch64_fused_select_values={},
         aarch64_frameless=False,
         aarch64_dynamic_stack=False,
     )

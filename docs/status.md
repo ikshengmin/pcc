@@ -3440,6 +3440,18 @@ in the relevant section or issue and removes the entry.
    over list, tuple and dict operations, and the list/dict owner files
    against the h18 archive (129 + 3 integration passed); the dict
    materialization harness now admits the debug-cache read.
+   (aa) Merged (Claude, 2026-11-28): an integer or pointer icmp whose
+   only use is the select right after it sets the flags for that select's
+   `csel` (`_fusable_select_conditions`): no `cset`, byte mask, copy and
+   second compare (ten instructions for `pcc_gc_load_ptr`'s NULL-slot
+   guard in every item loop). The select also selects from and into the
+   operands' and result's allocated registers (32/64-bit, pointer), so
+   `smax` is `cmp x0, x1; csel x0, x0, x1, gt`. Exact h18-hdr -> h19-sel
+   109442 -> 106848 (-2.37%). Tests: fused and kept forms (second use,
+   instruction between, i1 select) execute natively under both
+   allocators with typed/text agreement; backend, Mach-O and TLS files
+   7259 passed (no-host gate needs pcc1, a stack-map test needs
+   PCC_RUNTIME_ARCHIVE: environment prerequisites).
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2

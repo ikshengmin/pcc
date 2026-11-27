@@ -2097,6 +2097,108 @@ def _fusable_branch_conditions(kernel) -> dict[int, int]:
 
 
 
+def _fusable_select_conditions(kernel) -> dict[int, str]:
+    """Compares the select right after them can take from the flags.
+
+    An integer or pointer icmp immediately followed, in its block, by a
+    select of an integer (8 to 64 bits) or pointer whose condition is that
+    icmp, and with no other use in the function, needs no i1: the compare
+    sets NZCV and the csel reads it. Only the select's operand moves and
+    loads are emitted between the two. Returns ``{icmp value id: predicate}``.
+    """
+
+    candidates: dict[int, str] = {}
+    block_id = 0
+    while block_id < len(kernel.block_names):
+        block_fact: CompilerInt4 = kernel.block_fact(block_id)
+        index = 0
+        while index + 1 < block_fact.second:
+            icmp_id = block_fact.first + index
+            metadata: CompilerInt4 = kernel.instruction_metadata_by_id(icmp_id)
+            following: CompilerInt4 = kernel.instruction_metadata_by_id(icmp_id + 1)
+            if (
+                metadata.first == PARSED_INSTRUCTION_KIND_ICMP
+                and following.first == PARSED_INSTRUCTION_KIND_SELECT
+            ):
+                fact: CompilerInt4 = kernel.instruction_fact_by_id(icmp_id)
+                icmp: CompilerInt4 = kernel.instruction_record(metadata.second)
+                select: CompilerInt4 = kernel.instruction_record(following.second)
+                compared: CompilerInt4 = kernel.type_header(icmp.second)
+                selected: CompilerInt4 = kernel.type_header(select.first)
+                if (
+                    fact.first >= 0
+                    and select.second == fact.first
+                    and select.third != fact.first
+                    and select.fourth != fact.first
+                    and (
+                        compared.first == TYPE_KIND_PTR
+                        or (compared.first == TYPE_KIND_INT
+                            and compared.second in (1, 8, 16, 32, 64))
+                    )
+                    and (
+                        selected.first == TYPE_KIND_PTR
+                        or (selected.first == TYPE_KIND_INT
+                            and selected.second in (8, 16, 32, 64))
+                    )
+                ):
+                    candidates[fact.first] = kernel.call_texts[icmp.first]
+            index += 1
+        block_id += 1
+    if not candidates:
+        return candidates
+
+    # The select's condition is the one use allowed: any second instruction
+    # operand, terminator use, phi input or inline error edge condition
+    # reads the materialised i1.
+    uses: dict[int, int] = {}
+    rejected: dict[int, bool] = {}
+    block_id = 0
+    while block_id < len(kernel.block_names):
+        block_fact = kernel.block_fact(block_id)
+        instruction_index = 0
+        while instruction_index < block_fact.second:
+            use_count = kernel.instruction_use_count(block_id, instruction_index)
+            use_index = 0
+            while use_index < use_count:
+                used = kernel.instruction_use_id(block_id, instruction_index, use_index)
+                if used in candidates:
+                    uses[used] = uses.get(used, 0) + 1
+                use_index += 1
+            instruction_index += 1
+        terminator_index = 0
+        while terminator_index < kernel.terminator_use_count(block_id):
+            used = kernel.terminator_use_id(block_id, terminator_index)
+            if used in candidates:
+                rejected[used] = True
+            terminator_index += 1
+        phi_fact = kernel.block_phi_fact(block_id)
+        phi_index = 0
+        while phi_index < phi_fact.second:
+            phi: CompilerInt4 = kernel.phi_record(phi_fact.first + phi_index)
+            incoming_index = 0
+            while incoming_index < phi.fourth:
+                incoming = kernel.phi_incoming(phi.third + incoming_index)
+                if incoming.first in candidates:
+                    rejected[incoming.first] = True
+                incoming_index += 1
+            phi_index += 1
+        error_span = kernel.inline_error_edge_span(block_id)
+        error_index = 0
+        while error_index < error_span.second:
+            condition = kernel.inline_error_edge_condition(
+                error_span.first + error_index
+            )
+            if condition in candidates:
+                rejected[condition] = True
+            error_index += 1
+        block_id += 1
+    fused: dict[int, str] = {}
+    for value_id in candidates:
+        if value_id not in rejected and uses.get(value_id, 0) == 1:
+            fused[value_id] = candidates[value_id]
+    return fused
+
+
 def _integer_literal(text: str) -> int | None:
     body = text[1:] if text.startswith("-") else text
     if not body or not body.isdigit():
@@ -2301,6 +2403,8 @@ def _value_needs_slot(func: ParsedFunction, kernel, value_id: int) -> bool:
         return False
     if value_id in func.aarch64_fused_branch_values:
         return False
+    if value_id in func.aarch64_fused_select_values:
+        return False
     if value_id in func.aarch64_folded_test_ands:
         return False
     return aarch64_madd_fusion_for_product(func, kernel.value_name(value_id)) is None
@@ -2451,6 +2555,7 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
     kernel.clear_value_registers()
     func.aarch64_callee_saved = []
     func.aarch64_fused_branch_values = {}
+    func.aarch64_fused_select_values = {}
     func.aarch64_test_sources = {}
     func.aarch64_test_masks = {}
     func.aarch64_test_predicates = {}
@@ -2472,6 +2577,7 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
         call_results = True
         func.aarch64_fused_branch_values = _fusable_branch_conditions(kernel)
         _masked_test_fusions(func, kernel, func.aarch64_fused_branch_values)
+        func.aarch64_fused_select_values = _fusable_select_conditions(kernel)
     pool_intervals: list[tuple[int, int, int, bool]] = []
     alias_pairs: list[tuple[int, int]] = []
     call_barriers: list[int] = []
