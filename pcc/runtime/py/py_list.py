@@ -176,6 +176,17 @@ pcc_gc_pointer_is_managed = extern(
 
 
 def _ptr_can_have_header(o) -> bool:
+    """Whether the Python value ``o`` has a readable header.
+
+    Every caller passes a value it holds (an operation's operand or item),
+    so ``o`` is NULL, a tagged integer or an object: once the debug cache
+    is known off, that is the answer, as _gc0_owner_fast_path's owners and
+    pcc_gc_store_root read headers. PCC_DEBUG_RUNTIME validates a value
+    before reading its header, so it keeps the provenance probe, which was
+    45 of a list.append's 412 instructions and of a list read's 284.
+    """
+    if load_i32(global_addr("pcc_debug_runtime_enabled_cache"), 0) == 0:
+        return ptr_is_null(o) == 0 and is_tagged_int(o) == 0
     return pcc_gc_pointer_is_managed(o) != 0
 
 

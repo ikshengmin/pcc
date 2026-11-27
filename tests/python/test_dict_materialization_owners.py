@@ -55,8 +55,11 @@ class MaterializeMemory(DictMemory):
     def read(self, pointer, offset):
         if isinstance(pointer, str):
             # Container mode reads 0: the graph lock is the dict's only lock
-            # here (test_dict_gc0_locked_get_set covers the table lock).
-            assert pointer in ("pcc_gc_read_barrier_enabled", "pcc_gc_list_container_mode") and offset == 0
+            # here (test_dict_gc0_locked_get_set covers the table lock). The
+            # debug cache reads 0 (known off): operands' headers are read
+            # directly, as in production.
+            assert pointer in ("pcc_gc_read_barrier_enabled", "pcc_gc_list_container_mode",
+                               "pcc_debug_runtime_enabled_cache") and offset == 0
             return 0
         block, _ = self.location(pointer, offset)
         assert block not in getattr(self, 'retired_tables', ()), 'stale dictionary table'

@@ -3413,6 +3413,33 @@ in the relevant section or issue and removes the entry.
    VM used about one core), median of five: HEAD h14-ic 68065 req/s (78%
    of asyncio), h15-gepshift 68332 (79%), LLVM's backend h11-cg 84018
    (97%); processor time per request 17.1, 16.8 and 13.7 us.
+   (y) Merged (Claude, 2026-11-28, c4213b9a2): in code carrying the GC
+   short-path marker, `pcc_gc_store_root` of a NULL or tagged value over a
+   NULL or tagged slot is an inline slot write once the runtime publishes
+   `pcc_gc_store_root_plain` (debug cache and log fast state known off).
+   Exact h16-alias -> h17-store 112527 -> 112351 (-0.16%): calls into
+   the function fell from 107 to 64 per request on the stepped thread, but
+   the remaining calls are the ones that release an object (inclusive 180
+   to 290 instructions each), and the inline test costs its callers.
+   Inclusive attribution (`steps --callers/--callees`, 674842f00): of
+   h16's 112.5k, `json.dumps` is 60k; inside it `list.append` costs 412
+   per call (27 per request), `dict.items()` 3306 for two pairs, an empty
+   list 596, `sorted` 1249, `str.join` 6000 for about 30 parts, and the
+   request releases 17 objects at 665 each. Every one is a generic runtime
+   operation; the provenance probe (`pcc_gc_pointer_is_managed` ->
+   granule lookup, 45 instructions) ran 61 times per request.
+   (z) Merged (Claude, 2026-11-28): py_list, py_tuple and py_dict answer
+   "does this Python value have a header" from the value itself (not NULL,
+   not tagged) once the debug cache is known off, as `pcc_gc_store_root`
+   and `_gc0_owner_fast_path` already read headers; PCC_DEBUG_RUNTIME and
+   the unknown cache keep the provenance probe. Exact h17-store ->
+   h18-hdr 112351 -> 109442 (-2.59%): granule lookups 2807 -> 1414 and
+   `pcc_gc_pointer_is_managed` 948 -> 196 instructions per request; the
+   rest of the granule calls are the allocator's free path. Tests: unit
+   cases for the three predicates under each cache state, a native program
+   over list, tuple and dict operations, and the list/dict owner files
+   against the h18 archive (129 + 3 integration passed); the dict
+   materialization harness now admits the debug-cache read.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2
