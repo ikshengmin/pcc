@@ -79,6 +79,23 @@ _SHARED_DELEGATE_MIN_STATIC_SLOTS = 64
 _SHARED_DELEGATE_MIN_SITES = 16
 
 
+def generator_save_suffix_matches(plan, longest, start: int) -> bool:
+    """Only contiguous owned entries with an exact common identity prefix.
+
+    The retained plan owns its slot and flag objects until deferred emission;
+    equal names or value equality do not prove the same activation owner.
+    Excluded save indices and nonowned values keep the original inline path.
+    """
+    for offset, (index, slot, flag) in enumerate(plan):
+        if index != start + offset or flag is None:
+            return False
+        if offset < len(longest):
+            prior = longest[offset]
+            if prior[0] != index or prior[1] is not slot or prior[2] is not flag:
+                return False
+    return True
+
+
 def generator_operand_root_group(host, slot):
     """Find only this resume function's owning-operand registration group."""
     contexts = getattr(host, "_generator_ctx_stack", ())
@@ -3088,6 +3105,50 @@ class GeneratorLoweringMixin:
             if key not in shared["rooted"]:
                 shared["rooted"][key] = root_entry
 
+    def _emit_generator_shared_suffix_spine(self, ctx, info):
+        """Emit the common owned suffix once, stopping at each state's cutoff.
+
+        The static prefix has already run and its state value dominates this
+        spine. Every eligible suffix is an exact prefix of the retained plan;
+        no state runs an entry that its original suffix did not contain.
+        Each continuation still owns its original park-specific cleanup.
+        """
+        longest = info[4]
+        by_cutoff = {}
+        for state_id, target, cutoff in info[5]:
+            by_cutoff.setdefault(cutoff, []).append((state_id, target))
+        state = info[1]
+        entry = self.current_function.append_basic_block(self._fresh("gen.save.spine"))
+        self.builder.position_at_end(entry)
+        frame = self._generator_current_frame(ctx)
+        begin = 0
+        for cutoff in sorted(by_cutoff):
+            self._emit_generator_frame_save_plan(ctx, longest[begin:cutoff], frame)
+            cases = by_cutoff[cutoff]
+            if cutoff == len(longest):
+                if len(cases) == 1:
+                    self.builder.branch(cases[0][1])
+                else:
+                    dispatch = self.builder.switch(state, cases[0][1])
+                    for state_id, target in cases[1:]:
+                        dispatch.add_case(ir.Constant(_I64, state_id), target)
+                break
+            next_block = self.current_function.append_basic_block(self._fresh("gen.save.spine"))
+            if len(cases) == 1:
+                state_id, target = cases[0]
+                is_cutoff = self.builder.icmp_unsigned(
+                    "==", state, ir.Constant(_I64, state_id),
+                    name=self._fresh("gen.save.cutoff"),
+                )
+                self.builder.cbranch(is_cutoff, target, next_block)
+            else:
+                dispatch = self.builder.switch(state, next_block)
+                for state_id, target in cases:
+                    dispatch.add_case(ir.Constant(_I64, state_id), target)
+            self.builder.position_at_end(next_block)
+            begin = cutoff
+        return entry
+
     def _emit_generator_shared_exits(self, ctx) -> None:
         """Fill the shared exits once the body has registered every slot."""
         # Finish each deferred save dispatch only now. The direct indexed
@@ -3097,6 +3158,16 @@ class GeneratorLoweringMixin:
         for info in ctx.get("shared_frame_saves", {}).values():
             self.builder.position_at_end(info[0])
             cases = info[3]
+            if info[5]:
+                spine = self._emit_generator_shared_suffix_spine(ctx, info)
+                self.builder.position_at_end(info[0])
+                if not cases:
+                    self.builder.branch(spine)
+                else:
+                    dispatch = self.builder.switch(info[1], spine)
+                    for state_id, target in cases:
+                        dispatch.add_case(ir.Constant(_I64, state_id), target)
+                continue
             if len(cases) == 1:
                 self.builder.branch(cases[0][1])
             else:
@@ -3216,9 +3287,10 @@ class GeneratorLoweringMixin:
             plan.append((idx, slot, flag))
         return plan
 
-    def _emit_generator_frame_save_plan(self, ctx, plan) -> None:
+    def _emit_generator_frame_save_plan(self, ctx, plan, frame=None) -> None:
         # One load serves the whole save: its runtime calls reach no gate.
-        frame = self._generator_current_frame(ctx)
+        if frame is None:
+            frame = self._generator_current_frame(ctx)
         for idx, slot, flag in plan:
             if flag is not None:
                 # The activation cleanup that follows would release this
@@ -3287,13 +3359,22 @@ class GeneratorLoweringMixin:
             state = self.builder.load(shared["state"], name=self._fresh("gen.save.state"))
             # The terminator and all its cases are emitted together after
             # the main resume dispatch has received its last case.
-            saved[key] = (block, state, prefix, [(state_id, suffix)])
+            info = [block, state, prefix, [], [], []]
+            saved[key] = info
         else:
             self.builder.branch(info[0])
-            info[3].append((state_id, suffix))
         self.builder.position_at_end(suffix)
-        if len(plan) > count:
-            self._emit_generator_frame_save_plan(ctx, plan[count:])
+        tail = plan[count:]
+        if tail and generator_save_suffix_matches(tail, info[4], count):
+            if len(tail) > len(info[4]):
+                info[4] = tail
+            info[5].append((state_id, suffix, len(tail)))
+        else:
+            # Preserve the original program for nonowned, skipped or
+            # different-identity plans, and avoid a new edge for empty saves.
+            info[3].append((state_id, suffix))
+            if tail:
+                self._emit_generator_frame_save_plan(ctx, tail)
         return True
 
     def _emit_generator_stop_iteration(
