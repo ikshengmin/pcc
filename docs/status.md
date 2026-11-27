@@ -5341,9 +5341,11 @@ in the relevant section or issue and removes the entry.
 
    - 2026-11-27 compact V2 tape scratch host model proof: test-first red→green, 5 methods incl all known kind arities and 24+ malformed/unsupported cases; guarded corpus10.809s/142585856B. Actual frozen c_parsetab f777240c accepted, 656868 eight-byte records +32 header =5254976B (5.01MiB) vs observed raw live overlap46.46MiB, format arithmetic only; exact raw value oracle. Real historical task57 7/8 (only depth64 fallback), task53 8/8 and minimal1/1, total16/17, 98.7% bytes. Host model intentionally slow, no native CPU/RSS claim. Preserve scratch and receipts, release; next independent native strict scanner diagnostic before ABI/production.
 
+   - 2026-11-27 local exact native compact tape scanner diagnostic successful. Temporary scanner runtime db877e8c (80 host pass), strict193 archive32fc800f/prov2363e7ed build120.707s/399450112B, actual22 closure ELF c010b245 fallback0/no py_cpy, native1/4 carrier probe2 eight jobs exact. c_parsetab tape5254976B SHAa55e82f5 exact model and raw oracle f777240c. Actual postparse raw vs scanner+semantic validation live requested59,412,333→11,171,587B (−81.2%), usable67,412,080→11,259,232, mapped153,997,312→12,713,984, RSS161,693,696→20,914,176, alloc_count504404→104913, STW1→0. Lexical raw .847838 vs tape+semantic .957869s unequal scope; whole output modes different, no whole CPU/RSS claim. No production ABI/reader change or CI; preserve scratch receipts and release for next materializer design.
+
    Claims:
    - Runtime QPS through the self AArch64 backend toward LLVM parity: locate the LLVM step the self passes lack (pcc_perf reference ablations, scripts/pcc_perf.py), then implement it in pcc's own AArch64 passes (shrink-wrapping, allocation or selection, whichever the ablation ranks first); IR-pass changes are target-neutral and reach x64; avoids the typed x64 MIR files: Claude, macOS, 2026-11-27T06:46Z, area backend
-   - Owned AST V2 compact tape native scanner diagnostic (local strict runtime JSON only and temporary ABI header if needed; exact scanner/semantic validation and baseline raw graph same ELF, no published ABI/reader/CI; bounded one screen then formal only if qualified): Codex, Linux, 2026-11-27T12:56Z, area runtime-codegen
+
 
 
 
