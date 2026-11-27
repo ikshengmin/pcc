@@ -20,6 +20,7 @@ from pcc.unsafe import (
     load_ptr,
     malloc,
     memcpy,
+    memset,
     null,
     ptr_add,
     ptr_eq,
@@ -27,6 +28,7 @@ from pcc.unsafe import (
     realloc,
     stack_alloc,
     store_i8,
+    store_i32,
     store_i64,
     store_ptr,
 )
@@ -489,6 +491,304 @@ def py_json_loads(text):
     # Preserve the established native helper contract: trailing non-whitespace
     # is tolerated after the first complete JSON value.
     return result
+
+
+# Private, bounded, strict-subset AST sidecar parser. The public raw JSON
+# entry and compiled Python provider retain their established contracts.
+py_dict_new_presized = extern("py_dict_new_presized", (c_int64,), c_ptr)
+py_dict_set_slots = extern("py_dict_set_slots", (c_ptr, c_ptr, c_ptr), c_int64)
+py_list_append_from_slots = extern("py_list_append_from_slots", (c_ptr, c_ptr, c_int64), c_void)
+py_int_from_i64 = extern("py_int_from_i64", (c_int64,), c_ptr)
+pcc_str_ascii_char = extern("pcc_str_ascii_char", (c_int64,), c_ptr)
+py_err_occurred = extern("py_err_occurred", (), c_int64)
+py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
+py_clear_exception = extern("py_clear_exception", (), c_void)
+pcc_gc_register_continuation_root_node = extern(
+    "pcc_gc_register_continuation_root_node", (c_ptr, c_ptr), c_ptr)
+pcc_gc_unregister_continuation_root_node = extern(
+    "pcc_gc_unregister_continuation_root_node", (c_ptr,), c_void)
+pcc_gc_store_root_take = extern("pcc_gc_store_root_take", (c_ptr, c_ptr), c_void)
+
+
+def _owned_ast_json_oom() -> None:
+    if py_err_occurred() == 0:
+        py_raise_owned(py_exc_new(19, cstr("owned AST JSON allocation failed")))
+
+
+def _owned_ast_json_checked(obj):
+    if ptr_is_null(obj) != 0:
+        _owned_ast_json_oom()
+    return obj
+
+
+def _owned_ast_json_string(data, n: int, pos, key: int):
+    # Validate the complete token before allocating. Escapes are uncommon
+    # in owned sidecars; reuse the existing decoder for a proven valid token.
+    start: int = load_i64(pos, 0)
+    if start >= n or _byte_at(data, start) != 34:
+        return null()
+    i: int = start + 1
+    escaped: int = 0
+    while i < n:
+        c: int = _byte_at(data, i)
+        if c == 34:
+            if escaped != 0:
+                store_i64(pos, 0, start)
+                return _owned_ast_json_checked(_parse_string(data, n, pos))
+            length: int = i - start - 1
+            store_i64(pos, 0, i + 1)
+            if key != 0 and length == 1:
+                cached = pcc_str_ascii_char(_byte_at(data, start + 1))
+                if ptr_is_null(cached) == 0:
+                    # The existing ASCII image has immortal object headers;
+                    # its owned-return contract matches py_str_char_at_byte.
+                    return cached
+                if py_err_occurred() != 0:
+                    return null()
+            return _owned_ast_json_checked(py_str_new(ptr_add(data, start + 1), length))
+        if c < 32 or c >= 128:
+            return null()
+        if c == 92:
+            escaped = 1
+            i = i + 1
+            if i >= n:
+                return null()
+            esc: int = _byte_at(data, i)
+            if esc == 117:
+                store_i64(pos, 0, i + 1)
+                point: int = _parse_hex4(data, n, pos)
+                if point < 0:
+                    return null()
+                i = load_i64(pos, 0)
+                if point >= 55296 and point <= 56319:
+                    if i + 6 > n or _byte_at(data, i) != 92 or _byte_at(data, i + 1) != 117:
+                        return null()
+                    store_i64(pos, 0, i + 2)
+                    low: int = _parse_hex4(data, n, pos)
+                    if low < 56320 or low > 57343:
+                        return null()
+                    i = load_i64(pos, 0)
+                elif point >= 56320 and point <= 57343:
+                    return null()
+                continue
+            if esc != 34 and esc != 92 and esc != 47 and esc != 98 and esc != 102 and esc != 110 and esc != 114 and esc != 116:
+                return null()
+        i = i + 1
+    return null()
+
+
+def _owned_ast_json_integer(data, n: int, pos):
+    i: int = load_i64(pos, 0)
+    negative: int = 0
+    if i < n and _byte_at(data, i) == 45:
+        negative = 1
+        i = i + 1
+    if i >= n or _byte_at(data, i) < 48 or _byte_at(data, i) > 57:
+        return null()
+    first: int = i
+    value: int = 0
+    while i < n:
+        c: int = _byte_at(data, i)
+        if c < 48 or c > 57:
+            break
+        if i != first and _byte_at(data, first) == 48:
+            return null()
+        digit: int = c - 48
+        # Conservative signed tagged range. Other numbers go through the
+        # original provider, including floats, nonfinite and large integers.
+        if value > (1152921504606846975 - digit) // 10:
+            return null()
+        value = value * 10 + digit
+        i = i + 1
+    if i < n:
+        c = _byte_at(data, i)
+        if c == 46 or c == 69 or c == 101:
+            return null()
+    store_i64(pos, 0, i)
+    if negative != 0:
+        value = 0 - value
+    return _owned_ast_json_checked(py_int_from_i64(value))
+
+
+def _owned_ast_json_container(data, n: int, pos, roots, depth: int, kind: int):
+    # Three authoritative registered owning slots per recursion level.
+    # Any failed descendant leaves its owned cells to the top-level cleanup.
+    owner = ptr_add(roots, depth * 24)
+    key_slot = ptr_add(owner, 8)
+    value_slot = ptr_add(owner, 16)
+    if kind == 123:
+        out = py_dict_new_presized(0)
+        closing: int = 125
+    else:
+        out = py_list_new(0)
+        closing = 93
+    if ptr_is_null(out) != 0:
+        _owned_ast_json_oom()
+        return null()
+    pcc_gc_store_root_take(owner, out)
+    if py_err_occurred() != 0:
+        return null()
+    i: int = load_i64(pos, 0) + 1
+    store_i64(pos, 0, i)
+    _skip_ws(data, n, pos)
+    i = load_i64(pos, 0)
+    if i < n and _byte_at(data, i) == closing:
+        store_i64(pos, 0, i + 1)
+    else:
+        while True:
+            _skip_ws(data, n, pos)
+            if kind == 123:
+                key = _owned_ast_json_string(data, n, pos, 1)
+                if ptr_is_null(key) != 0:
+                    return null()
+                pcc_gc_store_root_take(key_slot, key)
+                if py_err_occurred() != 0:
+                    return null()
+                _skip_ws(data, n, pos)
+                i = load_i64(pos, 0)
+                if i >= n or _byte_at(data, i) != 58:
+                    return null()
+                store_i64(pos, 0, i + 1)
+            value = _owned_ast_json_value(data, n, pos, roots, depth + 1)
+            if ptr_is_null(value) != 0:
+                return null()
+            pcc_gc_store_root_take(value_slot, value)
+            if py_err_occurred() != 0:
+                return null()
+            if kind == 123:
+                if py_dict_set_slots(owner, key_slot, value_slot) != 0 or py_err_occurred() != 0:
+                    if py_err_occurred() == 0:
+                        py_raise_owned(py_exc_new(7, cstr("owned AST JSON dictionary insertion failed")))
+                    return null()
+                pcc_gc_store_root_take(key_slot, null())
+            else:
+                length: int = py_list_len(load_ptr(owner, 0))
+                py_list_append_from_slots(owner, value_slot, 0)
+                if py_err_occurred() != 0:
+                    return null()
+                if py_list_len(load_ptr(owner, 0)) != length + 1:
+                    _owned_ast_json_oom()
+                    return null()
+            pcc_gc_store_root_take(value_slot, null())
+            if py_err_occurred() != 0:
+                return null()
+            _skip_ws(data, n, pos)
+            i = load_i64(pos, 0)
+            if i >= n:
+                return null()
+            c: int = _byte_at(data, i)
+            if c == closing:
+                store_i64(pos, 0, i + 1)
+                break
+            if c != 44:
+                return null()
+            store_i64(pos, 0, i + 1)
+    result = pcc_gc_retain(load_ptr(owner, 0))
+    if ptr_is_null(result) != 0:
+        _owned_ast_json_oom()
+        return null()
+    pcc_gc_store_root_take(owner, null())
+    return result
+
+
+def _owned_ast_json_value(data, n: int, pos, roots, depth: int):
+    # Keep recursive native stack usage bounded; deeper valid documents
+    # retain the original provider path rather than being rejected.
+    if depth >= 64:
+        return null()
+    _skip_ws(data, n, pos)
+    i: int = load_i64(pos, 0)
+    if i >= n:
+        return null()
+    c: int = _byte_at(data, i)
+    if c == 34:
+        return _owned_ast_json_string(data, n, pos, 0)
+    if c == 123 or c == 91:
+        return _owned_ast_json_container(data, n, pos, roots, depth, c)
+    if c == 116 and _literal_matches(data, n, i, cstr("true"), 4) != 0:
+        store_i64(pos, 0, i + 4)
+        return pcc_gc_retain(global_load_ptr("py_True"))
+    if c == 102 and _literal_matches(data, n, i, cstr("false"), 5) != 0:
+        store_i64(pos, 0, i + 5)
+        return pcc_gc_retain(global_load_ptr("py_False"))
+    if c == 110 and _literal_matches(data, n, i, cstr("null"), 4) != 0:
+        store_i64(pos, 0, i + 4)
+        return pcc_gc_retain(global_load_ptr("py_None"))
+    return _owned_ast_json_integer(data, n, pos)
+
+
+@c_abi_export("pcc_json_try_loads_owned_ast")
+def pcc_json_try_loads_owned_ast(text):
+    # Borrow exact string; return NEW dict, NEW None (unsupported), or NULL
+    # with a pending native exception. Never suppress operational failures.
+    if py_err_occurred() != 0:
+        return null()
+    if ptr_is_null(text) != 0 or _type_of(text) != PY_TYPE_STR:
+        return pcc_gc_retain(global_load_ptr("py_None"))
+    data = py_str_utf8(text)
+    n: int = py_str_byte_len(text)
+    if py_err_occurred() != 0:
+        return null()
+    if ptr_is_null(data) != 0 or n < 0:
+        _owned_ast_json_oom()
+        return null()
+    pos = stack_alloc(8)
+    store_i64(pos, 0, 0)
+    _skip_ws(data, n, pos)
+    i: int = load_i64(pos, 0)
+    if i >= n or _byte_at(data, i) != 123:
+        return pcc_gc_retain(global_load_ptr("py_None"))
+    # Two additional registered cells shelter the result and the original
+    # TLS exception during cleanup, as in the dictionary slot protocol.
+    roots = stack_alloc(1552)
+    result_slot = ptr_add(roots, 1536)
+    exc_slot = ptr_add(roots, 1544)
+    frame_map = stack_alloc(16)
+    memset(roots, 0, 1552)
+    memset(frame_map, 0, 16)
+    store_i32(frame_map, 0, 194)
+    node = pcc_gc_register_continuation_root_node(frame_map, roots)
+    if ptr_is_null(node) != 0:
+        _owned_ast_json_oom()
+        return null()
+    result = _owned_ast_json_value(data, n, pos, roots, 0)
+    if ptr_is_null(result) == 0:
+        pcc_gc_store_root_take(result_slot, result)
+    _skip_ws(data, n, pos)
+    accepted: int = 0
+    if ptr_is_null(result) == 0 and load_i64(pos, 0) == n and py_err_occurred() == 0:
+        accepted = 1
+    # Move the operation's original exception to an owning root before
+    # retirement can invoke collectors or callbacks that touch TLS.
+    py_tls_exc_swap_slot(exc_slot)
+    index: int = 191
+    while index >= 0:
+        slot = ptr_add(roots, index * 8)
+        if ptr_is_null(load_ptr(slot, 0)) == 0:
+            pcc_gc_store_root_take(slot, null())
+        index = index - 1
+    # If cleanup alone failed, shelter that exception too. Do not silently
+    # fall back in the presence of an actual operation/cleanup failure.
+    if ptr_is_null(load_ptr(exc_slot, 0)) != 0 and py_err_occurred() != 0:
+        py_tls_exc_swap_slot(exc_slot)
+    result = null()
+    if accepted != 0 and ptr_is_null(load_ptr(exc_slot, 0)) != 0:
+        result = pcc_gc_retain(load_ptr(result_slot, 0))
+    pcc_gc_store_root_take(result_slot, null())
+    if ptr_is_null(load_ptr(exc_slot, 0)) == 0:
+        py_clear_exception()
+        py_tls_exc_swap_slot(exc_slot)
+    pcc_gc_unregister_continuation_root_node(node)
+    if py_err_occurred() != 0:
+        if ptr_is_null(result) == 0:
+            py_decref(result)
+        return null()
+    if ptr_is_null(result) == 0:
+        return result
+    if accepted != 0:
+        _owned_ast_json_oom()
+        return null()
+    return pcc_gc_retain(global_load_ptr("py_None"))
 
 
 def _append_u00_escape(buf, c: int) -> int:

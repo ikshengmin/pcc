@@ -1158,6 +1158,8 @@ int64_t   py_str_tailmatch_range(PyObject *s, PyObject *needle,
 PyObject *py_re_finditer_flags(PyObject *pattern, PyObject *text, int64_t flags);
 PyObject *py_chr_from_i64(int64_t codepoint);
 PyObject *py_json_loads(PyObject *text);
+/* Private AST sidecar parser: NEW dict / NEW None (unsupported) / NULL + error. */
+PyObject *pcc_json_try_loads_owned_ast(PyObject *text);
 PyObject *py_json_dumps(PyObject *obj);
 PyObject *py_json_dumps_ex(PyObject *obj, int64_t sort_keys);
 PyObject *py_copy_copy(PyObject *o);

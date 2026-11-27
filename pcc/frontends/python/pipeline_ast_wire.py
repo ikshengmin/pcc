@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import sys
+
+from pcc.extern import c_int64, c_obj, extern
 
 from pcc.frontends.python.pipeline_modes import PyPipelineError
 from pcc.frontends.python.py_ast_contract import (
@@ -14,6 +17,35 @@ _PY_AST_WIRE_SCHEMA = "pcc.frontends.python.py_ast.v1"
 _PY_AST_WIRE_SCHEMA_V2 = "pcc.frontends.python.py_ast.v2"
 _PY_AST_WIRE_NODE_KEY = "__pcc_py_ast_v1__"
 _PY_AST_WIRE_BYTES_KEY = "__pcc_bytes_v1__"
+
+_try_owned_ast_json = extern("pcc_json_try_loads_owned_ast", (c_obj,), c_obj)
+_owned_ast_raw_reclaimable = extern("pcc_allocator_reclaimable_slab_bytes", (), c_int64)
+_owned_ast_mapped = extern("pcc_allocator_mapped_bytes", (), c_int64)
+_owned_ast_no_park = extern("pcc_thread_no_park_depth", (), c_int64)
+_owned_ast_graph_depth = extern("pcc_py_gc_minor_graph_lock_depth", (), c_int64)
+_owned_ast_pending = extern("py_err_occurred", (), c_int64)
+_owned_ast_raw_trim = extern("pcc_allocator_trim", (), c_int64)
+
+
+def _maybe_trim_owned_ast_raw_highwater() -> None:
+    # A completed native parse may retire many temporary raw buffers without
+    # the previous provider's collection cadence. Return only completely
+    # free raw slabs at this coarse boundary, before AST allocations begin.
+    # The absolute 8 MiB floor and >= 1/8 mapped high-water gate avoid scanning
+    # small repetitive parses or a small idle fraction; no managed GC or
+    # collector-pacing change. The existing trim owns the allocator lock.
+    if _owned_ast_pending() != 0:
+        return
+    reclaimable = _owned_ast_raw_reclaimable()
+    if reclaimable < 8388608:
+        return
+    mapped = _owned_ast_mapped()
+    if mapped <= 0 or reclaimable < mapped // 8:
+        return
+    if _owned_ast_no_park() != 0 or _owned_ast_graph_depth() != 0:
+        return
+    _owned_ast_raw_trim()
+
 
 
 def _closed_world_node_kind(node) -> str:
@@ -1106,12 +1138,21 @@ def _read_py_ast_wire(path: str):
 def _decode_py_ast_wire(text: str, path: str = ""):
     """Decode an AST snapshot without reopening an identity-checked file."""
 
-    payload = json.loads(text)
+    payload = None
+    if sys.implementation.name == "pcc" and type(text) is str:
+        payload = _try_owned_ast_json(text)
+    private = payload is not None
+    if not private:
+        payload = json.loads(text)
     schema = payload.get("schema") if isinstance(payload, dict) else None
     if schema == _PY_AST_WIRE_SCHEMA_V2:
+        if private:
+            _maybe_trim_owned_ast_raw_highwater()
         return _decode_py_ast_v2_payload(payload)
     if schema != _PY_AST_WIRE_SCHEMA:
         raise PyPipelineError(
             "invalid frontend py_ast wire file " + path + " schema=" + str(schema)
         )
+    if private:
+        _maybe_trim_owned_ast_raw_highwater()
     return _py_ast_from_wire(payload.get("module"))
