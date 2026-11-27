@@ -4398,8 +4398,39 @@ in the relevant section or issue and removes the entry.
    independent dispatch. Only genuine hosted live histogram and actual
    same-input RSS can drive a size-class candidate.
 
+   Exact NULL-to-NULL root-store owner ceiling (Linux, Codex).
+   Existing actual native GC0 handler prior attribution ~108.30 empty
+   clears/request; two previous compiler-local candidates removed eight
+   but no reproducible handler speed. Clean owned archive e129de08
+   (current root implementation py_obj blob d10b88ae, not entire current
+   compiler), exact registered empty root, ten million calls per arm,
+   five alternating actual/noop/unchanged-actual control triples. ELF
+   203382291bc9566571eff424a64f3adead2fb6d473d1298f49cf2d4f168807e3.
+   All15 runs exact NULL/allocator/telemetry balance, no errors or
+   double frees. CPU median full root9.1007ns, indirect no-op2.5077ns,
+   unchanged actual9.2811ns; paired incremental6.6565ns 5/5,
+   max control drift2.664ns. Weighting every prior observed empty
+   clear by incremental cost gives ~0.721us/request (~1.28% of56.4us);
+   even the entire root call plus loop9.1007ns gives ~0.986us (~1.75%),
+   below3%. Complete guard3.610s/77,828,096B, unchanged1GiB/2GiB.
+   Diagnostic preparation (not production): common L1 IR direct-call
+   tagging with stable module/function/block/callsite labels, exact
+   authoritative fast/direct old-root load classification, bounded raw
+   atomic hash recorder in freestanding allocator (no safepoint,
+   managed/heap/root calls), original ABI residual, opt-in begin and
+   stop before report. Four rewrite tests pass; actual py_obj and
+   stdlib JSON IR 1083 static sites, fully tagged direct JSON calls
+   and original ABI wrapper. These are static sites, NOT current
+   per-request frequencies or executed source attribution. Final IR
+   guard5.390s/186,818,560B after fixing diagnostic-only imports.
+   REJECT standalone empty-clear optimization and defer expensive full
+   diagnostic handler build: even all previous empty clears below
+   threshold on Linux. No production source or actual-handler speed
+   claim. Keep prepared site/counter harness for a later combined
+   whole-function structural ownership proof only if evidence warrants;
+   do not repeat tiny local clears or weaken audit/root semantics.
+
    Claims:
-   - Actual per-site null-to-null root-store attribution (runtime versus emitted application IR, diagnostic only): Codex, Linux, 2026-11-27T00:13Z, area runtime-gc-root-site-attribution
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
    - Actual x86 streamed inline-edge object finalize and verifier attribution (unchanged default OFF, general OFF benefit required where possible): Codex, Linux, 2026-11-27T00:04Z, area backend (x86_64_asm_driver/elf_x86_64/verify attribution, no overlapping CI TLS owner edits)
 4. **Source-language frontends**, in parallel with item 2 (different files;
