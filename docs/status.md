@@ -3467,6 +3467,26 @@ in the relevant section or issue and removes the entry.
    unrelated condition stays unknown; each fold and its refusals, and
    byte copies and fills execute natively before and after; optimizer
    files 513 passed (3 nodes fail on HEAD too).
+   (ac) Rejected experiment (Claude, 2026-11-28): the application's
+   modules are optimized with `mem2reg,sroa` only (the `default` preset);
+   compiling the handler with the runtime's list
+   (`PCC_PYTHON_IR_PASSES=mem2reg,sroa,instsimplify,inline-defined-wide,
+   instsimplify,inline-defined-wide,jump-thread,instsimplify,instcombine,dce`,
+   arm h21-prog, which also carried the instcombine mask fold) gave exact
+   105721 -> 104994 (-0.69%) while `native_stats` took 207 s to compile
+   instead of 46 s. The application's cost is the runtime operations it
+   calls, not calls between its own functions; the default stays.
+   (ad) Merged (Claude, 2026-11-28): memcpy and memmove finish with one
+   word ending at the size (read before any store, so overlap stays safe)
+   and copy 4 to 15 bytes as a first and a last word or half; memset
+   needs no byte pattern for zero and stores two words per iteration;
+   memchr tests eight bytes at a time. Exact h20-jt -> h22-mem 105721 ->
+   105477 (-0.23%, with instcombine's mask fold): memset and memmove
+   -85 each, memcpy -22 per request; h22 -> h23-swar memchr -118. A word
+   strlen measured +66 on the handler's short names and was dropped.
+   Tests: the size/alignment/overlap matrix (now with memchr positions and
+   strlen starts) matches the host's libc for the clang-built and the
+   self-backend-built objects.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2

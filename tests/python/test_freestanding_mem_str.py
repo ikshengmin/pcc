@@ -447,6 +447,30 @@ int main(void) {
         mix_u64((uint64_t)(signum(strncmp(text, "abcdefghijklmnopqrstuvw", n)) + 1));
     }
 
+    for (n = 0; n <= 40; ++n) {
+        for (src_off = 0; src_off < 8; ++src_off) {
+            size_t at;
+            for (at = 0; at <= n; ++at) {
+                for (i = 0; i < sizeof(work); ++i) work[i] = (unsigned char)(i % 7u + 1u);
+                if (at < n) work[src_off + at] = 0xee;
+                work[src_off + n] = 0xee;
+                mix_u64((uint64_t)(memchr(work + src_off, 0xee, n)
+                                   ? (unsigned char *)memchr(work + src_off, 0xee, n) - work + 1
+                                   : 0));
+                mix_u64((uint64_t)(memchr(work + src_off, 0x1ee, n) != NULL));
+            }
+        }
+    }
+
+    for (src_off = 0; src_off < 8; ++src_off) {
+        for (n = 0; n <= 40; ++n) {
+            char text[64];
+            for (i = 0; i < sizeof(text); ++i) text[i] = (char)('a' + (i % 23));
+            text[src_off + n] = '\0';
+            mix_u64(strlen(text + src_off));
+        }
+    }
+
     printf("%016llx\n", (unsigned long long)digest);
     return 0;
 }
@@ -459,6 +483,14 @@ int main(void) {
         _build_mem_str_object(tmp_path),
     )
     assert freestanding == host
+    # The same functions as the self backend emits them for the runtime.
+    self_backend = _compile_and_run_c(
+        tmp_path,
+        "matrix_self_backend",
+        source,
+        _build_mem_str_self_object(tmp_path),
+    )
+    assert self_backend == host
 
 
 def test_explicit_bzero_remains_an_explicit_store_body(tmp_path):
