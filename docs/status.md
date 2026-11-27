@@ -2974,6 +2974,22 @@ in the relevant section or issue and removes the entry.
    per-function sampled cycles of the self build against the clang build
    of the same runtime IR, idle host, then the mechanism of the top
    excess function in both, before any further backend change.
+   Mac assessment of the 2026-11-27 shared batch (Claude, local Mac,
+   2026-11-27; base 11c88fb4e as arms alloc-base2 and control alloc-base,
+   candidate arm head-9d51a6a at 9d51a6a74, 288 commits later: allocator
+   48- and 80-byte managed classes, shared generator frame save suffixes;
+   the x86-64 typed MIR is opt-in and does not reach AArch64). Host load
+   6-11 on 12 cores. `ab` five pairs: w1 63062 -> 63469 req/s (+0.6%, 4/5,
+   control floor 7.5%), w4 145391 -> 151213 (+4.0%, 4/5, floor 9.2%):
+   both inconclusive; CPU per request 18.6 -> 18.2 us (w1), 28.6 -> 27.4
+   us (w4). `instr` five runs: w1 236399 -> 230899 instructions per request
+   (-2.33%, control +0.03%, run spread at most 0.6%), cycles -2.83% inside
+   a 6.6-11.8% spread; w4 256085 -> 249249 (-2.67%, control -0.44%, spread
+   up to 4%), cycles +0.93%. `table`: w1 61818 req/s (71% of the recorded
+   asyncio), w4 148164 (56%), level with 2026-11-26 (62959 / 151474).
+   No Mac regression from the batch; no throughput gain beyond noise. The
+   goal (at least LLVM parity, then asyncio) is not met: the clang runtime
+   of the same IR ran about 85-89k req/s at w1 on this host.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2
