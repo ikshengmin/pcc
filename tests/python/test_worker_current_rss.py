@@ -532,15 +532,51 @@ def test_optional_evidence_failure_cannot_change_reader_outcome(tmp_path, monkey
         assert policy.read_tree_state(str(state), 1000, 11, [12], diagnostic=BrokenOutput()) == expected
 
 
+def _live_forecast_driver_literal(node, publication):
+    # Only the owned driver template's string literals and its exact
+    # repr(publication) splice are admitted. Never evaluate its source.
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return (_live_forecast_driver_literal(node.left, publication)
+                + _live_forecast_driver_literal(node.right, publication))
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == "repr" and not node.keywords
+            and len(node.args) == 1 and isinstance(node.args[0], ast.Name)
+            and node.args[0].id == "_LIVE_FORECAST_PID_PUBLICATION"):
+        return repr(publication)
+    raise AssertionError("unsupported live forecast driver template expression")
+
+
+def _live_forecast_driver_source(tree):
+    owners = [node for node in tree.body if isinstance(node, ast.FunctionDef)
+              and node.name == "test_live_forecast_keeps_exclusive_worker_under_real_guard"]
+    assert len(owners) == 1
+    writes = [node for node in ast.walk(owners[0]) if isinstance(node, ast.Call)
+              and isinstance(node.func, ast.Attribute) and node.func.attr == "write_text"
+              and isinstance(node.func.value, ast.Name) and node.func.value.id == "driver"]
+    assert len(writes) == 1 and len(writes[0].args) == 1 and not writes[0].keywords
+    publications = [node.value for node in tree.body if isinstance(node, ast.Assign)
+                    and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id == "_LIVE_FORECAST_PID_PUBLICATION"]
+    assert len(publications) == 1
+    publication = ast.literal_eval(publications[0])
+    assert isinstance(publication, str)
+    return _live_forecast_driver_literal(writes[0].args[0], publication)
+
+
 @pytest.mark.parametrize("frozen_exists", [False, True])
 def test_original_stale_guard_wrapper_forwards_optional_diagnostic(frozen_exists):
     # Compile only the original embedded wrapper definition, never its real
     # process driver. This keeps its path substitution and old/default call
     # arguments intact while checking the new output is forwarded by identity.
     tree = ast.parse(Path(__file__).with_name("test_worker_resource_plan.py").read_text())
-    driver = next(node.value for node in ast.walk(tree)
-                  if isinstance(node, ast.Constant) and isinstance(node.value, str)
-                  and "def read_state(path, tree_budget, owner_pid" in node.value)
+    driver = _live_forecast_driver_source(tree)
+    # Refuse unknown dynamic expressions even if they would produce strings.
+    for expression in ("repr(other)", "str(_LIVE_FORECAST_PID_PUBLICATION)",
+                       "'text' * 2", "repr(_LIVE_FORECAST_PID_PUBLICATION, other=True)"):
+        with pytest.raises(AssertionError, match="unsupported live forecast driver template"):
+            _live_forecast_driver_literal(ast.parse(expression, mode="eval").body, "pid")
     wrapper = next(node for node in ast.walk(ast.parse(driver))
                    if isinstance(node, ast.FunctionDef) and node.name == "read_state")
     calls = []
