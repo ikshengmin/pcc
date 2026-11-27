@@ -4399,6 +4399,7 @@ in the relevant section or issue and removes the entry.
    same-input RSS can drive a size-class candidate.
 
    Claims:
+   - Actual per-site null-to-null root-store attribution (runtime versus emitted application IR, diagnostic only): Codex, Linux, 2026-11-27T00:13Z, area runtime-gc-root-site-attribution
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
    - Actual x86 streamed inline-edge object finalize and verifier attribution (unchanged default OFF, general OFF benefit required where possible): Codex, Linux, 2026-11-27T00:04Z, area backend (x86_64_asm_driver/elf_x86_64/verify attribution, no overlapping CI TLS owner edits)
 4. **Source-language frontends**, in parallel with item 2 (different files;
