@@ -107,6 +107,12 @@ DATA_PLANE_CLASS_CONTRACT = {
     # One carrier per private emission, not a value per span/record. The
     # grant borrows the old arena and releases it on transfer or revocation.
     "self_backend_aarch64_typed_peepholes.py:_SpanOwnerTransfer": "phase_shell",
+    # One-shot private boundary permission borrows the fragment scope;
+    # revocation drops the reference. It is not an arena or per-record value.
+    "self_backend_aarch64_typed_peepholes.py:_PeepholeBoundaryRetirement": "phase_shell",
+    # Function-lifetime register-allocation liveness helper: borrows the
+    # kernel/block positions and owns lazily constructed transient facts.
+    "self_backend_aarch64_darwin_regalloc.py:_PreciseCallCrossing": "phase_shell",
     # The x64 MIR is a private function-owned managed record graph, not a
     # raw valueclass plane. Scalar/value/location and instruction records use
     # explicit slots; block/function/allocation and emission/frame owners

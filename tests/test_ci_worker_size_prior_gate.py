@@ -4126,9 +4126,47 @@ else:
         "self_backend_aarch64_typed_pass_context.py:TypedPassContext": "phase_shell",
         "self_backend_aarch64_typed_peepholes.py:_Pass": "phase_shell",
         "self_backend_aarch64_typed_peepholes.py:_SpanOwnerTransfer": "phase_shell",
+        "self_backend_aarch64_typed_peepholes.py:_PeepholeBoundaryRetirement": "phase_shell",
+        "self_backend_aarch64_darwin_regalloc.py:_PreciseCallCrossing": "phase_shell",
     }
     for class_key, classification in typed_classifications.items():
         assert contract[class_key] == classification
+    # Both classes own phase state, not raw record storage. Check the
+    # actual borrowed scope and transient fields, not merely their names.
+    retirement_tree = ast.parse(
+        (ROOT / "pcc/backend/self_backend_aarch64_typed_peepholes.py").read_text())
+    retirement = one(node for node in retirement_tree.body
+                     if isinstance(node, ast.ClassDef)
+                     and node.name == "_PeepholeBoundaryRetirement")
+    expected_retirement = one(ast.parse("""class _PeepholeBoundaryRetirement:
+    """ + '"""Private permission for the one peephole-to-CFG ownership boundary."""' + """
+    def __init__(self, fragments: AArch64EmissionFragments) -> None:
+        self.valid: bool = True
+        self.fragments: AArch64EmissionFragments | None = fragments
+    def revoke(self) -> None:
+        self.valid = False
+        self.fragments = None
+""").body)
+    assert dump(retirement) == dump(expected_retirement)
+    regalloc_tree = ast.parse(
+        (ROOT / "pcc/backend/self_backend_aarch64_darwin_regalloc.py").read_text())
+    crossing = one(node for node in regalloc_tree.body
+                   if isinstance(node, ast.ClassDef)
+                   and node.name == "_PreciseCallCrossing")
+    assert not crossing.bases and not crossing.decorator_list
+    crossing_init = one(node for node in crossing.body
+                        if isinstance(node, ast.FunctionDef) and node.name == "__init__")
+    expected_crossing_init = one(ast.parse("""def __init__(self, kernel, block_base: list[int]) -> None:
+    self.kernel = kernel
+    self.block_base = block_base
+    self.ready = False
+    self.predecessors: list[list[int]] = []
+    self.def_block: dict[int, int] = {}
+    self.use_positions: dict[int, list[int]] = {}
+    self.use_blocks: dict[int, list[int]] = {}
+    self.extra_uses: list[tuple[int, int]] = []
+""").body)
+    assert dump(crossing_init) == dump(expected_crossing_init)
     projection_contract = ast.literal_eval(one(
         node.value for node in inventory_tree.body
         if isinstance(node, ast.AnnAssign)
