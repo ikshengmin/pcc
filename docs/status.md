@@ -3526,6 +3526,11 @@ in the relevant section or issue and removes the entry.
    kept, two modules sharing a thread-local linked and run before and
    after; 20 container/GC test files give the same failure set with and
    without the import (h23 and h24 snapshots).
+   QPS, local Mac, load 2.6, arm h26-xinl (all of (y)-(af), 1e7e3005c):
+   GC0 w1 86041 req/s (99% of asyncio, 13.4 us processor time per
+   request), w4 233558 (89% of four asyncio processes, 17.9 us). Exact
+   per request 112527 (h16) -> 99312 (h26), -11.7%. The 2x target needs
+   about 6.7 us per request at w1.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2
