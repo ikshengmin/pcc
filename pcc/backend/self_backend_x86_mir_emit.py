@@ -91,7 +91,8 @@ def _immediate_ok(location: Location) -> bool:
 
 class Lowerer:
     __slots__=("func","plan","mir","allocation","kernel","pinned","flag_branches",
-               "suffix_positions","compact_padding","frame_layout","physical_frame_size","locations")
+               "suffix_positions","compact_padding","frame_layout","physical_frame_size","locations",
+               "_retire_register_owner","_retire_register_masks")
 
     def __init__(self, func, plan, mir: X86MIRFunction, allocation: X86MIRAllocation, compact_padding=None, frame_layout=None):
         self.func = func
@@ -127,6 +128,11 @@ class Lowerer:
                 elif fact.home>=fact.width:locations.append(Location("slot",fact.home,fact.width))
                 else:locations.append(None)
         self.locations=tuple(locations)
+        # Lazy, function-local physical occupancy index. Retain the exact
+        # immutable assignment tuple as the cache owner; small functions and
+        # slot-death paths keep the original live-set traversal.
+        self._retire_register_owner: tuple[int, ...] | None = None
+        self._retire_register_masks: tuple[int, ...] | None = None
 
     def location(self, value: str, ty: TypeDesc) -> Location:
         width = _width(ty)
@@ -576,6 +582,32 @@ class Lowerer:
             if dest is not None:lines.extend(self.copy(dest,_register(0,dest.width)))
         return lines
 
+    def _register_retirement_masks(self, live_after: int) -> tuple[int, ...] | None:
+        if (type(self.mir) is not X86MIRFunction
+                or type(self.allocation) is not X86MIRAllocation):
+            return None
+        values = self.mir.values
+        registers = self.allocation.registers
+        if (type(values) is not tuple or type(registers) is not tuple
+                or len(values) < 1024 or len(registers) != len(values)
+                or type(live_after) is not int or live_after < 0
+                or live_after.bit_length() > len(values)):
+            return None
+        if self._retire_register_owner is registers:
+            return self._retire_register_masks
+        # At most sixteen wide masks, not one per virtual value or home.
+        # Construction is paid once for a large function's actual register
+        # death site. No liveness, coloring or physical assignment changes.
+        masks = [0] * 16
+        for value_id, register in enumerate(registers):
+            if type(register) is not int or register < -1 or register >= 16:
+                return None
+            if register >= 0:
+                masks[register] |= 1 << value_id
+        self._retire_register_owner = registers
+        self._retire_register_masks = tuple(masks)
+        return self._retire_register_masks
+
     def retire(self,inputs,live_after,except_registers=None):
         if live_after is None:return []
         dying=[]
@@ -593,17 +625,22 @@ class Lowerer:
         if except_registers is not None:
             for register in except_registers:reserved|=1<<register
         occupied_slots=[]
-        for value_id in _bits(live_after):
-            value=self.mir.values[value_id]
-            reg=self.allocation.registers[value_id]
-            if reg>=0:reserved|=1<<reg
-            elif needs_slots and value.home>=value.width:occupied_slots.append((value.home-value.width,value.home))
+        register_masks = None
+        if not needs_slots and type(self) is Lowerer:
+            register_masks = Lowerer._register_retirement_masks(self, live_after)
+        if register_masks is None:
+            for value_id in _bits(live_after):
+                value=self.mir.values[value_id]
+                reg=self.allocation.registers[value_id]
+                if reg>=0:reserved|=1<<reg
+                elif needs_slots and value.home>=value.width:occupied_slots.append((value.home-value.width,value.home))
         lines=[];seen=set()
         for value_id in dying:
             value=self.mir.values[value_id]
             reg=self.allocation.registers[value_id]
             if reg>=0:
-                if reserved&(1<<reg) or ("reg",reg) in seen:continue
+                if (reserved&(1<<reg) or ("reg",reg) in seen
+                        or (register_masks is not None and live_after & register_masks[reg])):continue
                 lines.append(f"  mov {_text(_register(reg,4))}, 0");seen.add(("reg",reg))
             elif value.home>=8 and not any(value.home-8<high and low<value.home for low,high in occupied_slots):
                 if ("slot",value.home) not in seen:

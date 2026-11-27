@@ -929,3 +929,109 @@ def test_mir_sparse_csr_packed_iterator_preserves_dense_color_and_edges(monkeypa
     assert packed.allowed == dense.allowed
     assert packed.registers == dense.registers and packed.saved == dense.saved
     assert packed.instruction_live_after == dense.instruction_live_after
+
+
+def _wide_retirement_lowerer():
+    from pcc.backend.self_backend_x86_mir import X86MIRValue, X86MIRFunction, X86MIRAllocation
+    from pcc.backend.self_backend_x86_mir_emit import Lowerer
+    func, plan = _prepare(CALL_LOOP)
+    count = 2048
+    registers = [-1] * count
+    for value, reg in ((0,12), (1,13), (2,13), (3,14), (4,15), (6,12), (2047,3)):
+        registers[value] = reg
+    values = tuple(X86MIRValue(i, 0, 8, i < 6, 16 if i in (5,7) else 8, False, True)
+                   for i in range(count))
+    mir = X86MIRFunction(values, (), (), {}, {}, (3,), {}, (), ())
+    allocation = X86MIRAllocation(tuple(registers), (), (), (), (), (), (), ())
+    return Lowerer(func, plan, mir, allocation)
+
+
+def test_mir_register_only_retirement_avoids_full_live_set_scan(monkeypatch):
+    from pcc.backend import self_backend_x86_mir_emit as emit
+    lowerer = _wide_retirement_lowerer()
+    live = (1 << 6) | (1 << 2047)
+    calls = []
+    original = emit._bits
+    def observed(mask):
+        calls.append(mask)
+        return original(mask)
+    monkeypatch.setattr(emit, '_bits', observed)
+    assert lowerer.retire((0,1,2,3,4,1), live, {15}) == ['  mov r13d, 0']
+    assert calls == []
+    # Immutable source tuple identity owns the mask cache; replacement must
+    # never use the previous physical-register assignment.
+    registers = list(lowerer.allocation.registers)
+    registers[6] = 13
+    lowerer.allocation.registers = tuple(registers)
+    assert lowerer.retire((0,1,2,3,4,1), live, {15}) == ['  mov r12d, 0']
+    assert calls == []
+
+
+def test_mir_register_only_retirement_mixed_spill_and_invalid_domain_fall_back(monkeypatch):
+    import pytest
+    from pcc.backend import self_backend_x86_mir_emit as emit
+    lowerer = _wide_retirement_lowerer()
+    original = emit._bits
+    calls = []
+    def observed(mask):
+        calls.append(mask)
+        return original(mask)
+    monkeypatch.setattr(emit, '_bits', observed)
+    live = (1 << 7) | (1 << 2047)
+    # Value 5's pointer spill overlaps live value 7; it must not be zeroed.
+    assert lowerer.retire((1,5), live) == ['  mov r13d, 0']
+    assert calls == [live]
+    invalid = 1 << 2048
+    with pytest.raises(IndexError):
+        lowerer.retire((1,), invalid)
+    assert calls[-1] == invalid
+
+
+def test_mir_register_only_retirement_custom_register_tuple_falls_back(monkeypatch):
+    from pcc.backend import self_backend_x86_mir_emit as emit
+    lowerer = _wide_retirement_lowerer()
+    class CustomRegisters(tuple):
+        pass
+    lowerer.allocation.registers = CustomRegisters(lowerer.allocation.registers)
+    original = emit._bits
+    calls = []
+    def observed(mask):
+        calls.append(mask)
+        return original(mask)
+    monkeypatch.setattr(emit, '_bits', observed)
+    live = (1 << 6) | (1 << 2047)
+    assert lowerer.retire((0,1,2,3,4,1), live, {15}) == ['  mov r13d, 0']
+    assert calls == [live]
+
+
+def test_mir_register_only_retirement_custom_allocation_field_observation():
+    from pcc.backend.self_backend_x86_mir import X86MIRAllocation
+    lowerer = _wide_retirement_lowerer()
+    original = lowerer.allocation
+    reads = []
+    class ObservedAllocation(X86MIRAllocation):
+        def __getattribute__(self, name):
+            if name == 'registers':
+                reads.append(name)
+            return super().__getattribute__(name)
+    lowerer.allocation = ObservedAllocation(original.registers, original.interference,
+        original.allowed, original.live_in, original.live_out, original.saved,
+        original.instruction_live_after, original.block_body_live)
+    live = (1 << 6) | (1 << 2047)
+    assert lowerer.retire((0,1,2,3,4,1), live, {15}) == ['  mov r13d, 0']
+    # Five dying operands, two live set rows, five final retirement reads.
+    # The rejected private representation must not read custom fields itself.
+    assert len(reads) == 12
+
+
+def test_mir_register_only_retirement_custom_lowerer_never_calls_new_helper():
+    from pcc.backend.self_backend_x86_mir_emit import Lowerer
+    original = _wide_retirement_lowerer()
+    class CustomLowerer(Lowerer):
+        def _register_retirement_masks(self, live_after):
+            raise AssertionError('private helper observed on custom route')
+    custom = CustomLowerer.__new__(CustomLowerer)
+    for name in Lowerer.__slots__:
+        setattr(custom, name, getattr(original, name))
+    live = (1 << 6) | (1 << 2047)
+    assert custom.retire((0,1,2,3,4,1), live, {15}) == ['  mov r13d, 0']
