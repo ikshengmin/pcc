@@ -1463,9 +1463,11 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None, *
         # symbol occurrence; each undefined occurrence enters one binding set.
         # Both final unresolved outputs filter by membership, not temporary sets.
         set_bytes = ledger.budget._set_bytes
-        rename_sets = (set_bytes(symbol_count + local_count)
-                       + set_bytes(external_count + local_count)
-                       + set_bytes(max_input_locals))
+        rename_sets = 0
+        if local_count:
+            rename_sets = (set_bytes(symbol_count + local_count)
+                           + set_bytes(external_count + local_count)
+                           + set_bytes(max_input_locals))
         placement_sets = (set_bytes(symbol_count)
                           + set_bytes(weak_count) + set_bytes(strong_count))
         symbol_metadata += max(rename_sets, placement_sets)
@@ -1482,7 +1484,16 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None, *
                         index, symbol_index, link._symbol_is_weak_definition(symbol),
                     ))
         definitions.freeze()
-        local_renames = link._local_symbol_renames([item.symbols for item in descriptors])
+        # The occurrence census above uses the same non-external N_SECT
+        # predicate as _local_symbol_renames. With no local definitions, no
+        # collision or duplicate-local check can match; its result would be
+        # one independent empty mapping per input. Avoid both full name sets
+        # rather than just discounting their reservation. Symbol names/types
+        # were already visited, and the ordinary placement validation remains.
+        if local_count:
+            local_renames = link._local_symbol_renames([item.symbols for item in descriptors])
+        else:
+            local_renames = [{} for _item in descriptors]
         defined, referenced = {}, set()
         weak_references, strong_references = set(), set()
         stack_symbols = {}

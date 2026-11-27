@@ -304,6 +304,20 @@ def test_symbol_phase_retirement_admits_and_emits_identical_image(tmp_path, monk
     budget.retained_bytes = 1024
     placement_peaks = []
     check_peak = budget.check_peak
+    rename_calls, input_maps = [], []
+    original_renames = host.link._local_symbol_renames
+    original_merge = host.link._merge_input_symbols
+
+    def renames(symbol_tables):
+        rename_calls.append(tuple(len(symbols) for symbols in symbol_tables))
+        return original_renames(symbol_tables)
+
+    def merge(*args):
+        input_maps.append((args[0], id(args[5]), bool(args[5])))
+        return original_merge(*args)
+
+    monkeypatch.setattr(host.link, "_local_symbol_renames", renames)
+    monkeypatch.setattr(host.link, "_merge_input_symbols", merge)
 
     def record(raw_bytes, **kwargs):
         if kwargs.get("label") == "Mach-O detached merge metadata":
@@ -313,6 +327,12 @@ def test_symbol_phase_retirement_admits_and_emits_identical_image(tmp_path, monk
     monkeypatch.setattr(budget, "check_peak", record)
     prepared = host.prepare_executable_from_paths(paths, compact_budget=budget)
     assert budget.retained_bytes == 1024
+    # No local definitions: no two-set rename owner, but each input still
+    # receives its own empty map throughout placement and relocation.
+    assert rename_calls == [], placement_peaks
+    assert [entry[0] for entry in input_maps] == list(range(4))
+    assert len({entry[1] for entry in input_maps}) == 4
+    assert not any(entry[2] for entry in input_maps)
     actual = macho_exec.link_prepared_executable(prepared, compact_budget=budget)
     eager = macho_exec.prepare_executable_object(
         [native.decode_packed_native_object(Path(path).read_bytes()) for path in paths],
@@ -355,7 +375,13 @@ def test_symbol_phase_retirement_admits_and_emits_identical_image(tmp_path, monk
 
     monkeypatch.setattr(local_budget, "check_peak", record_local)
     monkeypatch.setattr(local_budget, "_set_bytes", record_set)
+    rename_calls.clear()
+    input_maps.clear()
     local_view = host.prepare_executable_from_paths(local_paths, compact_budget=local_budget)
+    assert rename_calls == [(256, 256)]
+    assert [entry[0] for entry in input_maps] == [0, 1]
+    assert len({entry[1] for entry in input_maps}) == 2
+    assert any(entry[2] for entry in input_maps)  # real collision renames
     local_actual = macho_exec.link_prepared_executable(local_view, compact_budget=local_budget)
     local_eager = macho_exec.prepare_executable_object(
         [native.decode_packed_native_object(Path(path).read_bytes()) for path in local_paths],
