@@ -161,7 +161,7 @@ class PassContext:
         self.log: list[PassLogEntry] = []
 
         # Global stats
-        self.stats: dict[str, int] = {}
+        self.stats: dict[str, int | float] = {}
 
         # Per-pass execution metrics
         self.pass_metrics: dict[str, PassMetric] = {}
@@ -190,7 +190,7 @@ class PassContext:
         self.log.append(entry)
         _logger.debug("%s", entry)
 
-    def bump(self, stat_name: str, count: int = 1):
+    def bump(self, stat_name: str, count: int | float = 1):
         self.stats[stat_name] = self.stats.get(stat_name, 0) + count
 
     def disable_pass(self, pass_name: str):
