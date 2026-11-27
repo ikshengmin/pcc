@@ -552,6 +552,14 @@ def run_codegen_worker(
             read_native_exports_wire_for_module = read_verified_module_exports
             read_ast_wire = read_verified_ast
         worker_timing = worker_timing_enabled()
+        worker_gc_timing = None
+        try:
+            if worker_timing and os.environ.get("PCC_PROFILE_WORKER_GC", "") == "1":
+                from pcc.frontends.python.pipeline_memory import WorkerGcPhaseTiming
+
+                worker_gc_timing = WorkerGcPhaseTiming()
+        except Exception:
+            pass
         checkpoint_root = str(manifest.get("checkpoint_root", "") or "")
         checkpoint_graph = None
         checkpoint_skip_indices = []
@@ -667,9 +675,13 @@ def run_codegen_worker(
                         continue
             if lazy_ast_dir:
                 parse_started = time.monotonic() if worker_timing else 0.0
+                if worker_gc_timing is not None:
+                    worker_gc_timing.begin(index, "ast")
                 parsed_modules[index] = read_ast_wire(
                     os.path.join(lazy_ast_dir, "module_" + str(index) + ".json")
                 )
+                if worker_gc_timing is not None:
+                    worker_gc_timing.complete(index, "ast")
                 if worker_timing:
                     parse_ms_by_index[index] = int(
                         (time.monotonic() - parse_started) * 1000
@@ -712,6 +724,8 @@ def run_codegen_worker(
             infer_ms = 0
             try:
                 infer_started = time.monotonic() if worker_timing else 0.0
+                if worker_gc_timing is not None:
+                    worker_gc_timing.begin(index, "infer")
                 typed_module = infer_module(
                     ast_module,
                     external_exports=external_for_this,
@@ -724,6 +738,8 @@ def run_codegen_worker(
                         module_name,
                     ),
                 )
+                if worker_gc_timing is not None:
+                    worker_gc_timing.complete(index, "infer")
                 publish_worker_resource("infer:" + str(index))
                 if worker_timing:
                     infer_ms = int((time.monotonic() - infer_started) * 1000)
@@ -889,7 +905,11 @@ def run_codegen_worker(
                 phase_started = phase_timing.start() if phase_timing is not None else 0
                 # This worker owns a fresh instance and has only configured
                 # flags/exports since construction; keep its initial IR.
+                if worker_gc_timing is not None:
+                    worker_gc_timing.begin(index, "frontend_generate")
                 generated_module = codegen._generate_initial_module()
+                if worker_gc_timing is not None:
+                    worker_gc_timing.complete(index, "frontend_generate")
                 if phase_timing is not None:
                     phase_timing.add(0, phase_started)
                 publish_worker_resource("codegen:" + str(index))
