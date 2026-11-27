@@ -4315,6 +4315,33 @@ in the relevant section or issue and removes the entry.
        and stackmap label semantics. No native benefit inferred.
        Next seek dominant indexed instruction/emit structural
        owner, coordinate separate Stage2 tuple projection.
+       Default OFF post-selection machine-event attribution
+       (2026-11-27, no production): frozen class_gen PIDXcf4113cc,
+       current x64/frame/copy source9f01a770/e2f2fa84/a038f9cb,
+       exact complete ELF122f82e5. 727 funcs/1,675,103 initial
+       lines; total pass CPU10.908s /43.918s instrumented backend
+       (24.8%), frame promotion4.365s, copy forwarding4.755s,
+       all other1.788s; unchanged line identity88.74-97.76%
+       across phases (includes labels/directives, not parse hits).
+       Actual frozen c_codegen phase inputs SHA086ec069 (1039
+       each,1.733M frame/1.633M copy), detail replay11.82s/
+       65.7MB, exact prior complete text frame578e41d4/copy
+       ba54e21e. Slot parse432514/noncandidate accesses129546,
+       copy effects1264919/droppable839351/address457353/
+       two-op parse72655. Diagnostic count/sample owner CPU
+       frame3.681+copy6.313; per-call SIGPROF reset undersamples
+       tiny functions, observation overhead explicit. Frame574
+       samples: inline/slot/access parse74 (~.48s), pool refs64
+       (~.41s), liveness84. Copy1125: split/two-op57 (~.32s),
+       effects133/address29 (semantic decode not previously
+       available), dead_moves384 (~2.15s). Pure lexical parse
+       ceiling~.8s (~1.8% actual class backend); even including
+       pool/address share ~1.37s (~3%) before metadata expense.
+       Reject second machine-event stream architecture from
+       this evidence; no source change, no native inference.
+       Dominant combined owner is dataflow/analysis semantics.
+       Next actual dead-move/dataflow structure beyond rejected
+       trim/sparse owner, or native profile with proof.
        Next measure current combined generator/ownership IR
        reduction and packed allocator on the actual giant, then
        sparse live planes/streamed lowering only if measured
@@ -5107,7 +5134,6 @@ in the relevant section or issue and removes the entry.
    - 2026-11-27 native compiler self-PC profile feasibility blocked (claim ceae7394). Existing Linux profile-preflight passed: 80ms requested, counted79,998,206ns/running79,990,193ns, 86 samples/52 distinct IPs/kernel_lost0, stdout60d44a26. Retained authentic source6cb pcc1 SHA c88e3ba is 272,120,580B static ELF, above existing sealed 128MiB limit, and old worker lacks READY/G/DONE markers. Existing supported capture cannot sample it. Do not change cap or add alternate capture; no actual native compiler samples, hardware instructions/IPC, production or CI. Release claim; use actual phase receipts and same-IR static evidence without representing host samples as native.
 
    Claims:
-   - Default MIR-OFF x64 post-selection repeated machine event attribution (self_backend_x86_64_linux.py, x86_64_frame_registers.py, x86_64_register_copies.py; actual per-pass CPU/unchanged text/parse owner, no edits before upper bound, exact output and no verifier/IR overlap): Codex, Linux, 2026-11-27T07:03Z, area backend
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
    - Compiler hot-function same contextual IR MIR/legacy static admission (retained exact source-matched contextual compiler PIDX, static instruction/stack traffic and admission reasons; host profile directional only; no production/default change, no Stage1 emitter source edit): Codex, Linux, 2026-11-27T06:28Z, area runtime-codegen
 4. **Source-language frontends**, in parallel with item 2 (different files;
