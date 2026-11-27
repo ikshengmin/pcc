@@ -4343,6 +4343,20 @@ in the relevant section or issue and removes the entry.
        Dominant combined owner is dataflow/analysis semantics.
        Next actual dead-move/dataflow structure beyond rejected
        trim/sparse owner, or native profile with proof.
+       Default OFF strong-liveness unchanged live_out attribution
+       (2026-11-27; exact frozen actual class_gen dead inputs
+       SHA85dd1a74/current copy ownera038f9cb; no production):
+       guard2.09s/51.35MB,727 complete dead masks exact
+       digest0266a8b0. 421778 blocks/877648 worklist pops,
+       2909457 line steps,30154 already-evaluated unchanged
+       live_out revisits (3.44% pops)/146148 line steps
+       (5.02%). 425716 changed revisits/1272087 steps;
+       final1491222 line selection steps unaffected.
+       Even perfect skip<.1s of ~2s owner/<.25% complete
+       backend, before sentinel/branch cost. Reject standalone
+       change, no repeat of prior trim/sparse prototypes.
+       Stop minor host-only dataflow points; next structural
+       production Stage1 wall owner or actual native profile.
        Next measure current combined generator/ownership IR
        reduction and packed allocator on the actual giant, then
        sparse live planes/streamed lowering only if measured
@@ -5135,7 +5149,6 @@ in the relevant section or issue and removes the entry.
    - 2026-11-27 native compiler self-PC profile feasibility blocked (claim ceae7394). Existing Linux profile-preflight passed: 80ms requested, counted79,998,206ns/running79,990,193ns, 86 samples/52 distinct IPs/kernel_lost0, stdout60d44a26. Retained authentic source6cb pcc1 SHA c88e3ba is 272,120,580B static ELF, above existing sealed 128MiB limit, and old worker lacks READY/G/DONE markers. Existing supported capture cannot sample it. Do not change cap or add alternate capture; no actual native compiler samples, hardware instructions/IPC, production or CI. Release claim; use actual phase receipts and same-IR static evidence without representing host samples as native.
 
    Claims:
-   - Default x64 strong-liveness exact unchanged-live_out worklist attribution (x86_64_register_copies.py, actual frozen dead-move CFG, no edit before redundant transfer ceiling, not prior trim/sparse; no gate relax): Codex, Linux, 2026-11-27T07:15Z, area backend
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
    - Compiler hot-function same contextual IR MIR/legacy static admission (retained exact source-matched contextual compiler PIDX, static instruction/stack traffic and admission reasons; host profile directional only; no production/default change, no Stage1 emitter source edit): Codex, Linux, 2026-11-27T06:28Z, area runtime-codegen
 4. **Source-language frontends**, in parallel with item 2 (different files;
