@@ -128,6 +128,16 @@ _POOL_REJECTED_INSTRUCTION_KIND_IDS = (
 )
 
 
+# Intrinsic calls whose emitter commits the result with
+# ``commit_allocated_scalar_result`` (self_backend_aarch64_darwin_calls), so
+# the result may hold a pool register like any call result. The call itself
+# stays a call barrier: on Darwin it is the TLV resolver.
+_ALLOCATED_RESULT_INTRINSICS = (
+    "llvm.threadlocal.address",
+    "llvm.threadlocal.address.p0",
+)
+
+
 def _is_scalar_register_type(value_type: TypeDesc) -> bool:
     return value_type.is_int or value_type.is_ptr
 
@@ -2253,12 +2263,17 @@ def allocate_aarch64_block_registers(func: ParsedFunction) -> None:
                     position += 1
                     continue
                 call_header: CompilerInt4 = kernel.call_header(call_id)
-                if not (call_header.third & 1) and kernel.call_texts[
-                    call_header.second
-                ].startswith("llvm."):
+                callee_text = kernel.call_texts[call_header.second]
+                if (
+                    not (call_header.third & 1)
+                    and callee_text.startswith("llvm.")
+                    and callee_text not in _ALLOCATED_RESULT_INTRINSICS
+                ):
                     # Intrinsics are lowered inline by emitters that store
                     # their result to its slot themselves; only the generic
-                    # call path commits through the allocator.
+                    # call path and the intrinsics listed in
+                    # _ALLOCATED_RESULT_INTRINSICS commit through the
+                    # allocator.
                     position += 1
                     continue
                 ret_header: CompilerInt4 = kernel.type_header(call_header.first)

@@ -3110,7 +3110,37 @@ in the relevant section or issue and removes the entry.
    `cmp #imm` +8.5k (LLVM uses `ccmp` chains, -2.9k), `sxtb`/`sxtw` +6k,
    immediates +5k; frames entered and calls are not higher (self makes
    fewer calls). The gap is instruction selection and local placement of
-   values across many patterns, not one pass.
+   values across many patterns, not one pass. Copies split further: moves
+   between argument and callee-saved registers are close to LLVM's; the
+   excess is scratch traffic through x9-x17 (self about 14k, LLVM under
+   1k), concentrated in the container lock/unlock compare-exchange and
+   release-store emitters and `str_join_list`.
+   (k) Merged (Claude, 2026-11-27), measured together as arm bundle2
+   against rc-base, control rc-base2: thread-local address results are
+   pool candidates (`_ALLOCATED_RESULT_INTRINSICS`; the TLV result was
+   stored to its slot and reloaded at every use, 0.92% of instructions
+   alone); frame alignment holes cleared with the widest aligned store
+   (one `stur wzr` per 4-byte hole instead of four `sturb`); instcombine
+   narrows `and (sext iN x), 2^N-1` to `zext` and `icmp eq/ne (ext iN x), C`
+   to an N-bit compare (target-neutral, so x86-64 runtimes see it too).
+   Instructions per request 228066 -> 224377 (-1.6% to -1.9% across runs;
+   control -0.1%). `ab` five pairs: w1 66799 -> 67925 (+1.7%, 4/5, floor
+   4.5%: within noise), w4 -1.5% (floor 16.2%, inconclusive). Tests:
+   `test_aarch64_tls_address_registers.py` (no slot traffic, two threads),
+   `test_aarch64_padding_zero_stores.py`, `test_instcombine_narrow_extensions.py`
+   (boundary values executed before and after). AArch64, TLS and IR pass
+   files 4474 passed; four nodes excluded that fail identically on HEAD or
+   need `PCC_RUNTIME_ARCHIVE` (constructor cleanup native, exception TLS
+   source text, two optimizer native-export shapes). Not run: whole suite,
+   GC integration gate, bootstrap.
+   Assessment: each targeted item is 0.5-1% of instructions; the
+   remaining gap is the emission model (one IR instruction at a time,
+   operands through fixed scratch registers, repaired by peepholes). Next:
+   compare-exchange and atomic-store emitters using operand registers and
+   `wzr` directly, `and`-test fusion (`tst`, then `tbz`/`tbnz` with branch
+   relaxation), register-offset addressing; the structural alternative is
+   an AArch64 machine IR with selection and allocation, as the typed x86-64
+   MIR did (-22% static instructions, Linux w1 +36%).
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2

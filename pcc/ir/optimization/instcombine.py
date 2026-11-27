@@ -24,6 +24,10 @@ canonicalizations that can be expressed textually:
 - ``sub (add x, C1), C2`` → ``add x, (C1-C2)``
 - ``zext i1 true/false`` → ``1/0``
 - ``sext i1 true/false`` → ``-1/0``
+- ``and (sext iN x to iM), 2^N-1`` → ``zext iN x to iM``
+  (InstCombineAndOrXor.cpp)
+- ``icmp eq/ne (sext iN x to iM), C`` → ``icmp eq/ne iN x, C`` for a signed
+  N-bit ``C``, and ``(zext iN x)`` for ``0 <= C < 2^N`` (InstCombineCompares.cpp)
 
 As in upstream, this pass runs after a simplifier phase and then
 cleans up dead now-unused local instructions. It is still a subset;
@@ -70,6 +74,14 @@ _SEXT_CONST_RE = re.compile(
     r"^(?P<indent>\s*)%(?P<result>[\w.$-]+)\s*=\s*sext\s+i1\s+(?P<cond>true|false)\s+to\s+(?P<ty>i\d+)\s*$"
 )
 _SSA_NAME_RE = re.compile(r"%([\w.$-]+)")
+_EXTEND_RE = re.compile(
+    r"^(?P<indent>\s*)%(?P<result>[\w.$-]+)\s*=\s*(?P<op>sext|zext)\s+"
+    r"(?P<narrow>i\d+)\s+(?P<source>%[\w.$-]+)\s+to\s+(?P<wide>i\d+)\s*$"
+)
+_ICMP_EQ_RE = re.compile(
+    r"^(?P<indent>\s*)%(?P<result>[\w.$-]+)\s*=\s*icmp\s+(?P<pred>eq|ne)\s+"
+    r"(?P<ty>i\d+)\s+(?P<lhs>[^,]+?)\s*,\s*(?P<rhs>.+?)\s*$"
+)
 
 
 def _try_int(token: str) -> object:
@@ -318,11 +330,14 @@ class _CombineState:
         replacements: dict[str, str],
         ssa_names: set[str],
         binops: dict[str, dict[str, str]],
+        extends: dict[str, dict[str, str]] | None = None,
     ) -> None:
         self.lines = lines
         self.replacements = replacements
         self.ssa_names = ssa_names
         self.binops = binops
+        # ``sext``/``zext`` of an SSA value, by result name.
+        self.extends = extends if extends is not None else {}
         self.changed = False
 
 
@@ -1991,8 +2006,69 @@ def _combine_or(state: _CombineState, idx: int, info: dict[str, str]) -> bool:
                 return True
     return False
 
+def _narrow_width(ty: str) -> int | None:
+    width = _int_width(ty)
+    return width if width is not None and width > 1 else None
+
+
+def _combine_and_masked_sext(state: _CombineState, idx: int, info: dict[str, str]) -> bool:
+    """``and (sext iN x to iM), 2^N-1`` keeps exactly x's bits: ``zext``."""
+    ty = info["ty"]
+    for value, mask in ((info["lhs"], info["rhs"]), (info["rhs"], info["lhs"])):
+        if not value.startswith("%"):
+            continue
+        extend = state.extends.get(value[1:])
+        if extend is None or extend["op"] != "sext" or extend["wide"] != ty:
+            continue
+        width = _narrow_width(extend["narrow"])
+        constant = _try_int(mask)
+        if width is None or not isinstance(constant, int):
+            continue
+        if unsigned_value(constant, _int_width(ty)) != (1 << width) - 1:
+            continue
+        state.lines[idx] = (
+            f"{info['indent']}%{info['result']} = zext {extend['narrow']} "
+            f"{extend['source']} to {ty}\n"
+        )
+        state.changed = True
+        return True
+    return False
+
+
+def _combine_icmp_extended(state: _CombineState, idx: int, match: re.Match) -> bool:
+    """``icmp eq/ne (ext iN x), C`` compares x itself when C is an N-bit value."""
+    ty = match.group("ty")
+    lhs, rhs = match.group("lhs").strip(), match.group("rhs").strip()
+    for value, constant_text in ((lhs, rhs), (rhs, lhs)):
+        if not value.startswith("%"):
+            continue
+        extend = state.extends.get(value[1:])
+        if extend is None or extend["wide"] != ty:
+            continue
+        width = _narrow_width(extend["narrow"])
+        constant = _try_int(constant_text)
+        if width is None or not isinstance(constant, int):
+            continue
+        if extend["op"] == "sext":
+            if not -(1 << (width - 1)) <= constant < (1 << (width - 1)):
+                continue
+            narrow_constant = constant
+        else:
+            if not 0 <= constant < (1 << width):
+                continue
+            narrow_constant = constant - (1 << width) if constant >= 1 << (width - 1) else constant
+        state.lines[idx] = (
+            f"{match.group('indent')}%{match.group('result')} = icmp {match.group('pred')} "
+            f"{extend['narrow']} {extend['source']}, {narrow_constant}\n"
+        )
+        state.changed = True
+        return True
+    return False
+
+
 def _combine_and(state: _CombineState, idx: int, info: dict[str, str]) -> bool:
-    """``and`` peepholes: ``x & x``, ``x & 0``, ``x & -1`` and ``x & ~x``."""
+    """``and`` peepholes: ``x & x``, ``x & 0``, ``x & -1``, ``x & ~x`` and a
+    sign extension masked to its source width."""
     lines = state.lines
     replacements = state.replacements
     binops = state.binops
@@ -2000,6 +2076,8 @@ def _combine_and(state: _CombineState, idx: int, info: dict[str, str]) -> bool:
     rhs = info["rhs"]
     ty = info["ty"]
     result = info["result"]
+    if _combine_and_masked_sext(state, idx, info):
+        return True
     if lhs == rhs:
         replacements[result] = lhs
         lines[idx] = ""
@@ -2075,9 +2153,17 @@ def _rewrite_function(
     ssa_names = set(_SSA_NAME_RE.findall(fn_text))
 
     binops: dict[str, dict[str, str]] = {}
-    state = _CombineState(lines, replacements, ssa_names, binops)
+    extends: dict[str, dict[str, str]] = {}
+    state = _CombineState(lines, replacements, ssa_names, binops, extends)
     for idx, line in enumerate(lines):
         stripped = line.rstrip("\n")
+        extend = _EXTEND_RE.match(stripped)
+        if extend is not None:
+            extends[extend.group("result")] = {
+                "op": extend.group("op"), "narrow": extend.group("narrow"),
+                "source": extend.group("source"), "wide": extend.group("wide"),
+            }
+            continue
         match = _BINOP_RE.match(stripped)
         if match is None:
             continue
@@ -2168,6 +2254,11 @@ def _rewrite_function(
             if op == "and":
                 if _combine_and(state, idx, info):
                     continue
+
+        match = _ICMP_EQ_RE.match(stripped)
+        if match is not None:
+            if _combine_icmp_extended(state, idx, match):
+                continue
 
         match = _ZEXT_CONST_RE.match(stripped)
         if match is not None:

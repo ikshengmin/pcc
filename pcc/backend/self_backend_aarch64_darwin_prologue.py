@@ -79,6 +79,11 @@ def function_uses_darwin_tls(func: ParsedFunction, module_symbols: PreparedModul
     return False
 
 
+# Zeroing stores for frame alignment holes, by width in bytes.
+_PADDING_UNSCALED_STORES = {8: "stur", 4: "stur", 2: "sturh", 1: "sturb"}
+_PADDING_STORES = {8: "str", 4: "str", 2: "strh", 1: "strb"}
+
+
 def emit_function_prologue(
     func: ParsedFunction,
     module_symbols: PreparedModuleSymbols,
@@ -170,21 +175,26 @@ def emit_function_prologue(
         # Reserved alignment bytes contain no program storage. Clear them
         # before the first body poll so raw stack capture cannot retain a
         # prior activation's object through an uninitialized frame hole.
+        # Each store is the widest naturally aligned one (x29 is 16-byte
+        # aligned) that stays inside the hole: a 4-byte hole beside an i32
+        # slot is one ``stur wzr``, not four byte stores.
         for low, high in padding:
             offset = high
             while offset > low:
-                wide = offset % 8 == 0 and offset - low >= 8
-                width = 8 if wide else 1
-                register = "xzr" if wide else "wzr"
-                operation = "stur" if wide else "sturb"
+                width = 1
+                for candidate in (8, 4, 2):
+                    if offset % candidate == 0 and offset - low >= candidate:
+                        width = candidate
+                        break
+                register = "xzr" if width == 8 else "wzr"
                 if offset <= 255:
                     lines.append(emitted_memory_instruction_line(
-                        operation, register, "x29", -offset,
+                        _PADDING_UNSCALED_STORES[width], register, "x29", -offset,
                     ))
                 else:
                     lines.extend(emit_add_offset("x9", "x29", -offset))
                     lines.append(emitted_memory_instruction_line(
-                        "str" if wide else "strb", register, "x9",
+                        _PADDING_STORES[width], register, "x9",
                     ))
                 offset -= width
         count = len(func.aarch64_callee_saved)
