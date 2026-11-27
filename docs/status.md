@@ -5211,6 +5211,7 @@ in the relevant section or issue and removes the entry.
    Claims:
    - Stage1 common x64 default stackmap multi-scan structural attribution (self_backend_precise_stackmaps.py only; exact frozen actual planner records/error order, metadata/flag/type count and actual owner CPU, ≥24% planner ceiling before edits; no native bypass): Codex, Linux, 2026-11-27T09:12Z, area backend
    - Runtime QPS through the self AArch64 backend toward LLVM parity: locate the LLVM step the self passes lack (pcc_perf reference ablations, scripts/pcc_perf.py), then implement it in pcc's own AArch64 passes (shrink-wrapping, allocation or selection, whichever the ablation ranks first); IR-pass changes are target-neutral and reach x64; avoids the typed x64 MIR files: Claude, macOS, 2026-11-27T06:46Z, area backend
+   - Native summary JSON post-parse provider/raw memory diagnostic in owner-restored clean e8 checkout (exact archived GC fixture, existing allocator telemetry, no logging/no production changes, actual canonical output and live hist, no timing claim): Codex, Linux, 2026-11-27T09:22Z, area runtime-codegen
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
