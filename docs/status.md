@@ -3862,11 +3862,25 @@ in the relevant section or issue and removes the entry.
        general OFF profile _host_definition_planes343735 calls
        1.204s, _host_definition_type_matches2.508s inclusive profiled
        (not uninstrumented formal).
-       Next (latest actual Stage1 codegen priority): (0) attribute
-       general OFF verifier repeated definition-plane facts on exact
-       large compiler input, source-owned immutable private proof,
-       native unchanged hot edge parity first, then exact object and
-       CPU/RSS controls; retain inline OFF default;
+       Exact current d222ab42 class_gen OFF strict capture closure626,
+       same 727 funcs/87118 blocks/335663 instr/inline0, PIDX
+       SHA cf4113ccce175998c3aeab8d47b2d1ddc0a8961a9e96d163156012e5354ea4b0.
+       Actual diagnostic 343735 plane checks all successful, 343008
+       per-operand successful type checks (141383 same ID, 201625
+       canonical aliases, no fallback), instrumented plane inclusive CPU
+       .3949s (~1.15us/call), type proof1.1289s (~3.29us/call),
+       verify6.162s incl observers, not formal; largest method33437
+       checks/38ms and class init25992/30ms. Standalone plane proof
+       even eliminated entirely ceilings at ~0.5% whole class worker,
+       complete type proof~1.4%; no standalone source change, no
+       global cache and no native inference risk incurred. Release
+       verifier proof unit. Next (latest actual Stage1 codegen priority):
+       (0) attribute repeated per-function module-global exactness proof
+       in dominant general OFF x86 stack-map planning, existing private
+       worker-owned globals-index lifetime only, measure actual
+       source count/CPU before edits; native raw and public/custom
+       observer unchanged, exact plans/ELF and CPU/RSS controls;
+       retain inline OFF default;
        (1) ARM typed
        prepare memory: quantify retained prior run history and
        private CFG owner retirement with public snapshot/callback
@@ -4470,7 +4484,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
-   - Actual general OFF verifier repeated definition-plane facts attribution (exact native hot parity first, default inline OFF unchanged): Codex, Linux, 2026-11-27T01:02Z, area backend (self_backend_verify, no overlap with current CI TLS/Stage2 dependency owner)
+   - Actual general OFF x86 stackmap repeated module-global proof attribution (private worker globals-index lifetime, native/public unchanged): Codex, Linux, 2026-11-27T01:05Z, area backend (self_backend_precise_stackmaps, no overlap with CI TLS/Stage2 dependency owner)
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
