@@ -628,3 +628,102 @@ def test_range_predicate_runs_before_and_after_threading(tmp_path, threaded):
     executable.chmod(0o755)
     ran = subprocess.run([str(executable)], capture_output=True, timeout=30)
     assert ran.returncode == 0
+
+
+def _merged_negation_module() -> str:
+    # ``if not _ptr_can_have_header(o)``: two paths compute the predicate,
+    # a merge negates it and branches (py_list's _list_is_sane).
+    return """target triple = "arm64-apple-darwin"
+declare i64 @probe(i64)
+define internal i64 @check(i64 %o, i64 %mode) {
+entry:
+  %fast = icmp eq i64 %mode, 0
+  br i1 %fast, label %direct, label %probed
+direct:
+  %bit = and i64 %o, 1
+  %untagged = icmp ne i64 %bit, 1
+  br label %merge
+probed:
+  %answer = call i64 @probe(i64 %o)
+  %managed = icmp ne i64 %answer, 0
+  br label %merge
+merge:
+  %ok = phi i1 [ %untagged, %direct ], [ %managed, %probed ]
+  %not = xor i1 %ok, true
+  br i1 %not, label %bad, label %good
+bad:
+  %r.bad = phi i64 [ 7, %merge ]
+  ret i64 %r.bad
+good:
+  ret i64 1
+}
+define i64 @probe(i64 %o) {
+entry:
+  %small = icmp ult i64 %o, 100
+  %w = zext i1 %small to i64
+  ret i64 %w
+}
+define i32 @main() {
+entry:
+  %a = call i64 @check(i64 4, i64 0)
+  %b = call i64 @check(i64 5, i64 0)
+  %c = call i64 @check(i64 40, i64 1)
+  %d = call i64 @check(i64 400, i64 1)
+  %ok_a = icmp eq i64 %a, 1
+  %ok_b = icmp eq i64 %b, 7
+  %ok_c = icmp eq i64 %c, 1
+  %ok_d = icmp eq i64 %d, 7
+  %ab = and i1 %ok_a, %ok_b
+  %cd = and i1 %ok_c, %ok_d
+  %all = and i1 %ab, %cd
+  %status = select i1 %all, i32 0, i32 63
+  ret i32 %status
+}
+"""
+
+
+def test_a_small_boolean_merge_is_copied_into_its_jumping_predecessors():
+    out, changed = jump_thread_text(_merged_negation_module())
+    assert changed
+    _check_phi_entries(out)
+    body = _function(out, "check")
+    # Each path branches on its own compare; the merge and its phi are gone.
+    assert "phi i1" not in body and "merge:" not in body, body
+    assert body.count("br i1 %not.td") == 2, body
+    # The successor phi gained one entry per copied path.
+    entries = re.search(r"%r\.bad = phi i64 (.*)", body).group(1)
+    assert sorted(re.findall(r"\[\s*7,\s*%(\w+)\s*\]", entries)) == ["direct", "probed"], body
+
+
+def test_a_merge_whose_values_are_used_beyond_its_successor_phis_is_kept():
+    text = _merged_negation_module().replace(
+        "good:\n  ret i64 1\n", "good:\n  %w = zext i1 %ok to i64\n  ret i64 %w\n")
+    out, _changed = jump_thread_text(text)
+    _check_phi_entries(out)
+    assert "%ok = phi i1" in _function(out, "check")
+
+
+def test_the_merged_negation_folds_to_compare_branches_in_the_pipeline():
+    out = run_owned_passes(_merged_negation_module(), ["jump-thread", "instsimplify", "instcombine", "dce"])
+    _check_phi_entries(out)
+    body = _function(out, "check")
+    assert "xor" not in body and "phi i1" not in body, body
+
+
+# native Darwin arm64 execution
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
+@pytest.mark.parametrize("passes", (None, ["jump-thread", "instsimplify", "instcombine", "dce"]),
+                         ids=("unchanged", "duplicated"))
+def test_merged_negation_runs_before_and_after(tmp_path, passes):
+    from pcc.backend.macho_exec import link_executable
+    from pcc.backend.owned_object_emit import emit_owned_object
+
+    text = _merged_negation_module()
+    if passes is not None:
+        text = run_owned_passes(text, passes)
+    executable = tmp_path / "merged_negation"
+    executable.write_bytes(link_executable([emit_owned_object(text, "arm64-apple-darwin")],
+                                           entry="_main"))
+    executable.chmod(0o755)
+    ran = subprocess.run([str(executable)], capture_output=True, timeout=30)
+    assert ran.returncode == 0

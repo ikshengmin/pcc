@@ -68,6 +68,9 @@ _PURE_OPCODES = frozenset((
 ))
 _CHANGES_PER_BLOCK = 4
 _EXTRA_CHANGES = 64
+# Non-phi instructions a branch block may carry and still be copied into
+# its predecessors (tail duplication of a boolean merge).
+_DUPLICATED_INSTRUCTIONS = 2
 
 
 def _width(ty: str) -> int | None:
@@ -245,6 +248,14 @@ class _State:
         self.home: dict[int, str] = {}
         self.users: dict[str, list[Instruction]] = {}
         self.removed: set[str] = set()
+        # Every local name (values and labels), for fresh copies' names.
+        self.names: set[str] = {block.name for block in fn.blocks}
+        for arg in fn.args:
+            self.names.add(arg.name.lstrip("%"))
+        for block in fn.blocks:
+            for inst in block.instructions:
+                if inst.result_name:
+                    self.names.add(inst.result_name)
         for block in fn.blocks:
             term = block.terminator
             targets = _LABEL_TOKEN_RE.findall(term.text) if term is not None else []
@@ -527,6 +538,126 @@ class _State:
             affected.extend(self.succs.get(block.name, []))
         return affected
 
+    def fresh(self, base: str) -> str:
+        index = 1
+        while base + ".td" + str(index) in self.names:
+            index += 1
+        name = base + ".td" + str(index)
+        self.names.add(name)
+        return name
+
+    def duplicate(self, block: BasicBlock) -> list[str]:
+        """Copy a boolean merge into the predecessors that jump to it.
+
+        ``B`` holds phis, at most ``_DUPLICATED_INSTRUCTIONS`` side-effect-
+        free integer operations and a ``br i1`` on a value it defines; its
+        values are used only in it or by its successors' phis (as for
+        ``thread``). A predecessor ``P`` ending in ``br label %B`` that does
+        not already reach either successor gets B's operations with B's phis
+        replaced by the values ``P`` supplies, under fresh names, and B's
+        branch; each successor phi takes for ``P`` what it took for ``B``.
+        This is what the code generator's tail duplication does for a small
+        block: each compare then feeds its own branch instead of a
+        materialized boolean merged through a phi (``not`` of a predicate
+        that two paths computed).
+        """
+        if block.name == self.entry or not block.instructions:
+            return []
+        branch = _COND_BR_RE.match(block.terminator.text.rstrip("\n"))
+        if branch is None:
+            return []
+        true_target, false_target = branch.group("true"), branch.group("false")
+        if true_target == false_target or block.name in (true_target, false_target):
+            return []
+        body = block.instructions[:-1]
+        phis = [inst for inst in body if inst.opcode == "phi"]
+        rest = [inst for inst in body if inst.opcode != "phi"]
+        if not phis or len(rest) > _DUPLICATED_INSTRUCTIONS or body[:len(phis)] != phis:
+            return []
+        if any(inst.opcode not in _PURE_OPCODES or inst.result_name is None for inst in rest):
+            return []
+        defined = {inst.result_name for inst in body if inst.result_name}
+        cond = branch.group("cond").strip()
+        if not cond.startswith("%") or cond[1:] not in defined:
+            return []
+        if not self.uses_confined(block, defined, {true_target, false_target}):
+            return []
+        for inst in phis:
+            parts = _phi_parts(inst)
+            if parts is None:
+                return []
+            for value, _label in parts[2]:
+                if value.startswith("%") and value[1:] in defined:
+                    return []
+        targets = [self.blocks.get(true_target), self.blocks.get(false_target)]
+        if targets[0] is None or targets[1] is None:
+            return []
+        affected: list[str] = []
+        for pred_name in list(dict.fromkeys(self.preds[block.name])):
+            if self.preds[block.name].count(pred_name) != 1 or pred_name == block.name:
+                continue
+            pred = self.blocks[pred_name]
+            term = pred.terminator
+            if term is None or _UNCOND_BR_RE.match(term.text.rstrip("\n")) is None:
+                continue
+            if pred_name in self.preds[true_target] or pred_name in self.preds[false_target]:
+                continue
+            mapping: dict[str, str] = {}
+            for inst in phis:
+                name, _ty, incoming = _phi_parts(inst)
+                values = [value for value, label in incoming if label == pred_name]
+                if len(values) != 1:
+                    mapping = None
+                    break
+                mapping[name] = values[0]
+            if mapping is None:
+                continue
+            successor_entries: list[tuple[Instruction, str]] = []
+            for target in targets:
+                for inst in _phis(target):
+                    parts = _phi_parts(inst)
+                    if parts is None:
+                        successor_entries = None
+                        break
+                    from_block = [value for value, label in parts[2] if label == block.name]
+                    if len(from_block) != 1:
+                        successor_entries = None
+                        break
+                    successor_entries.append((inst, from_block[0]))
+                if successor_entries is None:
+                    break
+            if successor_entries is None:
+                continue
+            copies: list[Instruction] = []
+            for inst in rest:
+                mapping[inst.result_name] = "%" + self.fresh(inst.result_name)
+                copies.append(Instruction.from_text(replace_local_names(inst.text, mapping)))
+            new_term = Instruction.from_text(replace_local_names(block.terminator.text, mapping))
+            pred.instructions = pred.instructions[:-1] + copies + [new_term]
+            for inst in copies + [new_term]:
+                self.home[id(inst)] = pred_name
+                for name in inst.operand_names():
+                    self.users.setdefault(name, []).append(inst)
+            for inst, value in successor_entries:
+                if value.startswith("%") and value[1:] in mapping:
+                    value = mapping[value[1:]]
+                _set_phi_incoming(inst, lambda incoming, v=value: incoming + [(v, pred_name)])
+                self.add_use(value, inst)
+            self.preds[block.name].remove(pred_name)
+            self.succs[pred_name] = _LABEL_TOKEN_RE.findall(new_term.text)
+            for target_name in self.succs[pred_name]:
+                self.preds[target_name].append(pred_name)
+            for inst in phis:
+                _set_phi_incoming(inst, lambda incoming: [(v, l) for v, l in incoming if l != pred_name])
+            affected.extend((pred_name, true_target, false_target))
+        if not affected:
+            return []
+        affected.append(block.name)
+        if not self.preds[block.name]:
+            self.remove_unreachable(block)
+            affected.extend(self.succs.get(block.name, []))
+        return affected
+
     def remove_unreachable_blocks(self) -> list[str]:
         """Drop blocks a decided edge left unreachable (a loop the entry
         decides never to enter keeps its back-edge), and their phi entries.
@@ -592,7 +723,8 @@ def jump_thread_function(fn: Function) -> bool:
         block = state.blocks[name]
         affected = (state.merge_into_predecessor(block)
                     or state.bypass_forwarder(block)
-                    or state.thread(block))
+                    or state.thread(block)
+                    or state.duplicate(block))
         if not affected:
             continue
         changed = True

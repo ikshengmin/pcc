@@ -3488,6 +3488,18 @@ in the relevant section or issue and removes the entry.
    Tests: the size/alignment/overlap matrix (now with memchr positions and
    strlen starts) matches the host's libc for the clang-built and the
    self-backend-built objects.
+   (ae) Merged (Claude, 2026-11-28): `if not f(x):` no longer
+   materializes its negation. instcombine turns `br (xor X, true), T, F`
+   into `br X, F, T` and `xor (icmp P a, b), true` into `icmp !P a, b`
+   for a single-use negation or compare; jump threading copies a boolean
+   merge (phis, at most two pure operations, a `br i1`) into each
+   predecessor that jumps to it, the code generator's tail duplication,
+   so each path branches on its own compare. Exact h23-swar -> h25-dup
+   105458 -> 104565 (-0.85%, of which the strlen revert is -68):
+   `_list_is_sane` -326 per request. Tests: each fold and its refusals,
+   the merge copied with its successor phis, a merge whose value is used
+   further kept, natively executed before and after; optimizer files
+   538 passed (the same 3 HEAD failures).
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2

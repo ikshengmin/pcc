@@ -32,6 +32,9 @@ canonicalizations that can be expressed textually:
 - ``trunc (sext/zext iN x to iW) to iM`` → ``x`` (M == N), ``trunc iN x to iM``
   (M < N) or the same extension of x to iM (N < M) (InstCombineCasts.cpp)
 - ``trunc (and x, C) to iM`` → ``trunc x to iM`` when C keeps all M low bits
+- ``br (xor X, true), T, F`` → ``br X, F, T`` and ``xor (icmp P a, b), true``
+  → ``icmp !P a, b`` for a single-use negation or compare (visitBranchInst,
+  InstCombineCompares)
 - ``add/mul/and/or/xor C, x`` → ``op x, C``: constants are the right operand
   of a commutative operation (InstructionCombining.cpp,
   SimplifyAssociativeOrCommutative); later rewrites see the swapped line
@@ -92,6 +95,19 @@ _EXTEND_RE = re.compile(
     r"^(?P<indent>\s*)%(?P<result>[\w.$-]+)\s*=\s*(?P<op>sext|zext)\s+"
     r"(?P<narrow>i\d+)\s+(?P<source>%[\w.$-]+)\s+to\s+(?P<wide>i\d+)\s*$"
 )
+_COND_BR_RE = re.compile(
+    r"^(?P<indent>\s*)br\s+i1\s+%(?P<cond>[\w.$-]+)\s*,\s*label\s+%(?P<true>[\w.$-]+)\s*,"
+    r"\s*label\s+%(?P<false>[\w.$-]+)\s*$"
+)
+_ICMP_RE = re.compile(
+    r"^(?P<indent>\s*)%(?P<result>[\w.$-]+)\s*=\s*icmp\s+(?P<pred>\w+)\s+"
+    r"(?P<ty>\S+)\s+(?P<lhs>[^,]+?)\s*,\s*(?P<rhs>.+?)\s*$"
+)
+_INVERSE_PREDICATES = {
+    "eq": "ne", "ne": "eq", "slt": "sge", "sge": "slt", "sgt": "sle", "sle": "sgt",
+    "ult": "uge", "uge": "ult", "ugt": "ule", "ule": "ugt",
+}
+_TRUE_SPELLINGS = ("true", "1", "-1")
 _TRUNC_RE = re.compile(
     r"^(?P<indent>\s*)%(?P<result>[\w.$-]+)\s*=\s*trunc\s+(?P<wide>i\d+)\s+"
     r"(?P<source>%[\w.$-]+)\s+to\s+(?P<target>i\d+)\s*$"
@@ -356,7 +372,21 @@ class _CombineState:
         self.binops = binops
         # ``sext``/``zext`` of an SSA value, by result name.
         self.extends = extends if extends is not None else {}
+        # ``icmp`` by result name, and every local name's occurrence count.
+        self.compares: dict[str, dict[str, str]] = {}
+        self.occurrences: dict[str, int] | None = None
         self.changed = False
+
+    def use_count(self, name: str) -> int:
+        """Uses of ``%name`` in the function as it was read (its definition
+        is not one)."""
+        if self.occurrences is None:
+            counts: dict[str, int] = {}
+            for line in self.lines:
+                for found in _SSA_NAME_RE.findall(line):
+                    counts[found] = counts.get(found, 0) + 1
+            self.occurrences = counts
+        return self.occurrences.get(name, 0) - 1
 
 
 def _combine_add_same_base(state: _CombineState, idx: int, info: dict[str, str]) -> bool:
@@ -1844,8 +1874,42 @@ def _combine_add_constants_and_reassociation(state: _CombineState, idx: int, inf
         return True
     return False
 
+def _negated_i1(binops: dict[str, dict[str, str]], name: str) -> str | None:
+    """The operand ``%name = xor i1 X, true`` negates, or None."""
+    info = binops.get(name)
+    if info is None or info["op"] != "xor" or info["ty"] != "i1":
+        return None
+    if info["rhs"] in _TRUE_SPELLINGS and info["lhs"].startswith("%"):
+        return info["lhs"]
+    if info["lhs"] in _TRUE_SPELLINGS and info["rhs"].startswith("%"):
+        return info["rhs"]
+    return None
+
+
+def _combine_negated_compare(state: _CombineState, idx: int, info: dict[str, str]) -> bool:
+    """``xor i1 (icmp P a, b), true`` is ``icmp !P a, b`` when the compare
+    has no other use (InstCombineCompares: an inverted predicate)."""
+    source = _negated_i1(state.binops, info["result"])
+    if source is None:
+        return False
+    compare = state.compares.get(source[1:])
+    if compare is None or state.use_count(source[1:]) != 1:
+        return False
+    inverse = _INVERSE_PREDICATES.get(compare["pred"])
+    if inverse is None:
+        return False
+    state.lines[idx] = (
+        f"{info['indent']}%{info['result']} = icmp {inverse} {compare['ty']} "
+        f"{compare['lhs']}, {compare['rhs']}\n"
+    )
+    state.changed = True
+    return True
+
+
 def _combine_xor(state: _CombineState, idx: int, info: dict[str, str]) -> bool:
     """``xor`` peepholes: ``x ^ x``, ``x ^ 0``, a double complement and ``x ^ ~x``."""
+    if info["ty"] == "i1" and _combine_negated_compare(state, idx, info):
+        return True
     lines = state.lines
     replacements = state.replacements
     binops = state.binops
@@ -2260,6 +2324,13 @@ def _rewrite_function(
                 "source": extend.group("source"), "wide": extend.group("wide"),
             }
             continue
+        compare = _ICMP_RE.match(stripped) if "icmp" in stripped else None
+        if compare is not None:
+            state.compares[compare.group("result")] = {
+                "pred": compare.group("pred"), "ty": compare.group("ty"),
+                "lhs": compare.group("lhs").strip(), "rhs": compare.group("rhs").strip(),
+            }
+            continue
         match = _BINOP_RE.match(stripped)
         if match is None:
             continue
@@ -2373,6 +2444,18 @@ def _rewrite_function(
         match = _TRUNC_RE.match(stripped)
         if match is not None:
             if _combine_trunc_of_extend(state, idx, match):
+                continue
+
+        match = _COND_BR_RE.match(stripped) if stripped.lstrip().startswith("br ") else None
+        if match is not None:
+            # ``br (xor X, true), T, F`` is ``br X, F, T`` (visitBranchInst).
+            source = _negated_i1(binops, match.group("cond"))
+            if source is not None and state.use_count(match.group("cond")) == 1:
+                lines[idx] = (
+                    f"{match.group('indent')}br i1 {source}, label %{match.group('false')}, "
+                    f"label %{match.group('true')}\n"
+                )
+                state.changed = True
                 continue
 
         match = _CAST_CONST_RE.match(stripped)
