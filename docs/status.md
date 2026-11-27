@@ -5316,9 +5316,11 @@ in the relevant section or issue and removes the entry.
 
    - 2026-11-27 top5 constructor formal native scope held: exact rebased wire60611c09/testb50f509b, 82 host passes, all 15 exact native output; five triples decode −13.864%, whole CPU −7.921%, peak RSS +1.014% adverse (1/5 wins), not merged. Preserve source/receipts and release this unit. Next test existing guarded trim after raw reconstruction owner release with exact merged baseline, no broad RSS exception.
 
+   - 2026-11-27 exact same-ELF 26-module post-release trim diagnostic: 3 outputs canonical f777240c; raw-release RSS157.12→113.87MiB, free raw43.06→0MiB, live requested34.42MiB unchanged, STW680 unchanged; whole diagnostic RSS235660→217512KiB (−7.7%), control234680, CPU6.275552→6.531293 (+4.08%), control6.274442. Artificial canonical dumps own peak; actual summary does not dump AST. HOLD, no production edit. A narrower summary-only threshold >=32MiB and >=1/4 mapped could avoid small batches; needs authentic actual worker five triples, not another unsupported local full build. No Stage2-wide claim, release.
+
    Claims:
    - Runtime QPS through the self AArch64 backend toward LLVM parity: locate the LLVM step the self passes lack (pcc_perf reference ablations, scripts/pcc_perf.py), then implement it in pcc's own AArch64 passes (shrink-wrapping, allocation or selection, whichever the ablation ranks first); IR-pass changes are target-neutral and reach x64; avoids the typed x64 MIR files: Claude, macOS, 2026-11-27T06:46Z, area backend
-   - Post-reconstruction raw-release trim diagnostic (exact merged strict parser/runtime, bounded standalone same-ELF control vs existing high-water helper after raw owner drop; no production changes or CI): Codex, Linux, 2026-11-27T12:05Z, area runtime-codegen
+
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
