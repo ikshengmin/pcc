@@ -5370,9 +5370,11 @@ in the relevant section or issue and removes the entry.
 
    - 2026-11-27 packed compact tape native formal HOLD: host8 pass, actual record reads1313743 vs prior3241463 source count; strict25 ELF469f10af, 1/4 native exact, 5 triples all15 canonical f777240c. Decode median3.036267→3.240482s paired+7.202%, normalized+15.027%; wholeCPU6.552245→7.074864 paired+5.241%, norm+11.681%, 0/5 wins; whole RSS233888→230984KiB paired−1.592/norm−1.486%, guard +.252/+0.530%. Decode-return RSS164163584→53395456 −67.499% all5, mapped−71.61%, requested−29.45%, STW680→597. Preserve exact formal receipts, no merge or retry. Next distinct side-plan to remove149944 repeated label/file-id token calls only after source/ownership proof; no ABI or CI. Release.
 
+   - 2026-11-27 validated POD side-plan HOLD: host11 pass, actual149944 repeated token calls removed, exact2627472B plan freed on all paths. Strict25 ELF41c48fae, 1/4 native exact; one same-ELF full canonical f777240c screen decode3.007686→3.957636s(+31.58%), whole CPU6.434076→7.094325(+10.26%), RSS232560→217868KiB(−6.32%), decode-return RSS −67.02%. CPU adverse stop, no formal/retry, no production/ABI/CI. Preserve receipts, release; next structural typed construction or converted scalar only after independent ceiling.
+
    Claims:
    - Runtime QPS through the self AArch64 backend toward LLVM parity: locate the LLVM step the self passes lack (pcc_perf reference ablations, scripts/pcc_perf.py), then implement it in pcc's own AArch64 passes (shrink-wrapping, allocation or selection, whichever the ablation ranks first); IR-pass changes are target-neutral and reach x64; avoids the typed x64 MIR files: Claude, macOS, 2026-11-27T06:46Z, area backend
-   - Owned AST V2 compact tape validated POD side-plan scratch proof (resolve node labels/file IDs once, bounded4B per record, raw lifetime/error/fallback before constructor; no managed references/runtime/ABI/production edits or CI, host first): Codex, Linux, 2026-11-27T13:20Z, area runtime-codegen
+
    - Stage1 AArch64 private peephole-history retirement at peepholes-to-CFG boundary (one-shot private canonical authority; preserve old roots/cursors/observer/malformed/error semantics; source finalizer and scoped tests only, actual small exact PCO/RSS/CPU before merge, no cap or CI): Codex, Linux, 2026-11-27T13:17Z, area backend
 
 
