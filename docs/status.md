@@ -5374,6 +5374,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend toward LLVM parity: locate the LLVM step the self passes lack (pcc_perf reference ablations, scripts/pcc_perf.py), then implement it in pcc's own AArch64 passes (shrink-wrapping, allocation or selection, whichever the ablation ranks first); IR-pass changes are target-neutral and reach x64; avoids the typed x64 MIR files: Claude, macOS, 2026-11-27T06:46Z, area backend
+   - Owned AST V2 packed materializer plus canonical top5 direct constructors scratch proof (reuse prior exact top5 semantics, remove generic temp list/field wrappers for87648 actual nodes; full preflight/error/fallback/GC, host first, no side-plan/runtime/ABI/production or CI): Codex, Linux, 2026-11-27T13:26Z, area runtime-codegen
 
    - Stage1 AArch64 private peephole-history retirement at peepholes-to-CFG boundary (one-shot private canonical authority; preserve old roots/cursors/observer/malformed/error semantics; source finalizer and scoped tests only, actual small exact PCO/RSS/CPU before merge, no cap or CI): Codex, Linux, 2026-11-27T13:17Z, area backend
 
