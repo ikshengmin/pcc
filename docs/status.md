@@ -5973,8 +5973,59 @@ in the relevant section or issue and removes the entry.
    scoped CPU/RSS paired controls, no full bootstrap/relaxed limits.
    GC diagnostic and Stage1 formal priority; source-only prep.
 
-   Claims:
-   - Stage2 local lexical pair scan reuse: Codex, Linux, 2026-11-27T00:07Z, area selfhost
+   Stage2 local lexical pair snapshot reuse (rejected, no production):
+   exact current source43b88f74 test-first six intended helper-missing
+   reds->49/49 green including adjacent, current actual graph
+   614->626/625 siblings byte-identical SHA060ffe8d. Preserve both
+   original relative and absolute file opens, raw text equality,
+   source mutation/error, original hook flags/order and multi
+   accumulator side effects. Local two-string snapshot only, no
+   persistent state; downstream lexical readers unchanged.
+   Actual non-hook-mutating frame attribution single attribute mask
+   1696->1131 (-565), bytes51,909,395->34,612,804; multi1790->1213
+   (-577), bytes52,910,552->35,468,659; order579 unchanged. Package
+   and from-spec call counts unchanged, slight own source length
+   difference. Strict changed module152 funcs/65,556 inst, zero
+   fallback/no libpython; pidx SHA c57814e9.
+   Full actual native fixture import117 modules default owned-pass
+   pool9 mem2reg,sroa MEMORY_LIMIT101.624s/1,624,805,376B (cap
+   1,610,612,736); receipt SHA141c27e1. Actual hosted passes-off
+   retry TIMEOUT150.312s/1,145,475,072B during self backend, receipt
+   SHA905bf9d0. No full import binary, no qualified full route.
+   Narrow exact extracted production bodies plus actual scanner,
+   pipeline_packages real resolver and driver paths, exact old
+   #638 source tree8 files215,870B. Host full production and both
+   projections identical ordered26 targets/3975B SHA
+   8879290a3ac65e7376beb1091681b921a58fc9aecaa916ce2efa5d5cd4d5af14.
+   Exact package target body baseline SHA0c32c2b4/candidate5600f604,
+   pair3d9bac38; real resolver never replaced. Projection closure76
+   modules first bounded90s TIMEOUT/703,807,488B receipt3759a96d,
+   final dedicated150s candidate COMPLETE131.130s/702,566,400B,
+   baseline131.917s/665,882,624B, both static native exact source
+   archives byte-identical, distinct source provenance; ELF
+   b83582b1/0d1a821d. Both native sanity exact host SHA.
+   Exclusive5 alternating A/B/control triples, each arm5 fresh
+   processes, all75 exact ordered outputs. CPU aggregate
+   .684680->.656929s (-4.053%,5/5, unchanged control+.869%;
+   paired normalized-5.932%), wall-3.981% (4/5, control+1.031%).
+   Peak RSS17,364->17,760KiB (+396/+2.281%,0/5, unchanged
+   control0/max12KiB); median process peaks17,360->17,756KiB
+   (+396,0/5, unchanged control0/max8KiB). Raw max A/B/C KiB
+   17364/17760/17364,17364/17760/17364,17364/17760/17364,
+   17364/17756/17376,17364/17780/17364.
+   Stable actual scoped RSS adverse beyond control: reject
+   snapshot variant despite CPU improvement. No production,
+   no repeated same-version retry, no whole Stage2 claim.
+   Raw formal receipt SHA256
+   5a857090122d3de0882666bcfbe8159ca1cffedcc39d12495adce62fc1e471f4;
+   guard SHA d6de58d55edf69ec583e6f2b1974114dae2f794b5c2ef80acdec5f7255ee009a.
+   Next distinct no-retention attribution: exact old graph586/625
+   source files,15,085,973/17,906,133B lack literal
+   except AttributeError. Existing pure mask scans every line even
+   if impossible to match. Prove actual call-weighted scope and
+   exact text/line endings/identity/hook contract before candidate;
+   if no exact safe predicate, reject. No persistent state.
+
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
