@@ -5220,6 +5220,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend toward LLVM parity: locate the LLVM step the self passes lack (pcc_perf reference ablations, scripts/pcc_perf.py), then implement it in pcc's own AArch64 passes (shrink-wrapping, allocation or selection, whichever the ablation ranks first); IR-pass changes are target-neutral and reach x64; avoids the typed x64 MIR files: Claude, macOS, 2026-11-27T06:46Z, area backend
+   - Rebased canonical top5 AST V2 direct constructors after default strict JSON merge (pipeline_ast_wire.py and focused AST wire tests only, canonical-only exact field/order/error/validation/V1/custom fallback, shared algorithm/native residual allocation reduction; strict new source/runtime, full native output CPU/RSS controls, no stage-wide claim): Codex, Linux, 2026-11-27T11:09Z, area runtime-codegen
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
