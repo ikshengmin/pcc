@@ -54,6 +54,7 @@ from pcc.frontends.python.private_names import mangle_private_name as _mangle_pr
 
 import os
 import sys
+import time
 from typing import Optional, cast
 
 from pcc.ir.compat import ir
@@ -4261,6 +4262,20 @@ class ClassLowering:
         if len(getattr(fn, "blocks", ())) > 0:
             return
         parent = self.parent
+        # Coarse method-owner attribution only. Do not use the per-statement
+        # debug route as a timing oracle or read clocks on the normal off path.
+        timed = str(os.environ.get("PCC_PY_FRONTEND_WORKER_TIMING", "") or "").strip().lower() in (
+            "1", "true", "yes", "on",
+        )
+        started = time.monotonic() if timed else 0.0
+        snapshot_end = 0.0
+        binding_end = 0.0
+        boundness_end = 0.0
+        body_end = 0.0
+        return_end = 0.0
+        finalize_end = 0.0
+        completed = False
+        route = "ordinary"
         # Preserve outer state — we may be called mid-module-init
         # bookkeeping and we must not clobber a function-in-progress.
         saved_builder = parent.builder
@@ -4343,6 +4358,8 @@ class ClassLowering:
             saved_trace_stmt_kind = ""
             saved_trace_expr_kind = ""
         kind = info.method_kinds.get(fd.name, "instance")
+        if timed:
+            snapshot_end = time.monotonic()
 
         try:
             # Foreign-local tags and SSA ownership belong to one function's
@@ -4365,6 +4382,13 @@ class ClassLowering:
                     info,
                     kind,
                 )
+                if timed:
+                    route = "continuation"
+                    binding_end = snapshot_end
+                    boundness_end = snapshot_end
+                    body_end = time.monotonic()
+                    return_end = body_end
+                    completed = True
                 return
 
             # Pick an entry-block name that doesn't collide with any
@@ -4649,8 +4673,12 @@ class ClassLowering:
             parent._lambda_lexical_shadow_names = set(parent._current_param_names)
             if auto_root_borrowed_params:
                 prepare_rebound_object_parameters(parent, fd, boxed_param_names)
+            if timed:
+                binding_end = time.monotonic()
             prepare_local_boundness(parent, fd)
             parent._emit_application_safepoint()
+            if timed:
+                boundness_end = time.monotonic()
 
             # Emit statements via the parent's normal emitter. In debug mode,
             # mirror L1CodeGen._emit_user_function's direct statement tracing so
@@ -4736,6 +4764,8 @@ class ClassLowering:
                     direct_index += 1
             else:
                 parent._emit_stmts(fd.body)
+            if timed:
+                body_end = time.monotonic()
 
             # Default-return for missing terminator.
             if not parent._builder_block_is_terminated():
@@ -4749,11 +4779,23 @@ class ClassLowering:
                 else:
                     parent._emit_owned_local_cleanup()
                     parent.builder.ret(parent._zero_of(fn.function_type.return_type))
+            if timed:
+                return_end = time.monotonic()
+                completed = True
         except CPythonValueRequired as exc:
             # The stub below replaces the body that holds the CPython value.
             if parent._strict_first_cpy_call(fn) is None:
                 parent._codegen_trace_dump(exc)
                 raise
+            if timed:
+                # Incomplete ordinary phase partition: retain the attempted
+                # lowering interval under its distinct deferred-stub route.
+                route = "deferred_stub"
+                binding_end = snapshot_end
+                boundness_end = snapshot_end
+                body_end = time.monotonic()
+                return_end = body_end
+                completed = True
         except BaseException as exc:
             parent._codegen_trace_dump(exc)
             raise
@@ -4761,6 +4803,10 @@ class ClassLowering:
             stubbed = parent._strict_stub_user_function_with_cpy_fallback(fn, fd)
             if not stubbed and parent._func_c_abi_export_symbol(fd) is None:
                 parent._instrument_python_activation(fn)
+            if timed and completed:
+                finalize_end = time.monotonic()
+                if stubbed and route == "ordinary":
+                    route = "ordinary_stub"
             parent.builder = saved_builder
             parent.current_function = saved_fn
             parent.current_func_def = saved_fd
@@ -4815,6 +4861,28 @@ class ClassLowering:
                 parent._codegen_current_stmt_index = saved_trace_stmt_index
                 parent._codegen_current_stmt_kind = saved_trace_stmt_kind
                 parent._codegen_current_expr_kind = saved_trace_expr_kind
+            if timed and completed:
+                ended = time.monotonic()
+                # Absolute same-clock boundaries permit offline subtraction
+                # of nested method intervals. These are inclusive method
+                # measurements, not independent worker CPU samples.
+                sys.stderr.write(
+                    "pcc frontend class method phase pid=" + str(os.getpid())
+                    + " module=" + (parent.ast_module.name or "<module>")
+                    + " class=" + cd.name
+                    + " method=" + fd.name
+                    + " symbol=" + fn.name
+                    + " route=" + route
+                    + " start_ms=" + str(int(started * 1000))
+                    + " snapshot_end_ms=" + str(int(snapshot_end * 1000))
+                    + " binding_end_ms=" + str(int(binding_end * 1000))
+                    + " boundness_end_ms=" + str(int(boundness_end * 1000))
+                    + " body_end_ms=" + str(int(body_end * 1000))
+                    + " return_end_ms=" + str(int(return_end * 1000))
+                    + " finalize_end_ms=" + str(int(finalize_end * 1000))
+                    + " end_ms=" + str(int(ended * 1000))
+                    + "\n"
+                )
 
     # ------------------------------------------------------ module init
 
