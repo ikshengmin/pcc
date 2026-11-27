@@ -157,6 +157,68 @@ def link_paths(
         )
 
 
+_FUNCTION_MAP_FOR = "PCC_OWNED_ELF_FUNCTION_MAP_FOR"
+_FUNCTION_MAP_SUFFIX = ".functions.jsonl"
+
+
+def _function_map_request(requested: str) -> str:
+    # This is a diagnostic for one exact final owned artifact, not every
+    # executable created by descendants of a compiler invocation.
+    if not os.path.isabs(requested) or os.path.abspath(requested) != requested:
+        raise SelfBackendLinkError("function map requires an exact absolute output path")
+    return requested
+
+
+def _function_map_host_is_x64_linux() -> bool:
+    from pcc.backend.self_backend_target_match import is_x86_64_linux_triple
+    from pcc.frontends.python.pipeline_targets import host_target_triple
+    return sys.platform == "linux" and is_x86_64_linux_triple(host_target_triple())
+
+
+def _function_map_stage_header(path: str, image_path: str):
+    from pcc.backend.self_backend_target_match import is_x86_64_linux_triple
+    if (not os.path.isfile(path) or os.path.islink(path)
+            or not os.path.isfile(image_path) or os.path.islink(image_path)):
+        raise SelfBackendLinkError("function map requires regular staged files")
+    try:
+        with open(path, "r", encoding="utf-8") as stream:
+            first = stream.readline()
+            header = json.loads(first)
+            if (not first.endswith("\n") or type(header) is not dict
+                    or header.get("schema") != "pcc.owned-elf-function-map.v1"
+                    or type(header.get("target")) is not str
+                    or not is_x86_64_linux_triple(header["target"])
+                    or type(header.get("image_bytes")) is not int or header["image_bytes"] <= 0
+                    or type(header.get("image_sha256")) is not str
+                    or len(header["image_sha256"]) != 64
+                    or type(header.get("function_count")) is not int or header["function_count"] < 0):
+                raise SelfBackendLinkError("function map has an invalid staged header")
+            count = 0
+            while True:
+                row = stream.readline()
+                if not row:
+                    break
+                if not row.endswith("\n") or not row.strip():
+                    raise SelfBackendLinkError("function map has an incomplete staged row")
+                count += 1
+                if count > header["function_count"]:
+                    raise SelfBackendLinkError("function map row count differs")
+            if count != header["function_count"]:
+                raise SelfBackendLinkError("function map row count differs")
+    except (ValueError, TypeError, OSError) as exc:
+        raise SelfBackendLinkError("function map staged header could not be read") from exc
+    _verify_function_map_image(header, image_path)
+    return header
+
+
+def _verify_function_map_image(header, image_path: str) -> None:
+    from pcc.backend.owned_elf_inputs import file_sha256
+    if (not os.path.isfile(image_path) or os.path.islink(image_path)
+            or os.path.getsize(image_path) != header["image_bytes"]
+            or file_sha256(image_path) != header["image_sha256"]):
+        raise SelfBackendLinkError("function map image SHA/size differs")
+
+
 def finish_executable(
     tmp_out_path: str,
     out_path: str,
@@ -168,6 +230,17 @@ def finish_executable(
     publish_sync_enabled,
 ) -> None:
     """Publish an executable without replacing a pcc-owned signature."""
+    requested_function_map = os.environ.get(_FUNCTION_MAP_FOR, "")
+    function_map_stage = ""
+    if requested_function_map and os.path.abspath(str(out_path)) == _function_map_request(requested_function_map):
+        if (not signature_owned_by_pcc or not _function_map_host_is_x64_linux()
+                or os.path.abspath(str(tmp_out_path)) != requested_function_map + ".tmp"):
+            raise SelfBackendLinkError("function map requires the exact owned x86-64 Linux final publication")
+        function_map_stage = requested_function_map + ".tmp" + _FUNCTION_MAP_SUFFIX
+        function_map_final = requested_function_map + _FUNCTION_MAP_SUFFIX
+        if os.path.lexists(function_map_final):
+            raise SelfBackendLinkError("function map requires a fresh final sidecar")
+        function_map_header = _function_map_stage_header(function_map_stage, str(tmp_out_path))
     if sys.platform == "darwin" and not signature_owned_by_pcc:
         started = profile_begin(profile)
         subprocess.run(
@@ -183,6 +256,14 @@ def finish_executable(
     started = profile_begin(profile)
     os.replace(tmp_out_path, out_path)
     profile_end(profile, "link_self_publish_move", started)
+    if function_map_stage:
+        # Only publish the final sidecar after the ordinary final image move
+        # and profile completion. Recheck the *actual* final bytes, not merely
+        # the old temporary path; a failed second move leaves no valid map.
+        _verify_function_map_image(function_map_header, str(out_path))
+        if os.path.lexists(function_map_final):
+            raise SelfBackendLinkError("function map final sidecar appeared during publication")
+        os.replace(function_map_stage, function_map_final)
     if sys.platform != "darwin":
         return
 
@@ -625,6 +706,22 @@ def run_link_command(
         needs_native_extension_exports=needs_native_extension_exports,
         extra_link_args=extra_link_args,
     )
+    requested_function_map = os.environ.get(_FUNCTION_MAP_FOR, "")
+    function_map_path = ""
+    if requested_function_map and os.path.abspath(str(tmp_out_path)) == _function_map_request(requested_function_map) + ".tmp":
+        from pcc.backend.self_backend_target_match import is_x86_64_linux_triple
+        if (selected_mode != "pcc" or not _function_map_host_is_x64_linux()
+                or not is_x86_64_linux_triple(selected_target)):
+            raise SelfBackendLinkError("function map requires the owned x86-64 Linux linker")
+        function_map_path = requested_function_map + ".tmp" + _FUNCTION_MAP_SUFFIX
+        # Native os.path lacks samefile. Fresh private stage names prevent
+        # reusing a stale map or following an existing hardlink/symlink into
+        # an input; ordinary OFF links keep their existing path contract.
+        if any(os.path.lexists(path) for path in (
+                requested_function_map + _FUNCTION_MAP_SUFFIX,
+                function_map_path, function_map_path + ".pcc-link.tmp",
+                requested_function_map + ".tmp", requested_function_map + ".tmp.pcc-link.tmp")):
+            raise SelfBackendLinkError("function map requires fresh staged and final sidecar paths")
     if semantic_layout_policy and (
         selected_mode != "pcc" or target_os_name(selected_target) != "darwin"
     ):
@@ -708,7 +805,15 @@ def run_link_command(
                 (assembly if kind == "ASM" else object_paths).append(path)
             pcc_internal_input_manifest = None
         if linux_elf:
-            if export_symbols:
+            if function_map_path:
+                link_elf_inputs(target=selected_target, output=str(tmp_out_path),
+                                assembly=assembly, objects=object_paths, archives=archive_paths,
+                                manifest=pcc_internal_input_manifest or "",
+                                export_symbols=export_symbols,
+                                expected_archive_identity=export_archive_identity,
+                                coordinator_timing=coordinator_timing,
+                                function_map_path=function_map_path)
+            elif export_symbols:
                 link_elf_inputs(target=selected_target, output=str(tmp_out_path),
                                 assembly=assembly, objects=object_paths, archives=archive_paths,
                                 manifest=pcc_internal_input_manifest or "",
