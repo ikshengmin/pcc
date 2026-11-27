@@ -5737,6 +5737,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend toward LLVM parity: locate the LLVM step the self passes lack (pcc_perf reference ablations, scripts/pcc_perf.py), then implement it in pcc's own AArch64 passes (shrink-wrapping, allocation or selection, whichever the ablation ranks first); IR-pass changes are target-neutral and reach x64; avoids the typed x64 MIR files: Claude, macOS, 2026-11-27T15:16Z, area backend
+   - Stage1 x64 opt-in MIR register-only pointer-retirement physical live-mask index (actual class_gen 11.316s/13.69M virtual scans; self_backend_x86_mir_emit.py Lowerer.retire exact private register-only path and existing test_x86_typed_mir.py only, no allocator/GC/ABI/default changes): Codex, Linux, 2026-11-27T20:03Z, area backend
 
 
 
