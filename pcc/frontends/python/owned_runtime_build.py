@@ -8,7 +8,7 @@ lowering and object emission. Existing provenance receipts remain authoritative.
 import os
 import json
 from pathlib import Path
-from pcc.backend.self_backend_target_match import target_os_name
+from pcc.backend.self_backend_target_match import target_os_name, is_x86_64_linux_triple
 from pcc.driver.native_provisioning import require_native_provisioning_allowed
 from pcc.frontends.python.worker_process_pool import run_worker_processes
 from pcc.frontends.python.thread_runtime_config import reject_single_thread_runtime_request
@@ -138,6 +138,8 @@ def runtime_modules(runtime_dir: str, target: str, threads: bool = True,
         names.extend(("freestanding_linux_libc", "freestanding_linux_time", "freestanding_time_format", "freestanding_posix_timezone", "freestanding_linux_directory", "freestanding_linux_signal", "freestanding_linux_static_loader", "freestanding_signal_set"))
         if target.startswith(("arm64-", "aarch64-")):
             names.append("freestanding_linux_aarch64")
+        if is_x86_64_linux_triple(target):
+            names.append("freestanding_linux_worker_sampler")
     elif target_os_name(target) == "darwin":
         names.append("freestanding_darwin_main")
     if gc_stress_every:

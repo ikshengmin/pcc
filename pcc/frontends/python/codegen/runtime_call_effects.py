@@ -7,7 +7,7 @@ a call and may stop the mutator. Keep this admission intentionally narrow.
 from pcc.frontends.python.codegen.errors import L1CodegenError
 
 
-NO_SAFEPOINT_RUNTIME_FUNCTIONS = frozenset({"py_tuple_len"})
+NO_SAFEPOINT_RUNTIME_FUNCTIONS = frozenset({"py_tuple_len", "pcc_worker_cpu_sampler_handler"})
 # Runtime port functions poll at loops only; these root readers keep the
 # function-entry poll (test_freestanding_root_reads).
 ENTRY_POLL_RUNTIME_FUNCTIONS = frozenset({"pcc_gc_load_ptr", "pcc_gc_load_borrowed_ptr"})
