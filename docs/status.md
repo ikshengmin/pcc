@@ -3012,6 +3012,28 @@ in the relevant section or issue and removes the entry.
    +57. Same pattern as the x86-64 retrofits Codex rejected before the
    typed MIR (Linux w1 +36%): the AArch64 lever is whole-function
    allocation, not more local passes.
+   Split of the bound (arm head-clangcg, `clang-codegen`, same day): w1
+   62325 -> 81374 req/s (+30.6%, 5/5, floor 1.9%), 180707 instructions
+   (-21.7%), 41461 cycles (-21.6%); full clang -O2 169231 / 36156. LLVM
+   code generation is about two thirds of the gap and LLVM IR optimization
+   one third; code generation alone reaches 94% of asyncio.
+   (i) Nested runtime inlining (Claude, 2026-11-27): the definition inliner
+   clones each callee as it was before the pass, so a call inside an
+   inlined helper (for example `tls_i64` inside thread-state readers,
+   `append_mode_admitted_locked`, allocator magazine helpers) is copied
+   into the caller and stays a call; rerunning the inliner on the shipped
+   runtime IR removes them, a third run changes almost nothing. The runtime
+   pass list (`pcc/runtime/Makefile` PCC_RUNTIME_IR_PASSES) now runs
+   `inline-defined-wide` twice with `instsimplify` between. Arm inl2 against
+   head-9d51a6a, control head-self2, load 7.6-7.9: w1 62032 -> 64214 req/s
+   (+3.5%, 5/5, floor 2.0%: a gain), CPU 18.6 -> 18.0 us; w4 137627 ->
+   140663 (+2.2%, 4/5, floor 3.7%: within noise); `instr` -1.46%
+   instructions, cycles -5.23% (control -2.99%). Test:
+   `tests/python/test_runtime_nested_inlining.py` (a three-deep helper nest
+   stays a call after one pass, is fully inlined by the configured list,
+   and the emitted program runs). Focused inliner/runtime-pass files 132
+   passed; arm smoke and primitives exact against CPython. Not run: whole
+   Python suite, GC integration gate, bootstrap/self-host.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2
