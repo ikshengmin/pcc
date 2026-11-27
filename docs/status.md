@@ -5206,10 +5206,11 @@ in the relevant section or issue and removes the entry.
 
    - 2026-11-27 raw/provider post-parse live-memory diagnostic (34e7af5b) blocked before compilation by strict exact-source admission: e8 HEAD but tracked AST candidate source/test in Stage2 checkout, guard COMPLETE rc1 .788s/29,601,792B. No compile/parse/snapshot/result. Independent existing GC worktrees containing e8 have tracked modifications, none eligible. Preserve probe and refusal; no retry in dirty source, no production/CI, release. Future only by actual Stage2 owner after candidate preserved and exact clean e8 restored.
 
+   - 2026-11-27 AST V2 top5 direct constructors candidate paused for urgent raw/provider live memory attribution. Source5dc5e470/testb50f509b, intended baseline1 red/6 pass, candidate43 host tests pass, 4 native/parallel not run. Exact patch9e7fdd75 preserved, owner restored ONLY two tracked files original blobs2ece30c1/7213e9b4, clean e8 HEAD. Needs fresh strict source-matched runtime and native A/B/RSS, no production or speed claim. Release temporary claim; reopen after diagnostic.
+
    Claims:
    - Stage1 common x64 default stackmap multi-scan structural attribution (self_backend_precise_stackmaps.py only; exact frozen actual planner records/error order, metadata/flag/type count and actual owner CPU, ≥24% planner ceiling before edits; no native bypass): Codex, Linux, 2026-11-27T09:12Z, area backend
    - Runtime QPS through the self AArch64 backend toward LLVM parity: locate the LLVM step the self passes lack (pcc_perf reference ablations, scripts/pcc_perf.py), then implement it in pcc's own AArch64 passes (shrink-wrapping, allocation or selection, whichever the ablation ranks first); IR-pass changes are target-neutral and reach x64; avoids the typed x64 MIR files: Claude, macOS, 2026-11-27T06:46Z, area backend
-   - Shared canonical positional AST V2 direct constructors for actual IntLit/IntType/StrLit/StrType/DynType hot nodes (pipeline_ast_wire.py and focused AST wire tests only; preserve full tag/schema/field count/recursive validation/order and V1/custom position route; exact source-matched fresh runtime/current native A/B CPU/RSS/full wire equality; no default gate changes): Codex, Linux, 2026-11-27T09:18Z, area runtime-codegen
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
