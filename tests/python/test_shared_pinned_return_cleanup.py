@@ -108,7 +108,7 @@ class Block:
 
     @property
     def is_terminated(self):
-        return bool(self._instrs and self._instrs[-1].opname in ("branch", "ret", "ret_void"))
+        return bool(self._instrs and self._instrs[-1].opname in ("branch", "cbranch", "ret", "ret_void"))
 
 
 class OwnedIRFunction:
@@ -183,6 +183,9 @@ class Builder:
     def branch(self, block):
         self.emit("branch", block)
 
+    def cbranch(self, condition, true_block, false_block):
+        self.emit("cbranch", condition, true_block, false_block)
+
     def ret_void(self):
         self.emit("ret_void")
 
@@ -209,7 +212,7 @@ def body_model():
         ), "RawPointerType": RawPointerType, "L1CodegenError": AssertionError},
         sinks=("_alloca_in_entry", "_as_gc_ptr", "_fresh",
                "_value_available_at_insertion_point", "_ir_type_matches",
-               "_emit_owned_valueclass_cleanup", "_emit_release_owned_local_if_flagged",
+               "_emit_owned_valueclass_cleanup",
                "_valueclass_payload_owned_roots", "_instruction_is_terminator",
                "_mark_walked_frames"),
         constant_factories=("ir.IntType",),
@@ -302,9 +305,6 @@ class Host:
     def _emit_owned_valueclass_cleanup(self, skip_payload):
         self.builder.emit("valueclass", skip_payload is not None)
 
-    def _emit_release_owned_local_if_flagged(self, name, slot):
-        self.builder.emit("owned", name, slot)
-
     def _valueclass_payload_owned_roots(self, payload):
         return ()
 
@@ -313,7 +313,7 @@ class Host:
         self.walked_frame_marks += 1
 
     def _instruction_is_terminator(self, instruction):
-        return instruction.opname in ("branch", "ret", "ret_void")
+        return instruction.opname in ("branch", "cbranch", "ret", "ret_void")
 
     def new_return(self, *, rooted=False, skip_name=None, value=None):
         entry = self.current_function.append_basic_block(self._fresh("return"))
@@ -352,6 +352,8 @@ def trace(entry, initial=None):
                 values[id(instruction.result)] = memory.get(id(args[0]), args[0].label + ":live")
             elif op == "store":
                 memory[id(args[0])] = evaluate(args[1])
+                if args[0].label.endswith(".owned"):
+                    events.append(("owned_flag_store", args[0].label, memory[id(args[0])]))
             elif op == "call":
                 callee, operands = args
                 actual = tuple(evaluate(value) for value in operands)
@@ -367,14 +369,17 @@ def trace(entry, initial=None):
             elif op == "branch":
                 next_block = args[0]
                 break
+            elif op == "cbranch":
+                condition = evaluate(args[0])
+                assert type(condition) is int and condition in (0, 1)
+                next_block = args[1] if condition else args[2]
+                break
             elif op == "ret":
                 events.append(("return", evaluate(args[0])))
                 return events
             elif op == "ret_void":
                 events.append(("return", None))
                 return events
-            elif op == "owned":
-                events.append(("owned", args[0], args[1].label))
             elif op == "valueclass":
                 events.append(("valueclass", args[0]))
             elif op == "marker":
@@ -419,12 +424,14 @@ def test_return_paths_match_inline_and_share_suffix_calls(rooted, count):
 def test_aliases_filters_skip_and_late_eligibility_match_inline():
     traces = []
     for inline in (True, False):
+        arm_traces = []
         host = Host(inline=inline)
         alias = host.register("first")
         host.register("alias", alias)
         host._gc_rooted_local_order.append("alias")  # name dedup, not slot dedup
-        host.register("owned", owned=True)
-        host.register("skip", owned=True)
+        owned = host.register("owned", owned=True)
+        skipped = host.register("skip", owned=True)
+        skip_flag = host._ensure_owned_local_flag("skip", skipped)
         host.register("global")
         host._current_global_names.add("global")
         host.register("not-pinned", pinned=False)
@@ -436,13 +443,31 @@ def test_aliases_filters_skip_and_late_eligibility_match_inline():
         host.env.pop("first")
         host.register("new")
         second = host.new_return(skip_name="skip")
-        pair = trace(first), trace(second)
-        traces.append(pair)
-        # The alias shares the first root's slot, cleared once per name.
-        assert clears(pair[0]) == ["first", "first"]
-        assert ("owned", "owned", "owned") in pair[0]
-        assert not any(event[0] == "owned" and event[1] == "skip" for event in pair[0])
-        assert clears(pair[1]) == ["new"]
+        owned_flag = host._owned_local_flag_slots["owned"]
+        # Each trace starts at an activation exit, after normal entry and
+        # assignment. Model both real flag states, including a live skipped
+        # owner. The actual flag store must precede the root-release call.
+        for owned_state in (0, 1):
+            initial = {id(owned_flag): owned_state, id(skip_flag): 1,
+                       id(owned): "owned:live", id(skipped): "skip:live"}
+            pair = trace(first, initial), trace(second, initial)
+            arm_traces.append(pair)
+            # The alias shares the first root's slot, cleared once per name.
+            prefix = ["owned"] if owned_state else []
+            assert clears(pair[0]) == prefix + ["first", "first"]
+            assert clears(pair[1]) == prefix + ["new"]
+            for events in pair:
+                flag_stores = [event for event in events if event[0] == "owned_flag_store"]
+                release = ("pcc_gc_store_root", (("slot", "owned"), None))
+                if owned_state:
+                    clear_flag = ("owned_flag_store", "owned.owned", 0)
+                    assert flag_stores == [clear_flag]
+                    assert events.count(release) == 1
+                    assert events.index(clear_flag) < events.index(release)
+                else:
+                    assert flag_stores == []
+                    assert release not in events
+        traces.append(arm_traces)
     assert traces[0] == traces[1]
 
 
