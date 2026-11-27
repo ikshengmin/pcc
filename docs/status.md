@@ -3731,7 +3731,67 @@ in the relevant section or issue and removes the entry.
        cbff0094db13b8b62e2abb637264d6c9902579c1c1d09e7f36f46cc5f2307717.
        Admit scoped structural temporary memory allocation reduction
        only, no large high-water/whole Stage1 speed or target claim.
-       Next (latest actual Stage1 codegen priority): (1) ARM typed
+       Hosted inline-edge route screen, Codex Linux 2026-11-27:
+       exact #638 artifact15153817780 ZIP SHA256
+       62538fcc9ff6462db66c16a074539e90ed57ec58bd6781943fec68167bc120e7,
+       retained Stage1 log SHA256
+       c2c627b1a313694c0f2fb74a6f160d7f1f1544265e48ce71cb2cf08418fbd511.
+       All625 CFG rows inline errors=0: 4,239,220 blocks,
+       712,477 call.cont+361,228 err.frame=25.33% theoretical
+       affected block families, 132,229 explicit cleanup blocks remain,
+       16,506,609 instructions. Actual admission all825 complete,
+       codegen625 worker-wall-s4369.692 (max singleton92.483s),
+       export100.718, summary53.722, preload23.672; codegen
+       1094.022s wall of1189.280s total. With unchanged workload
+       ideal six-worker codegen alone728.282s, >=58.8% work reduction
+       even ignoring serial phases needed for300s; if existing
+       non-codegen95.258s unchanged, ~71.9% codegen work reduction
+       needed. Theoretical lower bounds, not achieved or predicted
+       whole-stage speed. Hosted harness explicit capture/emit skips
+       automatic default inline edge unlike bootstrap.py. On exact
+       current source ff7b555f current indexed626-module/79-chunk
+       context export SHA70be22dc0c0dcd41d88ba7a347134a586f486a24cb89532936db6865773df8e3,
+       candidate would preserve explicit off and bind effective route
+       to shared receipt identity. Test-first config5 fail, actual
+       worker default across all3 targets3 fail with explicit-off3
+       green -> candidate expanded134 pass; four exact baseline same
+       Linux-to-Darwin executable format failures. Exact large class_gen
+       CFG87118->72293 blocks (−17.02%), call.cont13713->0,
+       err.frame7268->6156, instructions335663->347182, funcs727
+       unchanged. c_codegen exact #638 OFF shape95041->78984
+       blocks (−16.9%), call.cont15265->0, instructions358849->369582,
+       funcs1039 unchanged; both strict zero fallback. One-off CPU
+       class72.737->70.746s, c_codegen75.217->74.234s, RSS
+       784740->769164 and839280->812188KiB, directional only.
+       ELF external definition ABI exact943/1220 symbols, sole new
+       undefined symbol py_exc_append_frame_indexed; exact default
+       ELF registered roots, explicit packed-stackmap focused tests
+       pass. Fresh exact owned archive SHA085c8c95bd954882a2d791158a3c5f7fa9400804c0a04dd8b002fe39fc07642b,
+       two native Linux traceback fixture ELFs (OFF/ON) exit1,
+       exact stdout SHA5e3f85de9e09e60f0c7656d6fddd767d9073aa410af6704d79330fff76760f25,
+       stderr SHA6dad2f3118b13d2fbb58d5e0af237dc9c7d11f3d8f086354ad8cf32b4aa09fb7,
+       distinct exception sites, caught/reraised/uncaught traceback
+       source and two finalizers exact. Full class five alternating
+       controlled isolated triples all15 strict native ELF hashes
+       stable (OFF 12,661,992B sha4d5cfd9eabb6aea5b4d460eb078fde01282f29e8cc5a3f012462477bc06fc014,
+       ON12,962,904B sha8aaa34b73e7b8357372d72839820db568f911e4ad9ffba27bf17be957e59dcff).
+       CPU80.252->80.055s control79.438, norm+.263%1/5 vs
+       control1.014% median/2.247% max; wall norm+.446%0/5
+       vs median control1.003%; peak RSS785360->768204KiB,
+       norm−2.359%5/5 vs control .381% median/.831% max.
+       Backend−2.089%5/5, stackmap−17.716%5/5, but verify
+       +12.261%0/5, frontend+2.947%1/5, object assemble
+       +105.948%0/5 (assembly emit_finalize+166.720%0/5),
+       ELF grows2.376% exact. Reject broad default despite robust
+       worker RSS reduction: all five wall directions adverse,
+       end-to-end CPU no stable benefit and deterministic
+       object/verify/finalize growth. No medium formal or source
+       production, no resource/gate changes, no whole Stage1/2 claim.
+       Next (latest actual Stage1 codegen priority): (0) attribute and
+       reduce actual inline-edge object emit_finalize/verify overhead
+       with unchanged OFF default, exact same-input object and
+       exception/ownership contracts before reconsidering enablement;
+       (1) ARM typed
        prepare memory: quantify retained prior run history and
        private CFG owner retirement with public snapshot/callback
        contracts, then common indexed fact/emission
@@ -4262,7 +4322,6 @@ in the relevant section or issue and removes the entry.
    Claims:
    - Actual live managed object-family slab size histogram (cold coordinator manifests-ready diagnostic only): Codex, Linux, 2026-11-26T23:43Z, area runtime-gc-managed-size-attribution
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
-   - Hosted Stage1 inline error-edge route parity: Codex, Linux, 2026-11-26T22:42Z, area selfhost (bootstrap_platform.py only; existing direct inline edge semantics and actual class_gen A/B before enablement)
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
