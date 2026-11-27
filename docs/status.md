@@ -5152,6 +5152,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - Runtime QPS through the self AArch64 backend: A1 (Darwin TLV inline, approved), then code generation toward LLVM parity (allocation model); the user, 2026-11-26, chose to proceed although Codex's backend claim covers the area; it avoids files that claim's commits are changing and integrates on rebase: Claude, macOS, 2026-11-26T14:08Z, area backend
+   - Typed x64 MIR exact ephemeral signed i64 overflow-intrinsic pair admission (opt-in only; self_backend_x86_mir.py, self_backend_x86_mir_emit.py, self_backend_x86_mir_frame.py, focused typed MIR tests; exact direct llvm.smul.with.overflow.i64 {i64,i1}, adjacent ordered nonescaping extracts, no safepoint/GC/root/home overlap, existing CAS unchanged, all other aggregates rejected; signed semantics, fallback, strict actual native compiler-function execution before qualification): Codex, Linux, 2026-11-27T06:33Z, area runtime-codegen
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
