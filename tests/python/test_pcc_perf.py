@@ -979,3 +979,119 @@ def test_instr_cli_explicit_callgrind_and_hardware_defaults(monkeypatch, capsys)
     assert PERF.main(["instr", "base"]) == 0
     assert calls[-1][-1] == "darwin"
     assert "cycles per request" in capsys.readouterr().out
+
+
+def test_callgrind_function_self_cost_compressed_ids_and_inclusive_edges():
+    profile = """# callgrind format
+version: 1
+part: 1
+positions: instr line
+events: Dr Ir Dw
+summary: 24 1000 15
+ob=(1) /bin/native_stats
+fl=(1) source.py
+fn=(1) main
+0x100 5 1 100 1
+cob=(2) /lib/libc.so
+cfn=(2) work
+calls=4 0x200 8
+* * 20 800 14
+fi=(3) inline.py
++4 +1 2 20
+fe=(1)
+ob=(2)
+fn=(2)
+0x200 8 10 580 5
+cfn=(1)
+calls=1 0x100 5
+* * 1 100 1
+ob=(1)
+fn=(3) ???
+0x400 0 3 200 1
+totals: 16 900 7
+"""
+    total, costs = PERF.parse_callgrind_function_profile(iter(profile.splitlines()))
+    assert total == 1000
+    assert costs == {
+        ("/bin/native_stats", "main"): 120,
+        ("/lib/libc.so", "work"): 580,
+        ("/bin/native_stats", PERF.CALLGRIND_UNKNOWN_SYMBOL): 200,
+        PERF.CALLGRIND_UNREPRESENTED: 100,
+    }
+    assert sum(costs.values()) == total
+
+
+@pytest.mark.parametrize("body", [
+    "fn=(9)\n1 1\n",
+    "fn=(1) first\nfn=(1) different\n1 1\n",
+    "fn=first\ncalls=1 2\n",
+    "fn=first\ncalls=1 2\nfn=second\n1 1\n",
+    "fn=first\n1 1 2\n",
+    "fn=first\n1 -1\n",
+    "fn=first\ninvalid 1\n",
+    "fn=first\n1 2\n",
+    "fn=first\n1 1\ntotals: 0\n",
+    "fn=first\n1 1\nunknown=ambiguous\n",
+])
+def test_callgrind_function_profile_rejects_ambiguous_self_cost(body):
+    with pytest.raises(SystemExit, match="Callgrind"):
+        PERF.parse_callgrind_function_profile("events: Ir\nsummary: 1\n" + body)
+
+
+def test_callgrind_missing_symbol_and_unrepresented_cost_are_explicit():
+    total, costs = PERF.parse_callgrind_function_profile(
+        "events: Ir\nsummary: 10\n1 3\n")
+    assert total == 10
+    assert costs == {
+        (PERF.CALLGRIND_UNKNOWN_OBJECT, PERF.CALLGRIND_UNKNOWN_SYMBOL): 3,
+        PERF.CALLGRIND_UNREPRESENTED: 7,
+    }
+
+
+def test_callgrind_function_differential_reconciles_and_keeps_negative_cost(capsys):
+    main = ("native_stats", "main")
+    release = ("native_stats", "release")
+    unknown = ("native_stats", PERF.CALLGRIND_UNKNOWN_SYMBOL)
+    gap = PERF.CALLGRIND_UNREPRESENTED
+    short = {main: 1000, release: 2000, unknown: 300, gap: 700}
+    long = {main: 9000, release: 1200, unknown: 700, gap: 1100}
+    delta = PERF.callgrind_function_difference(short, long, 4000, 12000, 10, 50)
+    assert delta == {main: 10.0, release: -1.0, unknown: 0.5, gap: 0.5}
+    assert sum(delta.values()) == 10.0
+    PERF.print_instruction_functions({"base": [delta], "empty": [{gap: 10.0}]}, 5)
+    out = capsys.readouterr().out
+    assert "self Ir/request" in out and "main" in out and "release" in out
+    assert "-1.00" in out and "unknown symbol" in out and "unrepresented Ir" in out
+    assert "no named function" in out
+    with pytest.raises(SystemExit, match="reconcile"):
+        PERF.callgrind_function_difference(short, long, 9999, 12000, 10, 50)
+
+
+def test_callgrind_function_attribution_uses_same_counted_runs(monkeypatch, tmp_path, capsys):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(PERF.sys, "platform", "linux")
+    monkeypatch.setattr(PERF.shutil, "which", lambda name: "/test/" + name)
+    monkeypatch.setattr(PERF, "_sealed_runtime_env", lambda *args: {})
+    monkeypatch.setattr(PERF, "binary_of", lambda name: tmp_path / name)
+    calls = []
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        rounds = int(command[-3])
+        total = 1000 + 20 * rounds * 10
+        path = next(x.partition("=")[2] for x in command if x.startswith("--callgrind-out-file="))
+        Path(path.replace("%p", "1234")).write_text(
+            f"events: Ir\nsummary: {total}\nob=native_stats\nfn=(1) main\n1 {total}\ntotals: {total}\n")
+        return SimpleNamespace(returncode=0, stdout=json.dumps({
+            "requests": 20 * rounds, "rounds": rounds, "concurrency": 20,
+            "warmup_requests": 40,
+        }), stderr="")
+    monkeypatch.setattr(PERF.subprocess, "run", fake_run)
+    assert PERF.main(["instr", "base", "--counter-backend", "callgrind",
+                      "--functions", "3", "--repeats", "1"]) == 0
+    assert len(calls) == 2
+    out = capsys.readouterr().out
+    assert "Callgrind Ir" in out and "self Ir/request" in out and "main" in out
+    assert "10.00" in out
+    with pytest.raises(SystemExit, match="Callgrind"):
+        PERF.main(["instr", "base", "--functions", "1"])

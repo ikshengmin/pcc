@@ -14,6 +14,7 @@
                         difference of two run lengths, against the first arm;
                         Linux --counter-backend callgrind measures simulated
                         user instruction reads (Ir), not cycles or IPC;
+                        --functions N reports exclusive Ir by reported symbol;
                         a control arm shows how far each moves unchanged
     table NAME          one and four workers, against the recorded asyncio
                         figure for the same worker count
@@ -1242,6 +1243,38 @@ def parse_counted_run(stderr: str, darwin: bool) -> tuple[int, int]:
     return int(instructions.group(1)), int(cycles.group(1))
 
 
+CALLGRIND_UNKNOWN_OBJECT = "<unknown object>"
+CALLGRIND_UNKNOWN_SYMBOL = "<unknown symbol>"
+CALLGRIND_UNREPRESENTED = ("", "<unrepresented Ir>")
+
+
+def _callgrind_counts(fields):
+    events = fields.get("events", [])
+    if len(set(events)) != len(events) or events.count("Ir") != 1:
+        raise SystemExit("Callgrind profile has no unique Ir event")
+    if "summary" not in fields:
+        raise SystemExit("Callgrind profile has no whole-run summary")
+    def costs(name):
+        values = fields[name]
+        if (len(values) != len(events)
+                or any(re.fullmatch(r"[0-9]+", value) is None for value in values)):
+            raise SystemExit("Callgrind profile has invalid " + name + " costs")
+        return [int(value) for value in values]
+    summary = costs("summary")
+    totals = costs("totals") if "totals" in fields else None
+    if totals is not None and any(a > b for a, b in zip(totals, summary)):
+        raise SystemExit("Callgrind profile totals exceed its whole-run summary")
+    if summary[events.index("Ir")] <= 0:
+        raise SystemExit("Callgrind profile has no positive Ir count")
+    return events, summary, totals
+
+
+def _callgrind_field(fields, key, value):
+    if key in fields:
+        raise SystemExit("Callgrind profile has ambiguous " + key)
+    fields[key] = value.split()
+
+
 def parse_callgrind_counted_run(profile) -> tuple[int, None]:
     """Full-run Callgrind Ir, not hardware-retired instructions.
 
@@ -1255,27 +1288,166 @@ def parse_callgrind_counted_run(profile) -> tuple[int, None]:
     for line in lines:
         key, sep, value = line.strip().partition(":")
         if sep and key in ("events", "summary", "totals", "part"):
-            if key in fields:
-                raise SystemExit("Callgrind profile has ambiguous " + key)
-            fields[key] = value.split()
-    events = fields.get("events", [])
-    if len(set(events)) != len(events) or events.count("Ir") != 1:
-        raise SystemExit("Callgrind profile has no unique Ir event")
-    if "summary" not in fields:
-        raise SystemExit("Callgrind profile has no whole-run summary")
-    def costs(name):
-        values = fields[name]
-        if (len(values) != len(events)
-                or any(re.fullmatch(r"[0-9]+", value) is None for value in values)):
-            raise SystemExit("Callgrind profile has invalid " + name + " costs")
-        return [int(value) for value in values]
-    summary = costs("summary")
-    if "totals" in fields and any(a > b for a, b in zip(costs("totals"), summary)):
-        raise SystemExit("Callgrind profile totals exceed its whole-run summary")
-    ir = summary[events.index("Ir")]
-    if ir <= 0:
-        raise SystemExit("Callgrind profile has no positive Ir count")
-    return ir, None
+            _callgrind_field(fields, key, value)
+    events, summary, _totals = _callgrind_counts(fields)
+    return summary[events.index("Ir")], None
+
+
+def _callgrind_position(value):
+    return re.fullmatch(r"(?:[+-]?(?:0x[0-9a-fA-F]+|[0-9]+)|\*)", value) is not None
+
+
+def _callgrind_number(value):
+    if re.fullmatch(r"(?:0x[0-9a-fA-F]+|[0-9]+)", value) is None:
+        raise SystemExit("Callgrind profile has invalid cost/count")
+    return int(value, 16 if value.startswith("0x") else 10)
+
+
+def _callgrind_name(value, aliases):
+    raw = value.strip()
+    match = re.fullmatch(r"\(([0-9]+)\)(?:[ \t]+(.*))?", raw)
+    if match is None:
+        if re.match(r"\([0-9]", raw):
+            raise SystemExit("Callgrind profile has malformed compressed name")
+        return raw
+    index, name = int(match.group(1)), match.group(2)
+    if name is not None:
+        if index in aliases and aliases[index] != name:
+            raise SystemExit("Callgrind profile redefines a compressed name")
+        aliases[index] = name
+    if index not in aliases:
+        raise SystemExit("Callgrind profile references an undefined compressed name")
+    return aliases[index]
+
+
+def parse_callgrind_function_profile(profile) -> tuple[int, dict]:
+    """Exclusive Ir grouped by reported object and symbol, never call edges.
+
+    Stream the actual format with shared caller/callee compressed name views.
+    Source-file position changes inside an inlined function do not change the
+    containing symbol. Same name in one object is a symbol group, not proof
+    of a unique physical function. Unknown symbols and the summary gap are
+    explicit, distinct buckets.
+    """
+    lines = profile.splitlines() if isinstance(profile, str) else profile
+    fields = {}
+    aliases = {"object": {}, "function": {}}
+    owner_object = CALLGRIND_UNKNOWN_OBJECT
+    owner_symbol = CALLGRIND_UNKNOWN_SYMBOL
+    costs = collections.defaultdict(int)
+    exclusive = None
+    pending_call = False
+    seen_body = False
+    position_fields = ["line"]
+    events = None
+    ir_index = None
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        header = re.match(r"^([a-zA-Z][a-zA-Z0-9_.-]*):[ \t]*(.*)$", line)
+        if header is not None:
+            key, value = header.groups()
+            if pending_call:
+                raise SystemExit("Callgrind call association lacks its cost line")
+            if key in ("events", "summary", "totals", "part", "positions"):
+                if seen_body and key != "totals":
+                    raise SystemExit("Callgrind profile has a second header part")
+                _callgrind_field(fields, key, value)
+                if key == "events":
+                    events = fields[key]
+                    if len(set(events)) != len(events) or events.count("Ir") != 1:
+                        raise SystemExit("Callgrind profile has no unique Ir event")
+                    ir_index = events.index("Ir")
+                    exclusive = [0] * len(events)
+                if key == "positions":
+                    position_fields = fields[key]
+                    canonical = ["instr", "bb", "line"]
+                    if (not position_fields or
+                            position_fields != [x for x in canonical if x in position_fields]):
+                        raise SystemExit("Callgrind profile has invalid positions")
+            elif seen_body:
+                raise SystemExit("Callgrind profile has unexpected body header")
+            continue
+        if "totals" in fields or events is None:
+            raise SystemExit("Callgrind profile has body outside its event header")
+        seen_body = True
+        spec, sep, value = line.partition("=")
+        if sep:
+            if pending_call:
+                raise SystemExit("Callgrind call association lacks its cost line")
+            if spec in ("ob", "cob", "fn", "cfn"):
+                namespace = "object" if spec in ("ob", "cob") else "function"
+                name = _callgrind_name(value, aliases[namespace])
+                if spec == "ob":
+                    owner_object = (name if name and name.strip("?")
+                                    else CALLGRIND_UNKNOWN_OBJECT)
+                elif spec == "fn":
+                    owner_symbol = (name if name and name.strip("?")
+                                    and re.fullmatch(r"0x[0-9a-fA-F]+", name) is None
+                                    else CALLGRIND_UNKNOWN_SYMBOL)
+            elif spec in ("fl", "fi", "fe", "cfi", "cfl"):
+                # File positions can change inside the same containing fn.
+                pass
+            elif spec in ("calls", "jump", "jcnd"):
+                values = value.split()
+                counts = 2 if spec == "jcnd" else 1
+                if (len(values) != counts + len(position_fields)
+                        or not all(_callgrind_position(x) for x in values[counts:])):
+                    raise SystemExit("Callgrind profile has malformed association")
+                for count in values[:counts]:
+                    _callgrind_number(count)
+                # Only calls= has an immediately associated inclusive cost row.
+                pending_call = spec == "calls"
+            else:
+                raise SystemExit("Callgrind profile has unknown body specification")
+            continue
+        values = line.split()
+        npos = len(position_fields)
+        if (len(values) < npos or len(values) > npos + len(events)
+                or not all(_callgrind_position(x) for x in values[:npos])):
+            raise SystemExit("Callgrind profile has malformed cost row")
+        row = [_callgrind_number(x) for x in values[npos:]]
+        row += [0] * (len(events) - len(row))
+        if pending_call:
+            # This is the callee's inclusive cost, not the caller's own Ir.
+            pending_call = False
+            continue
+        for index, cost in enumerate(row):
+            exclusive[index] += cost
+        costs[(owner_object, owner_symbol)] += row[ir_index]
+    if pending_call:
+        raise SystemExit("Callgrind call association lacks its cost line")
+    events, summary, totals = _callgrind_counts(fields)
+    if exclusive is None:
+        exclusive = [0] * len(events)
+    if totals is not None and exclusive != totals:
+        raise SystemExit("Callgrind exclusive cost rows do not reconcile with totals")
+    if any(a > b for a, b in zip(exclusive, summary)):
+        raise SystemExit("Callgrind exclusive cost rows exceed whole-run summary")
+    total = summary[events.index("Ir")]
+    gap = total - sum(costs.values())
+    out = {group: cost for group, cost in costs.items() if cost}
+    if gap:
+        out[CALLGRIND_UNREPRESENTED] = gap
+    if sum(out.values()) != total:
+        raise SystemExit("Callgrind function costs do not reconcile with total Ir")
+    return total, out
+
+
+def callgrind_function_difference(short: dict, long: dict, short_total: int,
+                                  long_total: int, short_rounds: int,
+                                  long_rounds: int) -> dict:
+    """Exact raw reconciliation before division; keep signed differences."""
+    if sum(short.values()) != short_total or sum(long.values()) != long_total:
+        raise SystemExit("Callgrind function costs do not reconcile with total Ir")
+    per_request((short_total, None), (long_total, None), short_rounds, long_rounds)
+    requests = (long_rounds - short_rounds) * INSTR_CONCURRENCY
+    difference = {group: long.get(group, 0) - short.get(group, 0)
+                  for group in set(short) | set(long)}
+    if sum(difference.values()) != long_total - short_total:
+        raise SystemExit("Callgrind function differential does not reconcile")
+    return {group: cost / requests for group, cost in difference.items()}
 
 
 def _counter_backend(requested: str) -> tuple[str, str]:
@@ -1318,9 +1490,11 @@ def _validate_callgrind_handler(stdout: str, rounds: int) -> None:
 
 
 def counted_run(binary: Path, rounds: int, workers: int, *,
-                counter_backend: str = "auto") -> tuple[int, int | None]:
-    """One handler run under explicitly identified counters."""
+                counter_backend: str = "auto", function_costs: dict | None = None) -> tuple[int, int | None]:
+    """One handler run; optional exclusive costs from the same profile."""
     backend, executable = _counter_backend(counter_backend)
+    if function_costs is not None and (backend != "callgrind" or function_costs):
+        raise SystemExit("Callgrind function attribution needs an empty output map")
     argv = [str(binary), str(INSTR_CONCURRENCY), "0", str(rounds), "--summary", str(workers)]
     if backend == "callgrind":
         with tempfile.TemporaryDirectory(prefix="pcc-callgrind-") as directory:
@@ -1346,7 +1520,11 @@ def counted_run(binary: Path, rounds: int, workers: int, *,
                     or re.fullmatch(r"callgrind\.out\.[0-9]+", profiles[0].name) is None):
                 raise SystemExit("Callgrind did not produce exactly one complete process profile")
             with profiles[0].open(encoding="utf-8", errors="replace") as profile:
-                return parse_callgrind_counted_run(profile)
+                if function_costs is None:
+                    return parse_callgrind_counted_run(profile)
+                total, costs = parse_callgrind_function_profile(profile)
+                function_costs.update(costs)
+                return total, None
     prefix = ([executable, "-l"] if backend == "darwin"
               else [executable, "stat", "-x,", "-e", "instructions,cycles"])
     process = subprocess.run(
@@ -1374,15 +1552,27 @@ def per_request(short: tuple[int, int | None], long: tuple[int, int | None],
 
 def measure_instructions(names: list[str], repeats: int, short_rounds: int,
                          long_rounds: int, workers: int, *,
-                         counter_backend: str = "auto") -> dict[str, list]:
+                         counter_backend: str = "auto",
+                         function_results: dict | None = None) -> dict[str, list]:
     """Per-request instructions (and cycles when available), alternating arms."""
     backend, _executable = _counter_backend(counter_backend)
+    if function_results is not None and (backend != "callgrind" or function_results):
+        raise SystemExit("Callgrind function attribution needs an empty output map")
     results: dict[str, list] = {name: [] for name in names}
     for _ in range(repeats):
         for name in names:
             binary = binary_of(name)
-            short = counted_run(binary, short_rounds, workers, counter_backend=backend)
-            long = counted_run(binary, long_rounds, workers, counter_backend=backend)
+            if function_results is None:
+                short = counted_run(binary, short_rounds, workers, counter_backend=backend)
+                long = counted_run(binary, long_rounds, workers, counter_backend=backend)
+            else:
+                short_costs, long_costs = {}, {}
+                short = counted_run(binary, short_rounds, workers, counter_backend=backend,
+                                    function_costs=short_costs)
+                long = counted_run(binary, long_rounds, workers, counter_backend=backend,
+                                   function_costs=long_costs)
+                function_results.setdefault(name, []).append(callgrind_function_difference(
+                    short_costs, long_costs, short[0], long[0], short_rounds, long_rounds))
             results[name].append(per_request(short, long, short_rounds, long_rounds))
     return results
 
@@ -1440,6 +1630,26 @@ def print_instructions(rows: list[dict]) -> None:
         print(f"{row['arm']:14s} {row['instructions']:10.0f} {label}"
               f" (runs within {row['instruction_spread']:.2f}%)"
               f"{cycle_text}{change}")
+
+
+def print_instruction_functions(function_results: dict, limit: int) -> None:
+    for name, runs in function_results.items():
+        print(f"{name}: Callgrind symbol groups, self Ir/request (signed differential medians)")
+        groups = set().union(*(run.keys() for run in runs))
+        medians = {group: statistics.median(run.get(group, 0.0) for run in runs)
+                   for group in groups}
+        named = [(group, cost) for group, cost in medians.items()
+                 if group != CALLGRIND_UNREPRESENTED and group[1] != CALLGRIND_UNKNOWN_SYMBOL]
+        named.sort(key=lambda item: (-item[1], item[0]))
+        if not named:
+            print("  no named function attribution available")
+        for (owner, symbol), cost in named[:limit]:
+            print(f"  {cost:12.2f}  {symbol} [{owner}]")
+        unknown = [(group, cost) for group, cost in medians.items()
+                   if group == CALLGRIND_UNREPRESENTED or group[1] == CALLGRIND_UNKNOWN_SYMBOL]
+        for (owner, symbol), cost in sorted(unknown):
+            print(f"  {cost:12.2f}  {symbol}" + (f" [{owner}]" if owner else ""))
+        print("  each run reconciles to total Ir; separate symbol medians need not sum to the total median")
 
 
 def load_note(load: float) -> str:
@@ -2124,6 +2334,8 @@ def main(argv: list[str] | None = None) -> int:
     instr.add_argument("--counter-backend", choices=("auto", "darwin", "perf", "callgrind"),
                        default="auto", help="auto preserves platform hardware counters; "
                        "callgrind is Linux simulated user Ir only (cycles/IPC unavailable)")
+    instr.add_argument("--functions", type=int, default=0, metavar="N",
+                       help="top N reported symbol groups by exclusive Ir/request (Callgrind only)")
 
     table = commands.add_parser("table")
     table.add_argument("name")
@@ -2250,12 +2462,18 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit("--long-rounds must exceed nonnegative --short-rounds")
         if args.repeats <= 0 or args.workers <= 0:
             raise SystemExit("--repeats and --workers must be positive")
+        if args.functions < 0 or (args.functions and args.counter_backend != "callgrind"):
+            raise SystemExit("--functions requires an explicit Callgrind backend and nonnegative N")
         backend, _executable = _counter_backend(args.counter_backend)
         print(load_note(os.getloadavg()[0]))
+        function_results = {} if args.functions else None
+        options = {} if function_results is None else {"function_results": function_results}
         rows = instruction_rows(measure_instructions(
             args.names, args.repeats, args.short_rounds, args.long_rounds, args.workers,
-            counter_backend=backend), counter_backend=backend)
+            counter_backend=backend, **options), counter_backend=backend)
         print_instructions(rows)
+        if function_results is not None:
+            print_instruction_functions(function_results, args.functions)
         return 0
     if args.command == "table":
         with performance_lock():
