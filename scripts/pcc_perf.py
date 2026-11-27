@@ -1894,6 +1894,22 @@ def parse_step_symbols(nm_text: str) -> list[tuple[int, str]]:
     return symbols
 
 
+def step_marker_address(symbols: list[tuple[int, str]], marker: str) -> int:
+    """File address of the marker function in ``parse_step_symbols`` output."""
+    for address, name in symbols:
+        if name == marker:
+            return address
+    raise SystemExit(f"steps: marker {marker} is not a function of the binary")
+
+
+def step_request_lengths(pcs: list[int], slide: int, marker_address: int) -> list[int]:
+    """Instructions between successive marker hits: each is one whole request
+    on the stepped thread. Exact and independent of machine load, so a
+    small code-generation change is measured here rather than by counters."""
+    hits = [index for index, pc in enumerate(pcs) if pc - slide == marker_address]
+    return [after - before for before, after in zip(hits, hits[1:])]
+
+
 def parse_step_sections(otool_text: str) -> list[tuple[int, int, str]]:
     """(start, end, name) of each __TEXT section in ``otool -l`` output."""
     sections = []
@@ -1980,8 +1996,9 @@ def step_rows(first: dict, first_requests: int, second: dict | None, *,
     return rows[:limit]
 
 
-def run_steps(name: str, count: int, warm: int, marker: str, rounds: int) -> tuple[dict, int, int]:
-    """(instructions by function, marker hits, steps) for one arm."""
+def run_steps(name: str, count: int, warm: int, marker: str, rounds: int) -> tuple[dict, int, int, list]:
+    """(instructions by function, marker hits, steps, exact request lengths)
+    for one arm."""
     binary = binary_of(name)
     with tempfile.TemporaryDirectory(prefix="pcc-steps-") as scratch:
         script = Path(scratch) / "pcc_step.py"
@@ -2005,8 +2022,10 @@ def run_steps(name: str, count: int, warm: int, marker: str, rounds: int) -> tup
                         check=True).stdout
     otool = subprocess.run(["xcrun", "otool", "-l", str(binary)], capture_output=True, text=True,
                            check=True).stdout
-    counts = step_function_counts(parse_step_symbols(nm), pcs, slide, parse_step_sections(otool))
-    return counts, markers, len(pcs)
+    symbols = parse_step_symbols(nm)
+    counts = step_function_counts(symbols, pcs, slide, parse_step_sections(otool))
+    lengths = step_request_lengths(pcs, slide, step_marker_address(symbols, marker))
+    return counts, markers, len(pcs), lengths
 
 
 def runtime_function_names(name: str) -> set:
@@ -2029,9 +2048,18 @@ def print_steps(names: list[str], count: int, warm: int, marker: str, rounds: in
     if not 1 <= len(names) <= 2:
         raise SystemExit("steps takes one arm or two")
     measured = [run_steps(name, count, warm, marker, rounds) for name in names]
-    for name, (counts, markers, steps) in zip(names, measured):
+    exact = []
+    for name, (counts, markers, steps, lengths) in zip(names, measured):
         print(f"{name}: {steps} steps, {markers} requests (hits of {marker}), "
               f"{steps / markers:.0f} instructions per request on the stepped thread")
+        if lengths:
+            median = sorted(lengths)[len(lengths) // 2]
+            exact.append(median)
+            print(f"{name}: exact instructions per request {median} "
+                  f"(median of {len(lengths)} whole requests: {lengths})")
+    if len(exact) == 2:
+        print(f"exact per request {names[0]} -> {names[1]}: {exact[0]} -> {exact[1]} "
+              f"({100.0 * (exact[1] - exact[0]) / exact[0]:+.2f}%)")
     if len(measured) == 1:
         for function, value, _after, _change in step_rows(measured[0][0], measured[0][1], None,
                                                           limit=limit):

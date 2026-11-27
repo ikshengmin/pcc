@@ -1333,6 +1333,19 @@ def test_step_rows_are_per_request_and_ordered_by_largest_change():
     assert alone == [("alpha", 100.0, None, None), ("beta", 20.0, None, None)]
 
 
+def test_step_request_lengths_are_exact_instructions_between_marker_hits():
+    # Marker gamma at file 0x100001080; slide 0x4000. Each length is one
+    # whole request on the stepped thread, independent of machine load.
+    slide = 0x4000
+    marker = 0x100005080
+    pcs = [0x100005000, marker, 1, 2, 3, marker, 4, 5, 6, marker, 7, 8, 9, marker, 10]
+    assert PERF.step_request_lengths(pcs, slide, 0x100001080) == [4, 4, 4]
+    assert PERF.step_request_lengths(pcs[:4], slide, 0x100001080) == []
+    assert PERF.step_marker_address(PERF.parse_step_symbols(NM_TEXT), "gamma") == 0x100001080
+    with pytest.raises(SystemExit, match="marker"):
+        PERF.step_marker_address(PERF.parse_step_symbols(NM_TEXT), "missing")
+
+
 def test_steps_refuse_hosts_without_lldb(monkeypatch):
     monkeypatch.setattr(PERF.sys, "platform", "linux")
     with pytest.raises(SystemExit, match="Darwin"):
