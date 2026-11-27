@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import sys
 
-from pcc.extern import c_int64, c_obj, extern
+from pcc.extern import c_int64, c_obj, c_rawptr, extern
+from pcc.unsafe import load_i32, load_i64
+from pcc.frontends.python import py_ast
 
 from pcc.frontends.python.pipeline_modes import PyPipelineError
 from pcc.frontends.python.py_ast_contract import (
@@ -18,6 +20,12 @@ _PY_AST_WIRE_SCHEMA_V2 = "pcc.frontends.python.py_ast.v2"
 _PY_AST_WIRE_NODE_KEY = "__pcc_py_ast_v1__"
 _PY_AST_WIRE_BYTES_KEY = "__pcc_bytes_v1__"
 
+_owned_ast_tape_scan = extern("pcc_json_scan_owned_ast_v2", (c_obj,), c_obj)
+_owned_ast_tape_token = extern(
+    "pcc_json_owned_ast_v2_token_value", (c_obj, c_int64, c_int64, c_int64), c_obj
+)
+_owned_ast_tape_data = extern("py_bytes_data_ptr", (c_obj,), c_rawptr)
+_owned_ast_tape_text_len = extern("py_str_byte_len", (c_obj,), c_int64)
 _try_owned_ast_json = extern("pcc_json_try_loads_owned_ast", (c_obj,), c_obj)
 _owned_ast_raw_reclaimable = extern("pcc_allocator_reclaimable_slab_bytes", (), c_int64)
 _owned_ast_mapped = extern("pcc_allocator_mapped_bytes", (), c_int64)
@@ -1135,8 +1143,212 @@ def _read_py_ast_wire(path: str):
     return _decode_py_ast_wire(text, path)
 
 
+def _owned_ast_tape_u32(tape: bytes, offset: int) -> int:
+    # Borrow pointer only for this single direct load; owner remains rooted,
+    # no borrowed raw pointer spans a call or allocation.
+    p = _owned_ast_tape_data(tape)
+    return load_i32(p, offset) & 4294967295
+
+
+def _owned_ast_tape_record(tape: bytes, index: int) -> int:
+    # Immutable bytes payload starts at an 8-byte-aligned offset; the record
+    # address is 32+8*index. Borrow is consumed by this single load before
+    # any other call/safepoint. Valid caps keep packed words below 2**56.
+    p = _owned_ast_tape_data(tape)
+    return load_i64(p, 32 + index*8)
+
+
+def _owned_ast_tape_primitive(text: str, packed: int, kind: int, length: int):
+    start = packed & 536870911
+    end = packed >> 32
+    if packed < 0 or ((packed >> 29) & 7) != kind or start >= end or end > length:
+        return None
+    return _owned_ast_tape_token(text, start, end, kind)
+
+
+def _owned_ast_tape_walk(text: str, tape: bytes, i: int, limit: int, length: int,
+         file_count: int, depth: int) -> int:
+    if i < 0 or i >= limit or depth >= 64:
+        return -1
+    packed = _owned_ast_tape_record(tape,i)
+    kind = (packed >> 29) & 7
+    start = packed & 536870911
+    end = packed >> 32
+    if packed < 0 or start >= length:
+        return -1
+    if kind >= 3:
+        if kind > 5 or start >= end or end > length:
+            return -1
+        return i+1
+    if end <= i or end > limit:
+        return -1
+    j = i+1
+    if kind == 2:
+        if end - j != 5:
+            return -1
+        file_id = _owned_ast_tape_primitive(text,_owned_ast_tape_record(tape,j),4,length)
+        if not isinstance(file_id,int) or isinstance(file_id,bool):
+            return -1
+        if file_id < 0 or file_id >= file_count:
+            return -1
+        j += 1
+        while j < end:
+            v = _owned_ast_tape_record(tape,j)
+            lo = v & 536870911
+            hi = v >> 32
+            if v < 0 or ((v >> 29) & 7) != 4 or lo >= hi or hi > length:
+                return -1
+            j += 1
+        return end
+    expected = -1
+    if kind == 1:
+        if j >= end:
+            return -1
+        name = _owned_ast_tape_primitive(text,_owned_ast_tape_record(tape,j),3,length)
+        if not isinstance(name,str) or name == "SourceSpan":
+            return -1
+        if name not in _PY_AST_FIELD_NAME_OVERRIDES:
+            return -1
+        expected = len(_PY_AST_FIELD_NAME_OVERRIDES[name])
+        j += 1
+    fields = 0
+    while j < end:
+        next_index = _owned_ast_tape_walk(text,tape,j,end,length,file_count,depth+1)
+        if next_index <= j or next_index > end:
+            return -1
+        j = next_index
+        fields += 1
+    if j != end or (expected >= 0 and fields != expected):
+        return -1
+    return end
+
+
+def _owned_ast_tape_validated_files(text: str, tape):
+    if type(tape) is not bytes or len(tape) < 32:
+        return None
+    length = _owned_ast_tape_text_len(text)
+    if length < 0 or length > 16777216:
+        return None
+    if _owned_ast_tape_u32(tape,0)!=844383056 or _owned_ast_tape_u32(tape,4)!=1 or _owned_ast_tape_u32(tape,8)!=length:
+        return None
+    count = _owned_ast_tape_u32(tape,12)
+    file_root = _owned_ast_tape_u32(tape,16)
+    module_root = _owned_ast_tape_u32(tape,20)
+    if count <= 1 or count > 4194300 or len(tape) != 32+8*count:
+        return None
+    if file_root != 0 or module_root <= 0 or module_root >= count:
+        return None
+    if _owned_ast_tape_u32(tape,24)!=0 or _owned_ast_tape_u32(tape,28)!=0:
+        return None
+    a = _owned_ast_tape_record(tape,file_root)
+    if a < 0 or ((a >> 29) & 7) != 0 or (a & 536870911)>=length or (a >> 32)!=module_root:
+        return None
+    files = []
+    seen = set()
+    for j in range(1,module_root):
+        filename = _owned_ast_tape_primitive(text,_owned_ast_tape_record(tape,j),3,length)
+        if not isinstance(filename,str) or filename in seen:
+            return None
+        seen.add(filename)
+        files.append(filename)
+    if _owned_ast_tape_walk(text,tape,module_root,count,length,len(files),1)!=count:
+        return None
+    return files
+
+
+def _owned_ast_tape_checked_leaf(text: str, packed: int, kind: int, length: int):
+    value = _owned_ast_tape_primitive(text,packed,kind,length)
+    if kind == 3:
+        if not isinstance(value,str):
+            raise PyPipelineError("invalid validated compact AST string")
+    elif kind == 4:
+        if not isinstance(value,int) or isinstance(value,bool):
+            raise PyPipelineError("invalid validated compact AST integer")
+    elif kind == 5:
+        if value is not None and not isinstance(value,bool):
+            raise PyPipelineError("invalid validated compact AST literal")
+    else:
+        raise PyPipelineError("invalid validated compact AST _owned_ast_tape_primitive")
+    return value
+
+
+def _owned_ast_tape_materialize(text: str, tape: bytes, index: int, packed: int, length: int, files: list, positions: dict):
+    kind = (packed >> 29) & 7
+    if kind >= 3:
+        return _owned_ast_tape_checked_leaf(text,packed,kind,length)
+    end = packed >> 32
+    j = index+1
+    if kind == 2:
+        file_id = _owned_ast_tape_checked_leaf(text,_owned_ast_tape_record(tape,j),4,length)
+        line = _owned_ast_tape_checked_leaf(text,_owned_ast_tape_record(tape,j+1),4,length)
+        col = _owned_ast_tape_checked_leaf(text,_owned_ast_tape_record(tape,j+2),4,length)
+        end_line = _owned_ast_tape_checked_leaf(text,_owned_ast_tape_record(tape,j+3),4,length)
+        end_col = _owned_ast_tape_checked_leaf(text,_owned_ast_tape_record(tape,j+4),4,length)
+        return py_ast.SourceSpan(files[file_id],line,col,end_line,end_col)
+    if kind == 1:
+        name = _owned_ast_tape_checked_leaf(text,_owned_ast_tape_record(tape,j),3,length)
+        j += 1
+        # Exact canonical contract and arity were checked by the full
+        # preflight. Retain original child order and constructor arguments.
+        if name == "IntLit" or name == "StrLit" or name == "IntType":
+            child = _owned_ast_tape_record(tape,j)
+            first = _owned_ast_tape_materialize(text,tape,j,child,length,files,positions)
+            j = (child >> 32) if ((child >> 29) & 7) < 3 else j+1
+            child = _owned_ast_tape_record(tape,j)
+            second = _owned_ast_tape_materialize(text,tape,j,child,length,files,positions)
+            j = (child >> 32) if ((child >> 29) & 7) < 3 else j+1
+            child = _owned_ast_tape_record(tape,j)
+            third = _owned_ast_tape_materialize(text,tape,j,child,length,files,positions)
+            if name == "IntLit":
+                return py_ast.IntLit(first,second,third)
+            if name == "StrLit":
+                return py_ast.StrLit(first,second,third)
+            return py_ast.IntType(first,second,third)
+        if name == "StrType" or name == "DynType":
+            value = _owned_ast_tape_materialize(text,tape,j,_owned_ast_tape_record(tape,j),length,files,positions)
+            if name == "StrType":
+                return py_ast.StrType(value)
+            return py_ast.DynType(value)
+        fields = [name]
+        while j < end:
+            child = _owned_ast_tape_record(tape,j)
+            fields.append(_owned_ast_tape_materialize(text,tape,j,child,length,files,positions))
+            j = (child >> 32) if ((child >> 29) & 7) < 3 else j+1
+        return _py_ast_node_from_wire(name,_PyAstV2Fields(fields,positions[name]))
+    if kind != 0:
+        raise PyPipelineError("invalid validated compact AST container")
+    values = []
+    while j < end:
+        child = _owned_ast_tape_record(tape,j)
+        values.append(_owned_ast_tape_materialize(text,tape,j,child,length,files,positions))
+        j = (child >> 32) if ((child >> 29) & 7) < 3 else j+1
+    return tuple(values)
+
+
 def _decode_py_ast_wire(text: str, path: str = ""):
     """Decode an AST snapshot without reopening an identity-checked file."""
+
+    if sys.implementation.name == "pcc" and type(text) is str:
+        tape = _owned_ast_tape_scan(text)
+        if tape is not None:
+            files = _owned_ast_tape_validated_files(text, tape)
+            if files is not None:
+                # No fallback below this boundary. Original constructors own
+                # all faults, normalization and child order. The source,
+                # immutable tape and file table remain rooted.
+                positions = _py_ast_v2_field_positions()
+                root = _owned_ast_tape_u32(tape, 20)
+                return _owned_ast_tape_materialize(
+                    text, tape, root, _owned_ast_tape_record(tape, root),
+                    _owned_ast_tape_text_len(text), files, positions,
+                )
+            # Release unsupported tape before allocating the old raw graph.
+            tape = None
+    return _decode_py_ast_wire_legacy(text, path)
+
+
+def _decode_py_ast_wire_legacy(text: str, path: str = ""):
+    """Original owned JSON reader and public-provider fallback."""
 
     payload = None
     if sys.implementation.name == "pcc" and type(text) is str:

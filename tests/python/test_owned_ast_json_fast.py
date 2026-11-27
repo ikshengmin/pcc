@@ -300,6 +300,7 @@ def test_private_frontend_fallback_preserves_original_decoder(monkeypatch):
         seen.append(text)
         return json.loads(text)
     monkeypatch.setattr(wire, "sys", SimpleNamespace(implementation=SimpleNamespace(name="pcc")), raising=False)
+    monkeypatch.setattr(wire, "_owned_ast_tape_scan", lambda text: None)
     monkeypatch.setattr(wire, "_try_owned_ast_json", lambda text: None, raising=False)
     monkeypatch.setattr(wire, "_maybe_trim_owned_ast_raw_highwater", lambda: None, raising=False)
     monkeypatch.setattr(wire, "json", SimpleNamespace(loads=original))
@@ -381,6 +382,7 @@ def test_owned_ast_raw_trim_only_on_admitted_native_parse(monkeypatch):
     text='{"schema":"pcc.frontends.python.py_ast.v2","files":[],"module":null}'
     monkeypatch.setattr(wire,"sys",SimpleNamespace(implementation=SimpleNamespace(name="pcc")))
     monkeypatch.setattr(wire,"_maybe_trim_owned_ast_raw_highwater",lambda:seen.append("trim"),raising=False)
+    monkeypatch.setattr(wire,"_owned_ast_tape_scan",lambda text:None)
     monkeypatch.setattr(wire,"_try_owned_ast_json",lambda text:json.loads(text))
     assert wire._decode_py_ast_wire(text) is None
     assert seen==["trim"]
@@ -391,3 +393,133 @@ def test_owned_ast_raw_trim_only_on_admitted_native_parse(monkeypatch):
     monkeypatch.setattr(wire,"_try_owned_ast_json",lambda text:pytest.fail("host must not call raw"))
     assert wire._decode_py_ast_wire(text) is None
     assert seen==["trim"]
+
+
+def _tape_heap(monkeypatch, text, fail_at=0):
+    import struct
+    from pcc.runtime.py import py_json_runtime as runtime
+    h = _Heap(runtime, monkeypatch, text, fail_at)
+    def store32(p, offset, value):
+        for i, byte in enumerate(struct.pack("<I", value & 0xffffffff)):
+            h.raw[p+offset+i] = byte
+    monkeypatch.setattr(runtime, "store_i32", store32)
+    monkeypatch.setattr(runtime, "py_bytes_new",
+                        lambda p, n: h.new(bytes(h.raw.get(p+i, 0) for i in range(n))),
+                        raising=False)
+    return runtime, h
+
+
+def test_compact_ast_scanner_lexical_and_ownership(monkeypatch):
+    import struct
+    text = json.dumps({"schema": "pcc.frontends.python.py_ast.v2",
+                       "files": [], "module": {"n": ["IntType", "int", 64, True]}})
+    runtime, heap = _tape_heap(monkeypatch, text)
+    p = runtime.pcc_json_scan_owned_ast_v2(heap.input)
+    packed = heap.objects[p]
+    assert struct.unpack_from("<8I", packed) == (844383056, 1, len(text), 6, 0, 1, 0, 0)
+    assert len(packed) == 80
+    assert heap.pending is None and not heap.allocations and not heap.roots
+    for i, expected in enumerate(("IntType", "int", 64, True), 2):
+        word, end = struct.unpack_from("<II", packed, 32+i*8)
+        token = runtime.pcc_json_owned_ast_v2_token_value(
+            heap.input, word & 536870911, end, word >> 29)
+        assert heap.objects[token] == expected
+        heap.release(token)
+    heap.release(p)
+
+
+def test_compact_ast_scanner_fallback_and_allocation_faults(monkeypatch):
+    def doc(value):
+        return json.dumps({"schema": "pcc.frontends.python.py_ast.v2",
+                           "files": [], "module": value})
+    bad = [doc({"b": [1]}), doc({"d": {"x": 1}}), doc(1.5), doc(2**60),
+           doc("\ud800"), doc(1)+" trailing", doc(1)[:-1],
+           doc(1).replace("1}", "01}"), doc(1).replace("v2", "v1"),
+           doc(1).replace('"module"', '"module":0,"module"')]
+    for text in bad:
+        runtime, heap = _tape_heap(monkeypatch, text)
+        p = runtime.pcc_json_scan_owned_ast_v2(heap.input)
+        assert p == heap.constants["py_None"]
+        assert heap.pending is None and not heap.allocations and not heap.roots
+    text = doc([{"n": ["IntType", "int", 64, True]}]*160)
+    runtime, heap = _tape_heap(monkeypatch, text)
+    p = runtime.pcc_json_scan_owned_ast_v2(heap.input)
+    assert p and isinstance(heap.objects[p], bytes)
+    attempts = heap.attempt
+    heap.release(p)
+    assert attempts >= 2
+    for fail in range(1, attempts+1):
+        runtime, heap = _tape_heap(monkeypatch, text, fail)
+        assert runtime.pcc_json_scan_owned_ast_v2(heap.input) == 0
+        assert heap.pending is not None and not heap.allocations and not heap.roots
+
+
+def test_compact_reader_full_preflight_and_constructor_parity(monkeypatch):
+    """Execute the real scanner in the checked heap model and real reader."""
+    import struct
+    from pcc.frontends.python import pipeline_ast_wire as wire, py_ast
+    from pcc.frontends.python.py_ast_contract import PY_AST_FIELD_NAME_OVERRIDES
+
+    def scan(text):
+        runtime, heap = _tape_heap(monkeypatch, text)
+        result = runtime.pcc_json_scan_owned_ast_v2(heap.input)
+        assert result and heap.pending is None
+        value = heap.objects[result]
+        heap.release(result)
+        assert not heap.allocations and not heap.roots
+        return value
+    def doc(value, files=()):
+        return json.dumps({"schema": wire._PY_AST_WIRE_SCHEMA_V2,
+                           "files": list(files), "module": value})
+    original = wire._decode_py_ast_wire_legacy
+    def signature(fn, text):
+        try:
+            return ("ok", wire._py_ast_v2_payload(fn(text, "fixture")))
+        except Exception as exc:
+            return ("error", type(exc), str(exc),
+                    getattr(exc, "doc", None), getattr(exc, "pos", None))
+
+    monkeypatch.setattr(wire, "_owned_ast_tape_scan", scan)
+    monkeypatch.setattr(wire, "_owned_ast_tape_u32",
+                        lambda data, offset: struct.unpack_from("<I", data, offset)[0])
+    monkeypatch.setattr(wire, "_owned_ast_tape_record",
+                        lambda data, index: struct.unpack_from("<q", data, 32+8*index)[0])
+    monkeypatch.setattr(wire, "_owned_ast_tape_text_len", lambda text: len(text.encode()))
+    monkeypatch.setattr(wire, "_owned_ast_tape_token",
+                        lambda text, start, end, kind: json.loads(text.encode()[start:end]))
+
+    span = py_ast.SourceSpan("例.py", -1, 2, 3, 4)
+    value = (py_ast.IntLit(span, py_ast.IntType("int", 128, False), 123),
+             py_ast.StrLit(span, py_ast.StrType("custom"), "é\x00😀"),
+             py_ast.Name(span, py_ast.DynType("dynamic"), "name"))
+    canonical = json.dumps(wire._py_ast_v2_payload(value))
+    valid = [canonical]
+    for name, fields in PY_AST_FIELD_NAME_OVERRIDES.items():
+        if name != "SourceSpan":
+            valid.append(doc({"n": [name] + [None]*len(fields)}))
+    invalid = [
+        doc({"n": ["Unknown"]}), doc({"n": ["IntType", "int"]}),
+        doc({"s": [0, 1, 2, 3, 4]}), doc({"s": [True, 1, 2, 3, 4]}, ["x"]),
+        doc({"s": [0, True, 2, 3, 4]}, ["x"]), doc(1, ["x", "x"]),
+        doc({"d": {"x": 1}}), doc({"b": [1, 2]}), doc(1.5), doc(2**60),
+        doc("\ud800"), doc(1)+" trailing", doc(1)[:-1],
+        doc({"n": ["Unknown"]})+" trailing", doc(1).replace("v2", "v1"),
+        json.dumps({"module": 1, "files": [], "schema": wire._PY_AST_WIRE_SCHEMA_V2}),
+        doc(1).replace('"module"', '"module":0,"module"'),
+    ]
+    expected = [signature(original, text) for text in valid+invalid]
+    calls = []
+    def fallback(text, path=""):
+        calls.append(text)
+        # Legacy provider semantics remain identical and are tested separately.
+        return original(text, path)
+
+    monkeypatch.setattr(wire, "_decode_py_ast_wire_legacy", fallback)
+    monkeypatch.setattr(wire, "_try_owned_ast_json", lambda text: None)
+    monkeypatch.setattr(wire, "sys", SimpleNamespace(implementation=SimpleNamespace(name="pcc")))
+    for i, text in enumerate(valid+invalid):
+        before = len(calls)
+        assert signature(wire._decode_py_ast_wire, text) == expected[i]
+        assert len(calls) == before + int(i >= len(valid)), text
+    decoded = wire._decode_py_ast_wire(canonical)
+    assert decoded[0].span.file is decoded[1].span.file is decoded[2].span.file

@@ -1017,3 +1017,309 @@ def py_json_dumps_ex(obj, sort_keys: int):
 @c_abi_export("py_json_dumps")
 def py_json_dumps(obj):
     return py_json_dumps_ex(obj, 0)
+
+# Private compact canonical V2 lexical tape. Semantic eligibility belongs
+# to the frontend; these helpers do not alter the public JSON API.
+py_bytes_new = extern("py_bytes_new", (c_ptr, c_int64), c_ptr)
+
+
+def _owned_ast_tape_reserve(buf, want: int) -> int:
+    if want < 32 or want > 33554432:
+        return -1
+    cap: int = load_i64(buf, 16)
+    if cap >= want:
+        return 0
+    if cap == 0:
+        cap = 4096
+    while cap < want:
+        cap = cap * 2
+    raw = realloc(load_ptr(buf, 0), cap)
+    if ptr_is_null(raw) != 0:
+        _owned_ast_json_oom()
+        return -1
+    store_ptr(buf, 0, raw)
+    store_i64(buf, 16, cap)
+    return 0
+
+
+def _owned_ast_tape_add(buf, kind: int, start: int, end: int) -> int:
+    used: int = load_i64(buf, 8)
+    if start < 0 or start > 536870911 or used > 33554424:
+        return -1
+    if _owned_ast_tape_reserve(buf, used + 8) != 0:
+        return -1
+    raw = load_ptr(buf, 0)
+    # Supported native targets are little endian; 3 kind bits and 29 offset
+    # bits are encoded in word0, primitive byte end or subtree end in word1.
+    store_i32(raw, used, (kind << 29) | start)
+    store_i32(raw, used + 4, end)
+    store_i64(buf, 8, used + 8)
+    return (used - 32) // 8
+
+
+def _owned_ast_tape_finish(buf, index: int) -> None:
+    store_i32(load_ptr(buf, 0), 32 + index * 8 + 4, (load_i64(buf, 8) - 32) // 8)
+
+
+def _owned_ast_tape_exact(data, n: int, pos, token, size: int) -> int:
+    _skip_ws(data, n, pos)
+    i: int = load_i64(pos, 0)
+    if _literal_matches(data, n, i, token, size) == 0:
+        return -1
+    store_i64(pos, 0, i + size)
+    return 0
+
+
+def _owned_ast_tape_string_end(data, n: int, pos) -> int:
+    i: int = load_i64(pos, 0)
+    if i >= n or _byte_at(data, i) != 34:
+        return -1
+    i = i + 1
+    while i < n:
+        c: int = _byte_at(data, i)
+        i = i + 1
+        if c == 34:
+            store_i64(pos, 0, i)
+            return 0
+        if c < 32 or c >= 128:
+            return -1
+        if c == 92:
+            if i >= n:
+                return -1
+            esc: int = _byte_at(data, i)
+            i = i + 1
+            if esc == 117:
+                store_i64(pos, 0, i)
+                point: int = _parse_hex4(data, n, pos)
+                if point < 0:
+                    return -1
+                i = load_i64(pos, 0)
+                if point >= 55296 and point <= 56319:
+                    if i + 6 > n or _byte_at(data, i) != 92 or _byte_at(data, i + 1) != 117:
+                        return -1
+                    store_i64(pos, 0, i + 2)
+                    low: int = _parse_hex4(data, n, pos)
+                    if low < 56320 or low > 57343:
+                        return -1
+                    i = load_i64(pos, 0)
+                elif point >= 56320 and point <= 57343:
+                    return -1
+            elif esc != 34 and esc != 92 and esc != 47 and esc != 98 and esc != 102 and esc != 110 and esc != 114 and esc != 116:
+                return -1
+    return -1
+
+
+def _owned_ast_tape_integer_end(data, n: int, pos) -> int:
+    i: int = load_i64(pos, 0)
+    if i < n and _byte_at(data, i) == 45:
+        i = i + 1
+    if i >= n or _byte_at(data, i) < 48 or _byte_at(data, i) > 57:
+        return -1
+    first: int = i
+    value: int = 0
+    while i < n:
+        c: int = _byte_at(data, i)
+        if c < 48 or c > 57:
+            break
+        if first != i and _byte_at(data, first) == 48:
+            return -1
+        digit: int = c - 48
+        if value > (1152921504606846975 - digit) // 10:
+            return -1
+        value = value * 10 + digit
+        i = i + 1
+    if i < n:
+        c = _byte_at(data, i)
+        if c == 46 or c == 69 or c == 101:
+            return -1
+    store_i64(pos, 0, i)
+    return 0
+
+
+def _owned_ast_tape_sequence(data, n: int, pos, buf, depth: int, kind: int, start: int) -> int:
+    if depth >= 64 or _owned_ast_tape_exact(data, n, pos, cstr("["), 1) != 0:
+        return -1
+    index: int = _owned_ast_tape_add(buf, kind, start, 0)
+    if index < 0:
+        return -1
+    _skip_ws(data, n, pos)
+    i: int = load_i64(pos, 0)
+    if i < n and _byte_at(data, i) == 93:
+        store_i64(pos, 0, i + 1)
+        _owned_ast_tape_finish(buf, index)
+        return index
+    while True:
+        if _owned_ast_tape_value(data, n, pos, buf, depth + 1) < 0:
+            return -1
+        _skip_ws(data, n, pos)
+        i = load_i64(pos, 0)
+        if i >= n:
+            return -1
+        c: int = _byte_at(data, i)
+        if c == 93:
+            store_i64(pos, 0, i + 1)
+            _owned_ast_tape_finish(buf, index)
+            return index
+        if c != 44:
+            return -1
+        store_i64(pos, 0, i + 1)
+
+
+def _owned_ast_tape_value(data, n: int, pos, buf, depth: int) -> int:
+    if depth >= 64:
+        return -1
+    _skip_ws(data, n, pos)
+    start: int = load_i64(pos, 0)
+    if start >= n:
+        return -1
+    c: int = _byte_at(data, start)
+    if c == 34:
+        if _owned_ast_tape_string_end(data, n, pos) != 0:
+            return -1
+        return _owned_ast_tape_add(buf, 3, start, load_i64(pos, 0))
+    if c == 91:
+        return _owned_ast_tape_sequence(data, n, pos, buf, depth, 0, start)
+    if c == 123:
+        store_i64(pos, 0, start + 1)
+        _skip_ws(data, n, pos)
+        i: int = load_i64(pos, 0)
+        kind: int = -1
+        if _literal_matches(data, n, i, cstr("\"n\""), 3) != 0:
+            kind = 1
+        elif _literal_matches(data, n, i, cstr("\"s\""), 3) != 0:
+            kind = 2
+        if kind < 0:
+            return -1
+        store_i64(pos, 0, i + 3)
+        if _owned_ast_tape_exact(data, n, pos, cstr(":"), 1) != 0:
+            return -1
+        index: int = _owned_ast_tape_sequence(data, n, pos, buf, depth + 1, kind, start)
+        if index < 0 or _owned_ast_tape_exact(data, n, pos, cstr("}"), 1) != 0:
+            return -1
+        return index
+    if c == 116 and _literal_matches(data, n, start, cstr("true"), 4) != 0:
+        store_i64(pos, 0, start + 4)
+        return _owned_ast_tape_add(buf, 5, start, start + 4)
+    if c == 102 and _literal_matches(data, n, start, cstr("false"), 5) != 0:
+        store_i64(pos, 0, start + 5)
+        return _owned_ast_tape_add(buf, 5, start, start + 5)
+    if c == 110 and _literal_matches(data, n, start, cstr("null"), 4) != 0:
+        store_i64(pos, 0, start + 4)
+        return _owned_ast_tape_add(buf, 5, start, start + 4)
+    if _owned_ast_tape_integer_end(data, n, pos) != 0:
+        return -1
+    return _owned_ast_tape_add(buf, 4, start, load_i64(pos, 0))
+
+
+def _owned_ast_tape_envelope(data, n: int, pos, buf) -> int:
+    if _owned_ast_tape_exact(data, n, pos, cstr("{"), 1) != 0:
+        return -1
+    if _owned_ast_tape_exact(data, n, pos, cstr("\"schema\""), 8) != 0:
+        return -1
+    if _owned_ast_tape_exact(data, n, pos, cstr(":"), 1) != 0:
+        return -1
+    if _owned_ast_tape_exact(data, n, pos, cstr("\"pcc.frontends.python.py_ast.v2\""), 32) != 0:
+        return -1
+    if _owned_ast_tape_exact(data, n, pos, cstr(","), 1) != 0:
+        return -1
+    if _owned_ast_tape_exact(data, n, pos, cstr("\"files\""), 7) != 0:
+        return -1
+    if _owned_ast_tape_exact(data, n, pos, cstr(":"), 1) != 0:
+        return -1
+    _skip_ws(data, n, pos)
+    files: int = _owned_ast_tape_sequence(data, n, pos, buf, 1, 0, load_i64(pos, 0))
+    if files < 0 or _owned_ast_tape_exact(data, n, pos, cstr(","), 1) != 0:
+        return -1
+    if _owned_ast_tape_exact(data, n, pos, cstr("\"module\""), 8) != 0:
+        return -1
+    if _owned_ast_tape_exact(data, n, pos, cstr(":"), 1) != 0:
+        return -1
+    module: int = _owned_ast_tape_value(data, n, pos, buf, 1)
+    if module < 0 or _owned_ast_tape_exact(data, n, pos, cstr("}"), 1) != 0:
+        return -1
+    _skip_ws(data, n, pos)
+    if load_i64(pos, 0) != n:
+        return -1
+    raw = load_ptr(buf, 0)
+    store_i32(raw, 0, 844383056)
+    store_i32(raw, 4, 1)
+    store_i32(raw, 8, n)
+    store_i32(raw, 12, (load_i64(buf, 8) - 32) // 8)
+    store_i32(raw, 16, files)
+    store_i32(raw, 20, module)
+    store_i32(raw, 24, 0)
+    store_i32(raw, 28, 0)
+    return 0
+
+
+@c_abi_export("pcc_json_scan_owned_ast_v2")
+def pcc_json_scan_owned_ast_v2(text):
+    if py_err_occurred() != 0:
+        return null()
+    if ptr_is_null(text) != 0 or _type_of(text) != PY_TYPE_STR:
+        return pcc_gc_retain(global_load_ptr("py_None"))
+    data = py_str_utf8(text)
+    n: int = py_str_byte_len(text)
+    if py_err_occurred() != 0:
+        return null()
+    if ptr_is_null(data) != 0 or n < 0:
+        _owned_ast_json_oom()
+        return null()
+    if n > 16777216:
+        return pcc_gc_retain(global_load_ptr("py_None"))
+    pos = stack_alloc(8)
+    store_i64(pos, 0, 0)
+    buf = stack_alloc(24)
+    _buf_init(buf)
+    status: int = _owned_ast_tape_reserve(buf, 32)
+    result = null()
+    if status == 0:
+        store_i64(buf, 8, 32)
+        status = _owned_ast_tape_envelope(data, n, pos, buf)
+        if status == 0 and py_err_occurred() == 0:
+            result = _owned_ast_json_checked(py_bytes_new(load_ptr(buf, 0), load_i64(buf, 8)))
+    _buf_dispose(buf)
+    if py_err_occurred() != 0:
+        if ptr_is_null(result) == 0:
+            py_decref(result)
+        return null()
+    if ptr_is_null(result) == 0:
+        return result
+    return pcc_gc_retain(global_load_ptr("py_None"))
+
+
+@c_abi_export("pcc_json_owned_ast_v2_token_value")
+def pcc_json_owned_ast_v2_token_value(text, start: int, end: int, kind: int):
+    # Diagnostic token reader. The source and immutable tape are rooted by
+    # the caller; reject unsupported/corrupt spans before constructing a leaf.
+    if py_err_occurred() != 0:
+        return null()
+    if ptr_is_null(text) != 0 or _type_of(text) != PY_TYPE_STR:
+        return pcc_gc_retain(global_load_ptr("py_None"))
+    data = py_str_utf8(text)
+    n: int = py_str_byte_len(text)
+    if py_err_occurred() != 0:
+        return null()
+    if ptr_is_null(data) != 0 or n < 0:
+        _owned_ast_json_oom()
+        return null()
+    if start < 0 or end <= start or end > n:
+        return pcc_gc_retain(global_load_ptr("py_None"))
+    pos = stack_alloc(8)
+    store_i64(pos, 0, start)
+    if kind == 3:
+        if _owned_ast_tape_string_end(data, end, pos) != 0 or load_i64(pos, 0) != end:
+            return pcc_gc_retain(global_load_ptr("py_None"))
+        store_i64(pos, 0, start)
+        return _owned_ast_json_string(data, end, pos, 0)
+    if kind == 4:
+        if _owned_ast_tape_integer_end(data, end, pos) != 0 or load_i64(pos, 0) != end:
+            return pcc_gc_retain(global_load_ptr("py_None"))
+        store_i64(pos, 0, start)
+        return _owned_ast_json_integer(data, end, pos)
+    if kind == 5:
+        if end - start == 4 and _literal_matches(data, end, start, cstr("true"), 4) != 0:
+            return pcc_gc_retain(global_load_ptr("py_True"))
+        if end - start == 5 and _literal_matches(data, end, start, cstr("false"), 5) != 0:
+            return pcc_gc_retain(global_load_ptr("py_False"))
+    return pcc_gc_retain(global_load_ptr("py_None"))

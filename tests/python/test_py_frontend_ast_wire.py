@@ -410,3 +410,44 @@ def test_parallel_codegen_v1_and_private_v2_sidecars_emit_identical_ir(tmp_path,
             assert profile.get("counters", {}).get("multi_frontend_ast_wire_enabled") == 1
             outputs.append(path.read_bytes())
     assert outputs[0] == outputs[1]
+
+
+def test_compact_native_reader_contract_model(monkeypatch):
+    """Model the native immutable-byte ABI, not the public host dispatch."""
+    import struct
+    import sys
+    from types import SimpleNamespace
+    from pcc.frontends.python import pipeline_ast_wire as wire, py_ast
+
+    def document(value, files=()):
+        return json.dumps({"schema": wire._PY_AST_WIRE_SCHEMA_V2,
+                           "files": list(files), "module": value})
+
+    # Hand-encoded canonical tape of IntType("int", 64, True).
+    text = document({"n": ["IntType", "int", 64, True]})
+    values = ['"IntType"', '"int"', '64', 'true']
+    records = [(0, 1), (1 << 29, 6)]
+    for kind, token in zip((3, 3, 4, 5), values):
+        start = text.index(token)
+        records.append(((kind << 29) | start, start + len(token)))
+    tape = struct.pack("<8I", 844383056, 1, len(text), 6, 0, 1, 0, 0)
+    tape += b"".join(struct.pack("<II", *r) for r in records)
+    expected = wire._decode_py_ast_wire(text)
+    monkeypatch.setattr(wire, "sys", SimpleNamespace(implementation=SimpleNamespace(name="pcc")))
+    monkeypatch.setattr(wire, "_owned_ast_tape_scan", lambda value: tape)
+    monkeypatch.setattr(wire, "_owned_ast_tape_u32",
+                        lambda data, offset: struct.unpack_from("<I", data, offset)[0])
+    monkeypatch.setattr(wire, "_owned_ast_tape_record",
+                        lambda data, index: struct.unpack_from("<q", data, 32+8*index)[0])
+    monkeypatch.setattr(wire, "_owned_ast_tape_text_len", len)
+    monkeypatch.setattr(wire, "_owned_ast_tape_token",
+                        lambda value, start, end, kind: json.loads(value[start:end]))
+    def unexpected_fallback(*args):
+        raise AssertionError("validated canonical tape must not fall back")
+    monkeypatch.setattr(wire, "_decode_py_ast_wire_legacy", unexpected_fallback)
+    assert wire._decode_py_ast_wire(text) == expected
+    def broken_constructor(*args):
+        raise RuntimeError("constructor fault")
+    monkeypatch.setattr(py_ast, "IntType", broken_constructor)
+    with pytest.raises(RuntimeError, match="constructor fault"):
+        wire._decode_py_ast_wire(text)
