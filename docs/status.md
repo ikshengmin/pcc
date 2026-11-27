@@ -5361,9 +5361,11 @@ in the relevant section or issue and removes the entry.
 
    - 2026-11-27 local exact native compact tape scanner diagnostic successful. Temporary scanner runtime db877e8c (80 host pass), strict193 archive32fc800f/prov2363e7ed build120.707s/399450112B, actual22 closure ELF c010b245 fallback0/no py_cpy, native1/4 carrier probe2 eight jobs exact. c_parsetab tape5254976B SHAa55e82f5 exact model and raw oracle f777240c. Actual postparse raw vs scanner+semantic validation live requested59,412,333→11,171,587B (−81.2%), usable67,412,080→11,259,232, mapped153,997,312→12,713,984, RSS161,693,696→20,914,176, alloc_count504404→104913, STW1→0. Lexical raw .847838 vs tape+semantic .957869s unequal scope; whole output modes different, no whole CPU/RSS claim. No production ABI/reader change or CI; preserve scratch receipts and release for next materializer design.
 
+   - 2026-11-27 scratch native compact materializer completed, same exact diagnostic archive32fc800f, 25 modules fallback0, ELF073e5381, native1/4 carrier probe2 exact NATIVE_TAPE_MATERIALIZER_OK36, full canonical f777240c both arms. One fixed CPU4 same-ELF full screen decode3.700432→4.248125s (+14.8%), whole CPU7.457241→7.385336 (−.96%), peak RSS234284→217256KiB (−7.27%); decode-return current RSS164188160→53854208B (−67.2%), mapped155136000→44511232, requested35770591→25743982. Actual worker no dumps, whole full screen no formal speed claim; hold due decode CPU adverse. Preserve exact receipts and source-only remove duplicate validation/token accesses; no production or CI. Release.
+
    Claims:
    - Runtime QPS through the self AArch64 backend toward LLVM parity: locate the LLVM step the self passes lack (pcc_perf reference ablations, scripts/pcc_perf.py), then implement it in pcc's own AArch64 passes (shrink-wrapping, allocation or selection, whichever the ablation ranks first); IR-pass changes are target-neutral and reach x64; avoids the typed x64 MIR files: Claude, macOS, 2026-11-27T06:46Z, area backend
-   - Owned AST V2 compact tape native materializer scratch diagnostic (reuse exact scanner archive; full schema preflight then original constructors; same canonical full decode/output, 1/4 native GC/fallback/error; no production reader/runtime/ABI edits or CI): Codex, Linux, 2026-11-27T13:04Z, area runtime-codegen
+
 
 
 
