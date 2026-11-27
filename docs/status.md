@@ -2990,6 +2990,28 @@ in the relevant section or issue and removes the entry.
    No Mac regression from the batch; no throughput gain beyond noise. The
    goal (at least LLVM parity, then asyncio) is not met: the clang runtime
    of the same IR ran about 85-89k req/s at w1 on this host.
+   LLVM bound at the same source (Claude, local Mac, 2026-11-27, labeled
+   reference experiment): `pcc_perf.py arm NAME --reference-runtime
+   clang-O2` now builds it (each owned archive member's own IR through
+   Homebrew clang 20.1.8, the capture stub, the self-compiled program,
+   `PCC_RUNTIME_BUILD=make` route; `clang-codegen` adds
+   `-disable-llvm-optzns`). Arms head-9d51a6a (self), head-self2 (second
+   self build, control), head-clang; load 7.7. `ab` five pairs: w1 62464
+   -> 92859 req/s (+48.7%, 5/5, floor 3.3%; 107% of the recorded asyncio),
+   w4 139561 -> 163303 (+17.0%, 5/5, floor 5.1%; 62% of asyncio). `instr`:
+   231355 -> 169501 instructions per request (-26.7%), 54607 -> 35789
+   cycles (-34.5%). So w1 parity with LLVM would pass asyncio; w4 needs
+   scaling work beyond code generation (asyncio w4/w1 3.0x, clang runtime
+   1.76x). `top` w1: 16.04 -> 10.79 us per request, spread over 40+
+   functions (largest: `memset` 0.48 -> 0 with `bzero` 0.20, store_root
+   -0.37, str_join_list -0.19); seven small helpers clang inlines (0.57 us,
+   about 11%). Static mix of 20 hot functions: self 4008 instructions,
+   clang 2347; excess frame loads +480 (values kept in slots and reloaded
+   after calls, duplicated epilogue restores), branches/calls +365,
+   register copies +276, immediates +154, compares +114, frame stores only
+   +57. Same pattern as the x86-64 retrofits Codex rejected before the
+   typed MIR (Linux w1 +36%): the AArch64 lever is whole-function
+   allocation, not more local passes.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2

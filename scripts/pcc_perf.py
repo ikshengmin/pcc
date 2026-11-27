@@ -4,8 +4,13 @@
     arm NAME            seal the committed tree, with the working tree's
                         version of each --with PATH (your own uncommitted
                         edits; other sessions' stay out), build its runtime
-                        and the benchmark program, and run every primitive
-    ab A B              alternating paired runs of two arms: medians, pair
+                        and the benchmark program, and run every primitive;
+                        --reference-runtime clang-O2|clang-codegen is a
+                        labeled LLVM reference experiment, not a product
+                        route: the same runtime IR compiled by clang (the
+                        program stays self-compiled), the bound that code
+                        generation can buy
+    ab A B             alternating paired runs of two arms: medians, pair
                         wins, stopped time and graph-lock waits; with
                         --control-arm NAME, the noise floor and a verdict
                         for every row
@@ -243,12 +248,119 @@ def _attest_gc2_pacer(arm: Path, runtime: Path, percent: int, compiler) -> dict:
     return observed
 
 
+# ---- reference runtime (a labeled LLVM experiment) ------------------------
+#
+# AGENTS.md admits an external LLVM oracle only as a labeled reference
+# experiment: it bounds what code generation can buy and never satisfies an
+# ownership claim. Such an arm compiles the IR of its own owned runtime
+# archive's members with clang instead of the self backend; the benchmark
+# program is self-compiled exactly as in any other arm.
+
+REFERENCE_RUNTIMES = {
+    "clang-O2": ("-O2",),
+    # LLVM code generation without LLVM's IR optimization.
+    "clang-codegen": ("-O2", "-Xclang", "-disable-llvm-optzns"),
+}
+REFERENCE_LABEL = "LLVM reference experiment; not a product route or an ownership claim"
+# Deliberately not libpy_runtime_pcc_py.a: nothing may take it for owned output.
+REFERENCE_ARCHIVE = "libpy_runtime_reference.a"
+# The self backend expands llvm.pcc.capture.gc.registers inline
+# (self_backend_aarch64_darwin_calls); clang leaves it an external call.
+# The stub stores what the expansion stores: x19-x30, the stack pointer and
+# zeros in 16 words, and returns the stack pointer (a call leaves sp as is).
+_CAPTURE_STUBS = {
+    "arm64-apple-darwin": "\n".join([
+        "// pcc_perf reference runtime only: the self backend inlines this intrinsic.",
+        ".text",
+        ".p2align 2",
+        '.globl "_llvm.pcc.capture.gc.registers"',
+        '"_llvm.pcc.capture.gc.registers":',
+        *[f"  stp x{first}, x{first + 1}, [x0, #{(first - 19) * 8}]" for first in range(19, 31, 2)],
+        "  mov x10, sp",
+        "  stp x10, xzr, [x0, #96]",
+        "  stp xzr, xzr, [x0, #112]",
+        "  mov x0, x10",
+        "  ret",
+        "",
+    ]),
+}
+
+
+def _reference_flags(kind: str | None) -> tuple[str, ...] | None:
+    if kind is None:
+        return None
+    if kind not in REFERENCE_RUNTIMES:
+        raise SystemExit(f"unknown reference runtime {kind!r}; expected one of "
+                         + ", ".join(sorted(REFERENCE_RUNTIMES)))
+    return REFERENCE_RUNTIMES[kind]
+
+
+def build_reference_runtime(arm: Path, runtime: Path, kind: str, target: str,
+                            *, run=subprocess.run) -> tuple[Path, dict]:
+    """The reference archive for an arm: each member of the owned ``runtime``
+    archive compiled from its own IR by clang, plus the capture stub.
+    Returns the archive and its receipt; every gap fails explicitly."""
+    flags = _reference_flags(kind)
+    stub = _CAPTURE_STUBS.get(target)
+    if stub is None:
+        raise SystemExit(f"reference runtime: no capture stub for {target}")
+    clang, ar = shutil.which("clang"), shutil.which("ar")
+    if clang is None or ar is None:
+        raise SystemExit("reference runtime needs clang and ar on PATH")
+    manifest = json.loads(Path(str(runtime) + ".provenance.json").read_text())
+    members = [entry["member"] for entry in manifest["members"]]
+    ir_dir = Path(str(runtime) + ".objects")
+    sources = [ir_dir / (Path(member).stem + ".ll") for member in members]
+    missing = [str(path.name) for path in sources if not path.is_file()]
+    if missing:
+        raise SystemExit("reference runtime: owned members without IR: " + ", ".join(missing))
+    out = arm / "reference-runtime"
+    out.mkdir(exist_ok=True)
+    objects = [out / member for member in members]
+
+    def compile_one(pair) -> None:
+        source, target_object = pair
+        done = run([clang, *flags, "-c", "-x", "ir", "-Wno-override-module",
+                    str(source), "-o", str(target_object)], capture_output=True, text=True)
+        if done.returncode != 0:
+            raise SystemExit(f"reference runtime: clang failed on {source.name}: "
+                             + done.stderr[-400:])
+
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+        list(pool.map(compile_one, zip(sources, objects)))
+    stub_source = out / "capture_gc_registers.s"
+    stub_source.write_text(stub)
+    stub_object = out / "capture_gc_registers.o"
+    done = run([clang, "-c", str(stub_source), "-o", str(stub_object)],
+               capture_output=True, text=True)
+    if done.returncode != 0:
+        raise SystemExit("reference runtime: capture stub failed: " + done.stderr[-400:])
+    archive = out / REFERENCE_ARCHIVE
+    if archive.exists():
+        archive.unlink()
+    done = run([ar, "rcs", str(archive), *map(str, objects), str(stub_object)],
+               capture_output=True, text=True)
+    if done.returncode != 0 or not archive.is_file():
+        raise SystemExit("reference runtime: ar failed: " + done.stderr[-400:])
+    version = run([clang, "--version"], capture_output=True, text=True).stdout
+    return archive, {
+        "label": REFERENCE_LABEL, "kind": kind, "flags": list(flags),
+        "compiler": version.splitlines()[0] if version else "",
+        "members": len(members), "owned_runtime": str(runtime),
+        "archive_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+    }
+
+
 def seal(name: str, with_paths: tuple[str, ...] = (), root: Path | None = None,
-         *, gc2_pacer_percent: int | None = None) -> Path:
+         *, gc2_pacer_percent: int | None = None,
+         reference_runtime: str | None = None) -> Path:
     """Copy HEAD's files into the arm, then the working tree's version of
     every file under ``with_paths`` (tracked or new; a file deleted there
     is deleted in the arm). Returns the arm directory."""
     _gc2_pacer_percent({"gc2_pacer_percent": gc2_pacer_percent})
+    _reference_flags(reference_runtime)
     root = REPO_ROOT if root is None else root
     arm = arm_dir(name)
     source = arm / "source"
@@ -296,6 +408,7 @@ def seal(name: str, with_paths: tuple[str, ...] = (), root: Path | None = None,
     (arm / "source.json").write_text(json.dumps({
         "revision": head, "arm": name, "with": list(with_paths),
         "gc2_pacer_percent": gc2_pacer_percent,
+        "reference_runtime": reference_runtime,
         "overlaid": sorted(set(overlaid)), "left_out": dirty,
         "dirty_diff_sha256": hashlib.sha256(diff).hexdigest(),
         "dirty_diff_bytes": len(diff), "files": files,
@@ -442,8 +555,20 @@ def build_child(arm: Path) -> int:
         (arm / "build.json").write_text(json.dumps(report, indent=1) + "\n")
 
     save()
+    program_runtime = runtime
+    reference = identity.get("reference_runtime")
+    if reference is not None:
+        program_runtime, report["reference_runtime"] = build_reference_runtime(
+            arm, runtime, reference, host_target_triple())
+        save()
+        print(f"arm {arm.name}: {REFERENCE_LABEL}: {reference}", flush=True)
+        # The explicitly selected host reference route: it takes an explicit
+        # archive without the owned archive's provenance, which clang's
+        # objects cannot have.
+        os.environ["PCC_RUNTIME_BUILD"] = "make"
     os.environ.update(
-        PCC_RUNTIME_ARCHIVE=str(runtime), PCC_THREADED_RUNTIME_ARCHIVE=str(runtime),
+        PCC_RUNTIME_ARCHIVE=str(program_runtime),
+        PCC_THREADED_RUNTIME_ARCHIVE=str(program_runtime),
         PCC_NO_AUTO_PCC1="1", PCC_TEST_NO_NATIVE_PROVISIONING="1",
         # The application's modules are identical between arms that differ
         # only in the runtime: reuse their objects (keyed by emitted IR and
@@ -462,7 +587,7 @@ def build_child(arm: Path) -> int:
         started = time.monotonic()
         compile_python(
             str(arm / "programs" / (program + ".py")), str(binary), backend="self",
-            ir_scaffold_mode="on", runtime_archive=str(runtime),
+            ir_scaffold_mode="on", runtime_archive=str(program_runtime),
         )
         report["programs"][program] = {
             "binary": str(binary), "sha256": digest(binary),
@@ -1197,6 +1322,10 @@ def compare(a: str, b: str, pairs: int, collectors, workers, rounds: int,
         name: _gc2_pacer_percent(_read_arm_json(binary.parent / "source.json"))
         for name, binary in arms
     } if 2 in collectors else {}
+    reference_kinds = {
+        name: _read_arm_json(Path(binary).parent / "source.json").get("reference_runtime")
+        for name, binary in arms
+    }
     runs: dict[tuple, list[dict]] = {}
     receipt_flags = {"latency_receipts": True} if latency_receipts else {}
     for index in range(pairs):
@@ -1222,6 +1351,8 @@ def compare(a: str, b: str, pairs: int, collectors, workers, rounds: int,
                 row["rss_scope"] = "process"
             if collector == 2 and any(mode is not None for mode in pacer_modes.values()):
                 row["gc2_pacer_percent_by_arm"] = pacer_modes
+            if any(kind is not None for kind in reference_kinds.values()):
+                row["reference_runtime_by_arm"] = reference_kinds
             results.append(row)
     return results
 
@@ -2259,6 +2390,8 @@ def main(argv: list[str] | None = None) -> int:
                      metavar="PATH", help="take PATH from the working tree, not HEAD")
     arm.add_argument("--gc2-pacer-percent", type=int,
                      help="seal and verify the review runtime GC2 pacer opt-in (0–10000)")
+    arm.add_argument("--reference-runtime", choices=sorted(REFERENCE_RUNTIMES), default=None,
+                     help="labeled LLVM reference experiment: the runtime IR compiled by clang")
     arm.add_argument("--timeout", type=int, default=900)
     # The handler program's largest module emits in one worker of about
     # 2.4 GiB beside a 1.1 GiB coordinator; the approved build maximum is
@@ -2408,11 +2541,12 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit(f"Linux {event} preflight: {exc}") from exc
         return 0
     if args.command == "arm":
-        if args.gc2_pacer_percent is None:
-            sealed = seal(args.name, tuple(args.with_paths))
-        else:
-            sealed = seal(args.name, tuple(args.with_paths),
-                          gc2_pacer_percent=args.gc2_pacer_percent)
+        options = {}
+        if args.gc2_pacer_percent is not None:
+            options["gc2_pacer_percent"] = args.gc2_pacer_percent
+        if args.reference_runtime is not None:
+            options["reference_runtime"] = args.reference_runtime
+        sealed = seal(args.name, tuple(args.with_paths), **options)
         identity = json.loads((sealed / "source.json").read_text())
         print(f"arm {args.name}: {identity['revision'][:9]} with "
               f"{len(identity['overlaid'])} working-tree files", flush=True)

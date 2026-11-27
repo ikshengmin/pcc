@@ -1095,3 +1095,120 @@ def test_callgrind_function_attribution_uses_same_counted_runs(monkeypatch, tmp_
     assert "10.00" in out
     with pytest.raises(SystemExit, match="Callgrind"):
         PERF.main(["instr", "base", "--functions", "1"])
+
+
+# ---- reference runtime: a labeled LLVM experiment, not a product route ----
+
+def _owned_runtime(tmp_path, members=("py_obj.o", "py_gen.o"), without_ir=()):
+    runtime = tmp_path / "build_owned/libpy_runtime_pcc_py.a"
+    objects = Path(str(runtime) + ".objects")
+    objects.mkdir(parents=True)
+    runtime.write_bytes(b"!<arch>\nowned")
+    for member in members:
+        if member not in without_ir:
+            (objects / (member[:-2] + ".ll")).write_text("; runtime IR\n")
+    (objects / "not_a_member.ll").write_text("; left over, not archived\n")
+    Path(str(runtime) + ".provenance.json").write_text(json.dumps(
+        {"members": [{"member": member, "ir_sha256": "0" * 64} for member in members]}))
+    return runtime
+
+
+def _recording_tools(monkeypatch):
+    commands = []
+
+    def run(argv, **kwargs):
+        argv = [str(item) for item in argv]
+        commands.append(argv)
+        if argv[0].endswith("/ar"):
+            Path(argv[2]).write_bytes(b"!<arch>\nreference")
+        elif "-o" in argv:
+            Path(argv[argv.index("-o") + 1]).write_bytes(b"object")
+        return subprocess.CompletedProcess(argv, 0, "clang version 20.1.8\nTarget: x\n", "")
+
+    monkeypatch.setattr(PERF.shutil, "which", lambda name: "/opt/bin/" + name)
+    return commands, run
+
+
+@pytest.mark.parametrize("kind,flags", [
+    ("clang-O2", ["-O2"]),
+    ("clang-codegen", ["-O2", "-Xclang", "-disable-llvm-optzns"]),
+])
+def test_reference_runtime_compiles_each_owned_member_ir_with_clang(
+        tmp_path, monkeypatch, kind, flags):
+    runtime = _owned_runtime(tmp_path)
+    arm = tmp_path / "arm"
+    arm.mkdir()
+    commands, run = _recording_tools(monkeypatch)
+    archive, receipt = PERF.build_reference_runtime(
+        arm, runtime, kind, "arm64-apple-darwin", run=run)
+    compiles = [argv for argv in commands if "-x" in argv]
+    assert sorted(Path(argv[argv.index("-o") + 1]).name for argv in compiles) == [
+        "py_gen.o", "py_obj.o"]
+    for argv in compiles:
+        assert argv[:1 + len(flags)] == ["/opt/bin/clang", *flags]
+        assert argv[argv.index("-x") + 1] == "ir"
+        assert Path(argv[-3]).suffix == ".ll"
+    stub = (arm / "reference-runtime/capture_gc_registers.s").read_text()
+    # What the self backend's inline expansion stores, as a called function.
+    assert '"_llvm.pcc.capture.gc.registers":' in stub
+    for first in range(19, 31, 2):
+        assert f"stp x{first}, x{first + 1}, [x0, #{(first - 19) * 8}]" in stub
+    assert "stp x10, xzr, [x0, #96]" in stub and "stp xzr, xzr, [x0, #112]" in stub
+    archived = [argv for argv in commands if argv[0].endswith("/ar")]
+    assert len(archived) == 1
+    # Archive members in the owned archive's order, then the stub; a stray
+    # .ll that the owned archive does not contain stays out.
+    assert [Path(item).name for item in archived[0][3:]] == [
+        "py_obj.o", "py_gen.o", "capture_gc_registers.o"]
+    # Not the owned archive's name: nothing presents it as owned output.
+    assert archive.name == "libpy_runtime_reference.a"
+    assert receipt["label"].startswith("LLVM reference experiment")
+    assert receipt["kind"] == kind and receipt["flags"] == flags
+    assert receipt["members"] == 2 and receipt["compiler"] == "clang version 20.1.8"
+    assert receipt["archive_sha256"] == PERF.hashlib.sha256(archive.read_bytes()).hexdigest()
+
+
+def test_reference_runtime_fails_explicitly_at_every_gap(tmp_path, monkeypatch):
+    arm = tmp_path / "arm"
+    arm.mkdir()
+    commands, run = _recording_tools(monkeypatch)
+    runtime = _owned_runtime(tmp_path, without_ir=("py_gen.o",))
+    with pytest.raises(SystemExit, match="py_gen"):
+        PERF.build_reference_runtime(arm, runtime, "clang-O2", "arm64-apple-darwin", run=run)
+    complete = _owned_runtime(tmp_path / "complete")
+    with pytest.raises(SystemExit, match="x86_64-unknown-linux-gnu"):
+        PERF.build_reference_runtime(arm, complete, "clang-O2", "x86_64-unknown-linux-gnu", run=run)
+    with pytest.raises(SystemExit, match="clang-O3"):
+        PERF.build_reference_runtime(arm, complete, "clang-O3", "arm64-apple-darwin", run=run)
+    monkeypatch.setattr(PERF.shutil, "which", lambda name: None)
+    with pytest.raises(SystemExit, match="clang"):
+        PERF.build_reference_runtime(arm, complete, "clang-O2", "arm64-apple-darwin", run=run)
+
+
+def test_an_arm_seals_its_reference_runtime_kind(tmp_path, monkeypatch):
+    repository = tmp_path / "repository"
+    (repository / "pcc").mkdir(parents=True)
+    (repository / "pcc/x.py").write_text("committed\n")
+    for args in (["init", "-q"], ["config", "user.email", "perf@example.invalid"],
+                 ["config", "user.name", "perf"], ["add", "-A"], ["commit", "-q", "-m", "base"]):
+        subprocess.run(["git", *args], cwd=repository, check=True, capture_output=True)
+    monkeypatch.setattr(PERF, "HOME", tmp_path / "home")
+    arm = PERF.seal("lab", (), root=repository, reference_runtime="clang-O2")
+    assert json.loads((arm / "source.json").read_text())["reference_runtime"] == "clang-O2"
+    plain = PERF.seal("plain", (), root=repository)
+    assert json.loads((plain / "source.json").read_text())["reference_runtime"] is None
+    with pytest.raises(SystemExit, match="clang-O3"):
+        PERF.seal("bad", (), root=repository, reference_runtime="clang-O3")
+
+
+def test_comparison_labels_rows_that_measure_a_reference_runtime(tmp_path, monkeypatch):
+    for name, kind in (("base", None), ("lab", "clang-O2"), ("other", None)):
+        arm = tmp_path / name
+        arm.mkdir()
+        (arm / "source.json").write_text(json.dumps({"reference_runtime": kind}))
+    monkeypatch.setattr(PERF, "binary_of", lambda name: tmp_path / name / "native_stats")
+    monkeypatch.setattr(PERF, "run_once", lambda *args: _run(100))
+    rows = PERF.compare("base", "lab", 1, (0,), (1,), 10)
+    assert rows[0]["reference_runtime_by_arm"] == {"base": None, "lab": "clang-O2"}
+    rows = PERF.compare("base", "other", 1, (0,), (1,), 10)
+    assert "reference_runtime_by_arm" not in rows[0]
