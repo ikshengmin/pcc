@@ -77,6 +77,10 @@ class Layer1InitMixin:
         self.module = ir.Module(name=module.name or "pcc_py_module")
         # The worker can consume this constructor-owned IR exactly once.
         self._initial_ir_available: bool = True
+        # The isolated ordinary frontend worker alone grants this scoped
+        # capability after reading and inferring its canonical frozen AST.
+        # Public generation and callback-injected workers stay conservative.
+        self._owned_frozen_scope_input: bool = False
         # Opt-in No.100 differential artifact.  Ordinary codegen never builds
         # it; explicit capture keeps the fixed-layout pcc1 object honest while
         # the direct kernel plane is brought up beside the text oracle.

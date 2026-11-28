@@ -4,9 +4,12 @@ from __future__ import annotations
 from pcc.ir.compat import ir
 
 from pcc.frontends.python.py_ast import (
-    Assign, AugAssign, BoolLit, BytesLit, Call, DictExpr, DictType, Expr,
-    FloatLit, For, FuncType, IntLit, Lambda, ListExpr, Name, NoneLit,
-    StrLit, TupleExpr,
+    Arg, Assign, Attr, AugAssign, BinOp, BoolExpr, BoolLit, Break, BytesLit,
+    Call, ClassDef, Compare, ComplexLit, Continue, Delete, DictExpr, DictType,
+    ExceptHandler, Expr, ExprStmt, FloatLit, For, FuncDef, FuncType, Global,
+    If, IfExpr, Import, ImportFrom, IntLit, Lambda, ListExpr, Module, Name,
+    NoneLit, Nonlocal, Pass, Raise, Return, Slice, Stmt, StrLit, Subscript,
+    Try, TupleExpr, UnaryOp, While, With,
 )
 
 # The audited AST-bearing field table.  Shared rather than re-listed so a new
@@ -144,6 +147,123 @@ def _name_is_stored_in(node, ident: str) -> bool:
                 return True
         i += 1
     return False
+
+
+def _owned_store_scan_kind(kind) -> bool:
+    # Exact frozen source-node classes only. Foreign objects, subclasses and
+    # unusual metadata use the original per-name scanner; do not call their
+    # dynamic getters while preparing a speculative batch result.
+    return (
+        kind is Name or kind is Attr or kind is Call or kind is StrLit
+        or kind is If or kind is Compare or kind is Return or kind is NoneLit
+        or kind is ExprStmt or kind is IntLit or kind is int
+        or kind is BoolExpr or kind is TupleExpr or kind is BinOp
+        or kind is BoolLit or kind is bool or kind is Subscript
+        or kind is UnaryOp or kind is ListExpr or kind is Raise
+        or kind is Continue or kind is IfExpr or kind is DictExpr
+        or kind is Try or kind is ExceptHandler or kind is Arg
+        or kind is Pass or kind is Break or kind is Slice or kind is FuncDef
+        or kind is ImportFrom or kind is FloatLit or kind is While
+        or kind is float or kind is With or kind is Import or kind is Delete
+        or kind is Lambda or kind is ClassDef or kind is Global
+        or kind is Nonlocal or kind is ComplexLit or kind is BytesLit
+        or kind is bytes or kind is Expr or kind is Stmt or kind is Module
+        or kind is Assign or kind is AugAssign or kind is For
+    )
+
+
+def _owned_target_stores_names(target, names, found) -> bool:
+    if len(found) == len(names):
+        return True
+    kind = type(target)
+    if kind is Name:
+        ident = target.ident
+        if type(ident) is not str:
+            return False
+        if ident in names and ident not in found:
+            found.append(ident)
+        return True
+    if kind is TupleExpr or kind is ListExpr:
+        elements = target.elems
+        if type(elements) is not tuple and type(elements) is not list:
+            return False
+        for child in elements:
+            if not _owned_target_stores_names(child, names, found):
+                return False
+        return True
+    # The legacy target walker does not inspect receiver/index expressions.
+    return target is None or kind is str or _owned_store_scan_kind(kind)
+
+
+def _owned_collect_stored_names(node, names, found) -> bool:
+    if len(found) == len(names) or node is None:
+        return True
+    kind = type(node)
+    if kind is str:
+        return True
+    if kind is list or kind is tuple:
+        for child in node:
+            if not _owned_collect_stored_names(child, names, found):
+                return False
+        return True
+    if kind is Assign:
+        targets = node.targets
+        if type(targets) is not tuple and type(targets) is not list:
+            return False
+        for target in targets:
+            if not _owned_target_stores_names(target, names, found):
+                return False
+        if len(found) == len(names):
+            return True
+        return _owned_collect_stored_names(node.value, names, found)
+    if kind is AugAssign:
+        if not _owned_target_stores_names(node.target, names, found):
+            return False
+        if len(found) == len(names):
+            return True
+        return _owned_collect_stored_names(node.value, names, found)
+    if kind is For:
+        if not _owned_target_stores_names(node.target, names, found):
+            return False
+        if len(found) == len(names):
+            return True
+        return (_owned_collect_stored_names(node.iter, names, found)
+                and _owned_collect_stored_names(node.body, names, found)
+                and _owned_collect_stored_names(node.else_body, names, found))
+    if not _owned_store_scan_kind(kind):
+        return False
+    # Retain the legacy audited field order and semantics; the structural
+    # change is one traversal for all requested names, not per-field caching.
+    for field in _CPY_SCAN_FIELDS:
+        child = getattr(node, field, None)
+        if child is not None:
+            if not _owned_collect_stored_names(child, names, found):
+                return False
+            if len(found) == len(names):
+                break
+    return True
+
+
+def _owned_stored_parameter_names(node, names):
+    """One ephemeral canonical body census, or None for legacy queries."""
+    if type(names) is not list and type(names) is not tuple:
+        return None
+    for name in names:
+        if type(name) is not str:
+            return None
+    # Only the few rebound parameters enter this short-lived list. The
+    # caller retains its own sorted iteration order; no per-method cache.
+    found = []
+    try:
+        if not _owned_collect_stored_names(node, names, found):
+            return None
+    except AttributeError:
+        # A malformed exact instance can fail before another requested name
+        # would have been queried. Let the original short-circuit order own
+        # its error and any subsequent promotion, rather than publishing a
+        # partial or prematurely failing result.
+        return None
+    return found
 
 
 class CpyCallLoweringMixin:

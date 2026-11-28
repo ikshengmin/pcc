@@ -3151,7 +3151,51 @@ def _run_python_multi_summary_worker(manifest) -> int:
     )
 
 
+# Exact owner callbacks are captured beside the ordinary worker entry.
+_OWNED_CODEGEN_READ_MANIFEST = _read_python_frontend_worker_manifest
+_OWNED_CODEGEN_EXPORT = _run_python_multi_export_worker
+_OWNED_CODEGEN_SUMMARY = _run_python_multi_summary_worker
+_OWNED_CODEGEN_EXECUTABLE = _python_frontend_worker_executable
+_OWNED_CODEGEN_READ_EXPORTS = _read_native_exports_wire
+_OWNED_CODEGEN_READ_MODULE_EXPORTS = _read_native_exports_wire_for_module
+_OWNED_CODEGEN_READ_AST = _read_py_ast_wire
+_OWNED_CODEGEN_IMPORTS_EXTENSION = _module_imports_pcc_native_extension
+_OWNED_CODEGEN_CONTEXTUAL_PARAMS = _contextual_host_params_for_module
+_OWNED_CODEGEN_DEFAULT_EXPORTS = _module_uses_default_native_exports
+_OWNED_CODEGEN_COPY_EXPORTS = _copy_native_module_exports
+_OWNED_CODEGEN_FUNCTION_OBJECTS = _closed_world_function_object_exports
+_OWNED_CODEGEN_LOG = _log
+_OWNED_CODEGEN_NEEDS_LIBPYTHON = _ir_needs_libpython
+_OWNED_CODEGEN_EXCEPTION_TEXT = _safe_exception_text
+_OWNED_CODEGEN_WRITE_ERROR = _write_python_frontend_worker_error
+_OWNED_CODEGEN_PIPELINE_ERROR = PyPipelineError
+
+
 def run_python_multi_codegen_worker(manifest_path: str) -> int:
+    try:
+        owned_frozen_scope_input = (
+            build_closed_world_context is _OWNED_EXPORT_BUILD_CONTEXT
+            and _python_frontend_worker_timing_enabled is _OWNED_EXPORT_WORKER_TIMING
+            and _read_python_frontend_worker_manifest is _OWNED_CODEGEN_READ_MANIFEST
+            and _run_python_multi_export_worker is _OWNED_CODEGEN_EXPORT
+            and _run_python_multi_summary_worker is _OWNED_CODEGEN_SUMMARY
+            and _python_frontend_worker_executable is _OWNED_CODEGEN_EXECUTABLE
+            and _read_native_exports_wire is _OWNED_CODEGEN_READ_EXPORTS
+            and _read_native_exports_wire_for_module is _OWNED_CODEGEN_READ_MODULE_EXPORTS
+            and _read_py_ast_wire is _OWNED_CODEGEN_READ_AST
+            and _module_imports_pcc_native_extension is _OWNED_CODEGEN_IMPORTS_EXTENSION
+            and _contextual_host_params_for_module is _OWNED_CODEGEN_CONTEXTUAL_PARAMS
+            and _module_uses_default_native_exports is _OWNED_CODEGEN_DEFAULT_EXPORTS
+            and _copy_native_module_exports is _OWNED_CODEGEN_COPY_EXPORTS
+            and _closed_world_function_object_exports is _OWNED_CODEGEN_FUNCTION_OBJECTS
+            and _log is _OWNED_CODEGEN_LOG
+            and _ir_needs_libpython is _OWNED_CODEGEN_NEEDS_LIBPYTHON
+            and _safe_exception_text is _OWNED_CODEGEN_EXCEPTION_TEXT
+            and _write_python_frontend_worker_error is _OWNED_CODEGEN_WRITE_ERROR
+            and PyPipelineError is _OWNED_CODEGEN_PIPELINE_ERROR
+        )
+    except NameError:
+        owned_frozen_scope_input = False
     return _pipeline_frontend_worker_execution.run_codegen_worker(
         manifest_path,
         read_manifest=_read_python_frontend_worker_manifest,
@@ -3177,6 +3221,7 @@ def run_python_multi_codegen_worker(manifest_path: str) -> int:
         safe_exception_text=_safe_exception_text,
         write_worker_error=_write_python_frontend_worker_error,
         pipeline_error=PyPipelineError,
+        owned_frozen_scope_input=owned_frozen_scope_input,
     )
 
 

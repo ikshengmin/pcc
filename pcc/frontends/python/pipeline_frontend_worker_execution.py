@@ -461,6 +461,7 @@ def run_codegen_worker(
     safe_exception_text,
     write_worker_error,
     pipeline_error,
+    owned_frozen_scope_input: bool = False,
 ) -> int:
     result_path = ""
     try:
@@ -907,7 +908,20 @@ def run_codegen_worker(
                 # flags/exports since construction; keep its initial IR.
                 if worker_gc_timing is not None:
                     worker_gc_timing.begin(index, "frontend_generate")
-                generated_module = codegen._generate_initial_module()
+                # Callback injection is public to this worker helper. Only
+                # the ordinary wrapper can supply the private frozen-input
+                # admission; its lifetime is this one generation.
+                scoped_owner = False
+                if owned_frozen_scope_input:
+                    from pcc.frontends.python.py_ast import Module
+                    scoped_owner = type(codegen) is L1CodeGen and type(typed_module) is Module
+                if scoped_owner:
+                    codegen._owned_frozen_scope_input = True
+                try:
+                    generated_module = codegen._generate_initial_module()
+                finally:
+                    if scoped_owner:
+                        codegen._owned_frozen_scope_input = False
                 if worker_gc_timing is not None:
                     worker_gc_timing.complete(index, "frontend_generate")
                 if phase_timing is not None:

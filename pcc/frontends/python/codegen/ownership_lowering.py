@@ -22,6 +22,7 @@ from pcc.frontends.python.py_ast import (
     DynType,
     Expr,
     FloatType,
+    FuncDef,
     IfExpr,
     IntType,
     Lambda,
@@ -56,7 +57,7 @@ def prepare_rebound_object_parameters(host, fd, boxed_param_names) -> None:
     it preserves the incoming value in a fresh traced slot and balances
     both slots on every exit. Unassigned and raw-ABI parameters stay borrowed.
     """
-    from pcc.frontends.python.codegen.cpy_call_lowering import _name_is_stored_in
+    from pcc.frontends.python.codegen.cpy_call_lowering import _name_is_stored_in, _owned_stored_parameter_names
     from pcc.frontends.python.codegen.for_loop_lowering import _for_prepare_owned_object_target
 
     if getattr(host, "_freestanding_module", False) or (
@@ -64,7 +65,10 @@ def prepare_rebound_object_parameters(host, fd, boxed_param_names) -> None:
         and getattr(host, "_module_uses_raw_int_scaffold", False)
     ):
         return
-    for name in sorted(host._current_param_names):
+    parameter_names = sorted(host._current_param_names)
+    scanned = False
+    stored_names = None
+    for name in parameter_names:
         if name in boxed_param_names:
             continue
         slot = host.env.get(name)
@@ -73,7 +77,25 @@ def prepare_rebound_object_parameters(host, fd, boxed_param_names) -> None:
         _alloca, ir_ty, bind_ty = slot
         if not isinstance(ir_ty, ir.PointerType) or not host._is_object(bind_ty):
             continue
-        if not _name_is_stored_in(fd.body, name):
+        if not scanned:
+            scanned = True
+            if len(parameter_names) > 1:
+                # The private worker owns an ordinary fresh generator and
+                # frozen inferred input. Public/custom adapters must retain
+                # the original scan after each eligibility/promotion callback.
+                # Check the concrete owner before reading its private field:
+                # arbitrary hosts can observe otherwise-missing attributes.
+                from pcc.frontends.python.codegen.layer1 import L1CodeGen
+                if (type(host) is L1CodeGen
+                        and host._owned_frozen_scope_input
+                        and host.current_func_def is fd
+                        and type(fd) is FuncDef
+                        and type(fd.body) is tuple):
+                    stored_names = _owned_stored_parameter_names(fd.body, parameter_names)
+        if stored_names is None:
+            if not _name_is_stored_in(fd.body, name):
+                continue
+        elif name not in stored_names:
             continue
         _for_prepare_owned_object_target(host, name, bind_ty)
         # This binding now follows ordinary local assignment/return rules.
