@@ -3557,6 +3557,24 @@ in the relevant section or issue and removes the entry.
    self allocator neither splits live ranges nor rematerializes, so a
    longer live range costs more than the recomputation it saves. Retry
    after the allocator can split or rematerialize.
+   Class gap at h26 (Claude, 2026-11-28, `steps --classes`): clang -O2
+   code generation of the same runtime IR (arm h31-cg) runs 92073
+   instructions per request against self's 99312 (self +7.9%, was +16.7%
+   at h10). Self's excess by class, scaled to equal program work: stack
+   slots +1965, register copies +1876, branches +1750, frame setup +1020,
+   adrp +668, immediates +493, separator nops +278; self has fewer
+   callee-saved saves/restores (-1449), loads (-1244) and ALU (-1081).
+   The frame excess is clang's shrink-wrapping: functions such as
+   `pcc_gc_retain_known`, `py_gen_frame_set/take` and
+   `pcc_gc_try_init_ptr_locked` set up no frame on their hot path there.
+   `pcc_allocator_stat_shard` sets up a frame only to read its own frame
+   address (14 instructions where 5 would do).
+   (ah) Rejected experiment (Claude, 2026-11-28): boolean register
+   lowering (`PCC_SELF_BOOLEAN_REGISTER_LOWERING=1`, arm h32-bool) runs
+   99312 -> 98517 instructions (-0.80%) but the five-pair A/B against
+   h26 (control h33-ctl, load 4.6) is w1 80487 -> 80072 (-0.5%, 1/5,
+   within the 2.9% floor) and w4 +0.4% inconclusive; the default stays
+   off.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2
