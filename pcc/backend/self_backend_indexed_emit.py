@@ -10,10 +10,6 @@ from pcc.unsafe import darwin_current_rss_bytes
 from pcc.frontends.python.worker_resource_plan import publish_worker_resource
 
 from .native_object import encode_native_object_from_sections
-from .self_backend_aarch64_darwin import (
-    emit_aarch64_darwin_indexed_module,
-    emit_aarch64_darwin_indexed_transport,
-)
 from .self_backend_indexed_codec import decode_indexed_module_file
 from .self_backend_target_match import (is_aarch64_darwin_triple, is_aarch64_linux_triple,
     is_x86_64_linux_triple, is_x86_64_windows_triple)
@@ -101,6 +97,8 @@ def emit_indexed_module_file(
         )
         phase_started = phase_timing.start() if phase_timing is not None else 0
         if is_aarch64_linux_triple(module.triple):
+            from .self_backend_aarch64_darwin import emit_aarch64_darwin_indexed_module
+
             assembly = emit_aarch64_darwin_indexed_module(
                 module, optimize=optimize, phase_timing=phase_timing,
             )
@@ -155,6 +153,8 @@ def emit_indexed_module_file(
     _debug_phase("target-complete")
     temporary = output_path + ".tmp"
     if artifact_kind == "ASM":
+        from .self_backend_aarch64_darwin import emit_aarch64_darwin_indexed_module
+
         phase_started = phase_timing.start() if phase_timing is not None else 0
         assembly = emit_aarch64_darwin_indexed_module(
             module,
@@ -184,6 +184,8 @@ def emit_indexed_module_file(
             raise
         return
     phase_started = phase_timing.start() if phase_timing is not None else 0
+    from .self_backend_aarch64_darwin import emit_aarch64_darwin_indexed_transport
+
     transport = emit_aarch64_darwin_indexed_transport(
         module,
         optimize=optimize,

@@ -20,6 +20,26 @@ import textwrap
 import unittest
 from unittest import mock
 
+
+def test_pipeline_defers_arm_until_native_assembly_route():
+    script = r"""
+import sys
+from pcc.frontends.python import pipeline
+arm = 'pcc.backend.self_backend_aarch64_darwin'
+assert arm not in sys.modules, 'ARM backend loaded by frontend import'
+text = 'target triple = "arm64-apple-darwin23.6.0"\ndefine i64 @f() {\nentry:\n  ret i64 7\n}\n'
+actual = pipeline._emit_aarch64_darwin_asm_native(text)
+assert arm in sys.modules
+from pcc.backend.self_backend_aarch64_darwin import emit_aarch64_darwin_asm
+assert actual == emit_aarch64_darwin_asm(text)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 _COMPILED_REPO_MAIN_CACHE_DIR = None
 _COMPILED_REPO_MAIN_CACHE = {}
 

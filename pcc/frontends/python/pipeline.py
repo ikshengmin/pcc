@@ -31,7 +31,6 @@ import tempfile
 import time
 from typing import Optional
 
-from pcc.backend.self_backend_aarch64_darwin import emit_aarch64_darwin_asm as _emit_aarch64_darwin_asm_native
 from pcc.backend.self_backend_indexed_emit import emit_indexed_module_file as _emit_indexed_module_file
 from pcc.backend.self_backend_parse import parse_self_backend_target_triple as _parse_self_backend_target_triple_native
 from pcc.backend.self_backend_target_match import is_aarch64_darwin_triple as _is_aarch64_darwin_triple_native
@@ -1110,6 +1109,13 @@ def _emit_self_asm_via_host_python(
         )
     except _pipeline_self_backend_emit.SelfBackendEmitError as exc:
         raise PyPipelineError(str(exc) or type(exc).__name__) from exc
+def _emit_aarch64_darwin_asm_native(ir_text: str, optimize: bool = True) -> str:
+    # Import the selected target only when assembly emission reaches it.
+    from pcc.backend.self_backend_aarch64_darwin import emit_aarch64_darwin_asm
+
+    return emit_aarch64_darwin_asm(ir_text, optimize)
+
+
 def _emit_self_asm_in_process(
     ir_text: str,
 ) -> Optional[tuple[str, str]]:

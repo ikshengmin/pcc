@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import subprocess
+import sys
 
 import pytest
 from pcc.backend import self_backend_indexed_codec as indexed_codec
@@ -51,11 +53,11 @@ def _assert_native_json_value(value):
         _assert_native_json_value(item)
 
 
-def _direct_module(monkeypatch):
+def _direct_module(monkeypatch, triple="arm64-apple-darwin23.6.0"):
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", "1")
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_EMIT", "1")
     module = ir.Module(name="codec")
-    module.triple = "arm64-apple-darwin23.6.0"
+    module.triple = triple
     i64 = ir.IntType(64)
     counter = ir.GlobalVariable(module, i64, "counter")
     counter.linkage = "internal"
@@ -239,6 +241,40 @@ def test_indexed_module_fresh_emit_preserves_the_assembly_lane(
 
     emit_indexed_module_file(str(sidecar), str(output), "ASM")
 
+    assert output.read_text(encoding="utf-8") == expected
+
+
+@pytest.mark.parametrize("triple,arm", [
+    ("x86_64-unknown-linux-gnu", False),
+    ("x86_64-pc-windows-msvc", False),
+    ("aarch64-unknown-linux-gnu", True),
+    ("arm64-apple-darwin23.6.0", True),
+    ("unknown-unknown-unknown", True),
+])
+def test_indexed_emit_imports_only_the_selected_target(tmp_path, monkeypatch, triple, arm):
+    module = _direct_module(monkeypatch, triple)
+    sidecar = tmp_path / "module.pidx"
+    output = tmp_path / "module.s"
+    encode_indexed_module_file(str(sidecar), module)
+    if arm:
+        expected = emit_aarch64_darwin_indexed_module(module, optimize=False)
+    else:
+        from pcc.backend.self_backend_x86_64_linux import _emit_x86_64_module
+
+        expected = _emit_x86_64_module("", module=module, windows="windows" in triple)
+    script = """
+import sys
+from pcc.backend.self_backend_indexed_emit import emit_indexed_module_file
+arm = 'pcc.backend.self_backend_aarch64_darwin'
+assert arm not in sys.modules, 'ARM backend loaded before target selection'
+emit_indexed_module_file(sys.argv[1], sys.argv[2], 'ASM')
+assert (arm in sys.modules) == (sys.argv[3] == 'True')
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(sidecar), str(output), str(arm)],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
     assert output.read_text(encoding="utf-8") == expected
 
 
