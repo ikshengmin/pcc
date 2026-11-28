@@ -4,6 +4,22 @@ from pcc.ir.compat import ir
 from pcc.frontends.python.py_ast import (
     RawPointerType,
     Assign,
+    AugAssign,
+    Break,
+    Continue,
+    Delete,
+    ExceptHandler,
+    ExprStmt,
+    For,
+    Global,
+    If,
+    Nonlocal,
+    Pass,
+    Raise,
+    Return,
+    Try,
+    While,
+    With,
     Call,
     ClassDef,
     DynType,
@@ -52,21 +68,61 @@ def is_preplanned_owned_local(host, name, slot) -> bool:
     ) is slot
 
 
-def prepare_local_boundness(host, fd) -> None:
-    if host._freestanding_module or host._runtime_port_module or host._module_has_c_abi_export:
-        return
-    names = function_local_bindings(fd)
-    params = tuple(arg.name for arg in fd.args if arg.name)
-    # Keys are source positions, so one module-wide set serves every function.
-    host._definitely_bound_loads |= definitely_bound_loads(fd)
-    for name in names:
-        flag = host._ensure_owned_local_flag(".bound." + name)
-        if name in params:
-            host._store_entry_initializer(flag, ir.Constant(_I1, 1))
+def _append_owned_metadata_children(node, pending) -> bool:
+    """Project only statement children of a canonical frozen source node.
 
-    # Reuse the existing representation inventory and entry-slot policy.
-    # Compile-time imports/aliases own metadata, so a placeholder env entry
-    # must never displace those bindings.
+    Metadata is introduced by Assign/Import/ImportFrom statements, not
+    expression nodes (including walrus calls). The order of each append
+    matches the legacy reflected field order before the LIFO pop. Decline
+    unknown records and malformed control containers to the old walker.
+    """
+    kind = type(node)
+    try:
+        if kind is If or kind is While or kind is For:
+            body = node.body
+            else_body = node.else_body
+            if type(body) is not tuple or type(else_body) is not tuple:
+                return False
+            pending.extend(body)
+            pending.extend(else_body)
+            return True
+        if kind is Try:
+            body = node.body
+            handlers = node.handlers
+            else_body = node.else_body
+            finally_body = node.finally_body
+            if (type(body) is not tuple or type(handlers) is not tuple
+                    or type(else_body) is not tuple or type(finally_body) is not tuple):
+                return False
+            pending.extend(body)
+            pending.extend(handlers)
+            pending.extend(else_body)
+            pending.extend(finally_body)
+            return True
+        if kind is With or kind is ExceptHandler:
+            body = node.body
+            if type(body) is not tuple:
+                return False
+            pending.extend(body)
+            return True
+    except AttributeError:
+        # No child was published before validating the complete container.
+        return False
+    return (kind is Assign or kind is AugAssign or kind is ExprStmt
+            or kind is Return or kind is Pass or kind is Break
+            or kind is Continue or kind is Raise or kind is Global
+            or kind is Nonlocal or kind is Delete)
+
+
+def _collect_local_metadata_names(host, fd):
+    """Preserve metadata callback order while avoiding irrelevant AST fields."""
+    from pcc.frontends.python.codegen.layer1 import L1CodeGen
+
+    owned = (type(host) is L1CodeGen
+             and host._owned_frozen_scope_input
+             and host.current_func_def is fd
+             and type(fd) is FuncDef
+             and type(fd.body) is tuple)
     metadata_names = []
     pending = list(fd.body)
     while pending:
@@ -94,9 +150,30 @@ def prepare_local_boundness(host, fd) -> None:
         # A descendant's body/default target bindings are its own scope.
         if isinstance(node, (FuncDef, ClassDef, Lambda)):
             continue
+        if owned and _append_owned_metadata_children(node, pending):
+            continue
         for field in _dataclass_field_names(node):
             if field not in ("span", "ty", "annotation", "return_ty"):
                 pending.append(_dataclass_field_value(node, field, None))
+    return metadata_names
+
+
+def prepare_local_boundness(host, fd) -> None:
+    if host._freestanding_module or host._runtime_port_module or host._module_has_c_abi_export:
+        return
+    names = function_local_bindings(fd)
+    params = tuple(arg.name for arg in fd.args if arg.name)
+    # Keys are source positions, so one module-wide set serves every function.
+    host._definitely_bound_loads |= definitely_bound_loads(fd)
+    for name in names:
+        flag = host._ensure_owned_local_flag(".bound." + name)
+        if name in params:
+            host._store_entry_initializer(flag, ir.Constant(_I1, 1))
+
+    # Reuse the existing representation inventory and entry-slot policy.
+    # Compile-time imports/aliases own metadata, so a placeholder env entry
+    # must never displace those bindings.
+    metadata_names = _collect_local_metadata_names(host, fd)
     bindings = []
     _collect_local_binding_types(fd.body, bindings)
     for name, ty in bindings:
