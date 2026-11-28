@@ -742,13 +742,14 @@ def _elf_image_timing_skeleton():
     # unchanged return. Every complete linker region is replaced by one fake.
     function = _source_function("pcc/backend/elf_x86_64.py", "_link_static_executable_image")
     args = function.args
-    assert args.kwonlyargs[-2].arg == "coordinator_timing"
-    assert isinstance(args.kw_defaults[-2], ast.Constant) and args.kw_defaults[-2].value is None
-    assert isinstance(args.kw_defaults[-1], ast.Tuple) and args.kw_defaults[-1].elts == []
     assert [arg.arg for arg in args.kwonlyargs] == [
         "archives", "entry", "base_address", "archive_selections",
         "compact_archive_relocations", "_input_store", "coordinator_timing", "export_symbols",
+        "function_ranges",
     ]
+    assert isinstance(args.kw_defaults[-3], ast.Constant) and args.kw_defaults[-3].value is None
+    assert isinstance(args.kw_defaults[-2], ast.Tuple) and args.kw_defaults[-2].elts == []
+    assert isinstance(args.kw_defaults[-1], ast.Constant) and args.kw_defaults[-1].value is None
     assert isinstance(function.body[0], ast.Expr) and isinstance(function.body[0].value, ast.Constant)
     assert ast.unparse(function.body[1]) == "image_phase_started = 0"
     assert ast.unparse(function.body[-1]) == "return image"
@@ -762,7 +763,15 @@ def _elf_image_timing_skeleton():
                 for child in ast.walk(node)):
             guards.append((index, node))
     assert len(guards) == 6 and guards[0][0] == 2
-    assert guards[-1][0] == len(function.body) - 2
+    assert guards[-1][0] == len(function.body) - 3
+    # The optional auxiliary work follows the final timing completion and
+    # is absent on the ordinary route. It is not an image timing region.
+    auxiliary = function.body[-2]
+    assert isinstance(auxiliary, ast.If)
+    assert ast.unparse(auxiliary.test) == "function_ranges is not None"
+    assert auxiliary.body and not auxiliary.orelse
+    assert not any(isinstance(node, ast.Name) and node.id == "coordinator_timing"
+                   for node in ast.walk(auxiliary))
     expected_bodies = []
     for index in range(6):
         lines = ["if coordinator_timing is not None:"]
@@ -790,7 +799,7 @@ def _elf_image_timing_skeleton():
     assert isinstance(regions[3][-1], ast.For) and ast.unparse(regions[3][-1].iter) == "alloc_sections"
     assert ast.unparse(regions[4][0]) == "if _input_store is not None:\n    _input_store.clear()"
     assert isinstance(regions[4][-1], ast.For) and ast.unparse(regions[4][-1].iter) == "program_headers"
-    assert sum(map(len, regions)) + len(guards) + 3 == len(function.body)
+    assert sum(map(len, regions)) + len(guards) + 4 == len(function.body)
     assert not any(isinstance(node, ast.Name) and node.id in ("CoarsePhaseTiming", "time", "sys")
                    for node in ast.walk(function))
     public = _source_function("pcc/backend/elf_x86_64.py", "link_static_executable")
@@ -1393,7 +1402,11 @@ def test_linux_link_bridge_only_forwards_optional_timer_to_elf(monkeypatch, targ
     _stub(monkeypatch, "pcc.backend.owned_elf_link", link_inputs=lambda **kwargs: calls.append(("elf", kwargs)))
     _stub(monkeypatch, "pcc.backend.owned_pe_link", link_inputs=lambda **kwargs: calls.append(("pe", kwargs)))
     _stub(monkeypatch, "pcc.frontends.python.pipeline_targets", host_target_triple=lambda: target)
-    namespace = {"SelfBackendLinkError": ValueError}
+    # Model the ordinary route explicitly: no auxiliary output requested,
+    # and no path/filesystem surface available to this mocked function.
+    namespace = {"SelfBackendLinkError": ValueError,
+                 "os": types.SimpleNamespace(environ={}),
+                 "_FUNCTION_MAP_FOR": "PCC_OWNED_ELF_FUNCTION_MAP_FOR"}
     invoke = _mocked_source_function("pcc/frontends/python/pipeline_self_backend_link.py", "run_link_command", namespace)
     invoke([], "assembly", "out", "runtime.a", ("extra.o", "extra.a"), False,
            target_triple=target, coordinator_timing=timer, pcc_asm_inputs=("other.s",),
