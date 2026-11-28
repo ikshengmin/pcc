@@ -3672,6 +3672,14 @@ in the relevant section or issue and removes the entry.
    passed down the allocation and death chains is the structural
    candidate. Reusing the state slot from container lock to unlock saves
    33 reads per request (about 0.5% of cycles) on its own.
+   (ap) Maintainer direction (2026-11-28, relayed in this session): the
+   target is LLVM -O2 level, not LLVM code generation alone. Improvements
+   that serve every platform (pcc's own IR passes) come first; reaching it
+   on macOS AArch64 first is acceptable, and the other platforms (Linux
+   AArch64, Linux x86-64, Windows) must reach LLVM -O2 as well. Measured
+   against three arms built from one runtime IR: self, `clang-codegen`
+   (LLVM code generation only) and `clang-O2` (LLVM IR optimization plus
+   code generation), by exact instructions, classes and cycles.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2
