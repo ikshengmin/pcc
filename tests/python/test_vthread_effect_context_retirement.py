@@ -553,3 +553,159 @@ def test_owned_annotation_preserves_mutated_exports(name, source, monkeypatch):
     assert candidate == baseline
     assert len(calls) == (len(analysis._module_function_defs(module))
                           + len(analysis._class_method_defs(module)))
+
+
+@pytest.mark.parametrize("name, source", CORPUS)
+def test_generation_effect_and_boundary_share_one_owned_projection(name, source, monkeypatch):
+    module = parse_and_lift(source, name + ".py", "unit")
+    baseline_exports = deepcopy(EXPORTS)
+    expected_effects = analysis.compute_vthread_may_park_callables(
+        module, baseline_exports,
+    )
+    expected_rejected = analysis.classify_vthread_park_boundaries(
+        module, expected_effects[1], baseline_exports, expected_effects[3],
+    )
+
+    exports = deepcopy(EXPORTS)
+    bundle = analysis._generation_local_vthread_context(
+        module, exports,
+        analysis.compute_vthread_may_park_callables,
+        analysis.classify_vthread_park_boundaries,
+    )
+    assert bundle is not None
+    context, share_rows = bundle
+    assert share_rows
+    effects = analysis._compute_local_vthread_effects(
+        module, exports, local_context=context, _shared_owned_context=True,
+    )
+    assert effects == expected_effects
+
+    def unexpected_walk(*args, **kwargs):
+        raise AssertionError("boundary classification rebuilt the lexical scope")
+
+    monkeypatch.setattr(analysis, "_function_scope_nodes", unexpected_walk)
+    rejected = analysis.classify_vthread_park_boundaries(
+        module, effects[1], exports, effects[3],
+        _owned_local_context=context,
+    )
+    assert rejected == expected_rejected
+    assert exports == baseline_exports
+
+
+def test_generation_context_declines_custom_callbacks_and_builder(monkeypatch):
+    module = parse_and_lift("def f():\n    return 1\n", "unit.py", "unit")
+    compute = analysis.compute_vthread_may_park_callables
+    classify = analysis.classify_vthread_park_boundaries
+    assert analysis._generation_local_vthread_context(
+        module, None, compute, classify,
+    ) is not None
+    assert analysis._generation_local_vthread_context(
+        module, None, lambda node, exports: compute(node, exports), classify,
+    ) is None
+
+    class CustomExports(dict):
+        pass
+
+    assert analysis._generation_local_vthread_context(
+        module, CustomExports(), compute, classify,
+    ) is None
+
+    def custom_builder(_module):
+        raise AssertionError("generation must preserve the old custom builder route")
+
+    monkeypatch.setattr(analysis, "_local_vthread_context", custom_builder)
+    assert analysis._generation_local_vthread_context(
+        module, None, compute, classify,
+    ) is None
+
+
+def test_generation_shared_context_preserves_custom_child_getter_observations(monkeypatch):
+    from dataclasses import replace
+    from pcc.frontends.python.py_ast import Name
+
+    trace = []
+
+    class ObservedName(Name):
+        def __getattribute__(self, name):
+            if name == "ident":
+                trace.append("ident")
+            return super().__getattribute__(name)
+
+    module = parse_and_lift(
+        "from pcc.virtual_thread import yield_now\ndef f():\n    yield_now()\n",
+        "observed.py", "unit",
+    )
+    fd = module.body[-1]
+    stmt = fd.body[0]
+    call = stmt.expr
+    old = call.func
+    custom = ObservedName(old.span, old.ty, old.ident)
+    new_call = replace(call, func=custom)
+    new_fd = replace(fd, body=(replace(stmt, expr=new_call),))
+    module = replace(module, body=(*module.body[:-1], new_fd))
+
+    expected = analysis.compute_vthread_may_park_callables(module)
+    expected_rejected = analysis.classify_vthread_park_boundaries(
+        module, expected[1], None, expected[3],
+    )
+    expected_trace = list(trace)
+    assert expected_trace
+    trace.clear()
+
+    bundle = analysis._generation_local_vthread_context(
+        module, None,
+        analysis.compute_vthread_may_park_callables,
+        analysis.classify_vthread_park_boundaries,
+    )
+    assert bundle is not None
+    context, share_rows = bundle
+    assert not share_rows
+    actual = analysis._compute_local_vthread_effects(
+        module, None, local_context=context, _shared_owned_context=True,
+    )
+    rejected = analysis.classify_vthread_park_boundaries(
+        module, actual[1], None, actual[3],
+        _owned_local_context=context if share_rows else None,
+    )
+    assert actual == expected
+    assert rejected == expected_rejected
+    assert trace == expected_trace
+
+
+def test_generation_shared_context_keeps_custom_tuple_iteration():
+    from dataclasses import replace
+
+    trace = []
+
+    class ObservedBody(tuple):
+        def __iter__(self):
+            trace.append("body")
+            return super().__iter__()
+
+    module = parse_and_lift("def f():\n    return 1\n", "observed.py", "unit")
+    fd = module.body[0]
+    module = replace(module, body=(replace(fd, body=ObservedBody(fd.body)),))
+    expected = analysis.compute_vthread_may_park_callables(module)
+    expected_rejected = analysis.classify_vthread_park_boundaries(
+        module, expected[1], None, expected[3],
+    )
+    expected_trace = list(trace)
+    assert expected_trace
+    trace.clear()
+
+    context, share_rows = analysis._generation_local_vthread_context(
+        module, None,
+        analysis.compute_vthread_may_park_callables,
+        analysis.classify_vthread_park_boundaries,
+    )
+    assert not share_rows
+    actual = analysis._compute_local_vthread_effects(
+        module, None, local_context=context, _shared_owned_context=True,
+    )
+    rejected = analysis.classify_vthread_park_boundaries(
+        module, actual[1], None, actual[3],
+        _owned_local_context=context if share_rows else None,
+    )
+    assert actual == expected
+    assert rejected == expected_rejected
+    assert trace == expected_trace

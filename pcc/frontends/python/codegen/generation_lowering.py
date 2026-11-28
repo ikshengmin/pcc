@@ -525,24 +525,51 @@ class GenerationLoweringMixin:
         # the resulting lowering are compiled into pcc1; there is no host-only
         # source rewrite in this path.
         _codegen_log(self, debug_codegen, "vthread may-park begin")
+        from pcc.frontends.python.codegen import vthread_effect_analysis as _generation_effects
+
+        effect_bundle = _generation_effects._generation_local_vthread_context(
+            self.ast_module, self._native_module_exports,
+            compute_vthread_may_park_callables, classify_vthread_park_boundaries,
+        )
+        effect_context = None
+        share_effect_rows = False
+        if effect_bundle is None:
+            park_effects = compute_vthread_may_park_callables(
+                self.ast_module, self._native_module_exports,
+            )
+        else:
+            effect_context, share_effect_rows = effect_bundle
+            effect_bundle = None
+            park_effects = _generation_effects._compute_local_vthread_effects(
+                self.ast_module, self._native_module_exports,
+                local_context=effect_context, _shared_owned_context=True,
+            )
         (
             may_park_ids,
             may_park_names,
             may_park_method_ids,
             may_park_method_keys,
-        ) = compute_vthread_may_park_callables(
-            self.ast_module, self._native_module_exports
-        )
+        ) = park_effects
         setattr(self, "_vthread_may_park_func_ids", may_park_ids)
         setattr(self, "_vthread_may_park_func_names", may_park_names)
         setattr(self, "_vthread_may_park_method_ids", may_park_method_ids)
         setattr(self, "_vthread_may_park_method_keys", may_park_method_keys)
-        rejected_park_boundaries = classify_vthread_park_boundaries(
-            self.ast_module,
-            may_park_names,
-            self._native_module_exports,
-            may_park_method_keys,
-        )
+        if not share_effect_rows:
+            rejected_park_boundaries = classify_vthread_park_boundaries(
+                self.ast_module,
+                may_park_names,
+                self._native_module_exports,
+                may_park_method_keys,
+            )
+        else:
+            rejected_park_boundaries = _generation_effects.classify_vthread_park_boundaries(
+                self.ast_module,
+                may_park_names,
+                self._native_module_exports,
+                may_park_method_keys,
+                _owned_local_context=effect_context,
+            )
+        effect_context = None
         setattr(
             self,
             "_vthread_rejected_park_boundaries",

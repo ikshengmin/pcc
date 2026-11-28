@@ -22,8 +22,12 @@ from pcc.backend.self_backend_value_arena import CompilerIntArena
 
 from pcc.frontends.python.py_ast import Assign, Attr, AugAssign, BoolType, BytesType, Call, ClassDef, ClassType, DictType, FloatType, IntType, ListType, NoneType, SetType, StrType, TupleType, Delete, ExceptHandler, Expr, For, FuncDef, Global, Import, ImportFrom, Lambda, ListExpr, Module, Name, Nonlocal, TupleExpr, With
 from pcc.frontends.python.py_ast import (
-    BinOp, BoolExpr, BoolLit, Compare, ExprStmt, If, IfExpr, IntLit,
-    NoneLit, Return, Slice, StrLit, Subscript, Try, UnaryOp, While,
+    Arg, BinOp, BoolExpr, BoolLit, Break, ByteArrayType, BytesLit,
+    Compare, ComplexLit, ComplexType, Continue, DictExpr, DynType,
+    ExprStmt, FloatLit, FuncType, If, IfExpr, IntLit, MemoryViewType,
+    NoneLit, Pass, Raise, RawPointerType, Return, Slice, SourceSpan,
+    Stmt, StrLit, Subscript, Try, Type, UnaryOp, ValueArrayType,
+    ValueClassType, While,
 )
 from pcc.frontends.python.codegen.hoist_analysis import _dataclass_field_names, _dataclass_field_value
 from pcc.frontends.python.vthread_effect_summary_wire import (
@@ -339,13 +343,31 @@ def _collect_binding_target_names(target, names: set[str]) -> None:
             _collect_binding_target_names(item, names)
 
 
-def _function_scope_nodes(fd: FuncDef) -> list[object]:
+def _function_scope_nodes(fd: FuncDef, _sharing_guard=None) -> list[object]:
     """Return nodes evaluated in ``fd`` without entering nested scopes."""
-    return _lexical_scope_nodes(fd.body)
+    if _sharing_guard is None:
+        return _lexical_scope_nodes(fd.body)
+    if type(fd) is not FuncDef:
+        _sharing_guard[0] = False
+        return _lexical_scope_nodes(fd.body)
+    if type(fd.args) is not tuple:
+        _sharing_guard[0] = False
+    else:
+        for arg in fd.args:
+            if type(arg) is not Arg:
+                _sharing_guard[0] = False
+                continue
+            if type(arg.name) is not str or type(arg.kind) is not str:
+                _sharing_guard[0] = False
+            if not _generation_plain_annotation(arg.annotation):
+                _sharing_guard[0] = False
+    return _lexical_scope_nodes(fd.body, _sharing_guard)
 
 
-def _lexical_scope_nodes(body) -> list[object]:
+def _lexical_scope_nodes(body, _sharing_guard=None) -> list[object]:
     nodes: list[object] = []
+    if _sharing_guard is not None and type(body) is not tuple:
+        _sharing_guard[0] = False
     work = list(body)
     index = 0
     while index < len(work):
@@ -354,6 +376,8 @@ def _lexical_scope_nodes(body) -> list[object]:
         if node is None:
             continue
         if isinstance(node, tuple):
+            if _sharing_guard is not None and type(node) is not tuple:
+                _sharing_guard[0] = False
             work.extend(node)
             continue
         nodes.append(node)
@@ -364,6 +388,8 @@ def _lexical_scope_nodes(body) -> list[object]:
                 continue
             value = _dataclass_field_value(node, field_name, None)
             if isinstance(value, tuple):
+                if _sharing_guard is not None and type(value) is not tuple:
+                    _sharing_guard[0] = False
                 work.extend(value)
             else:
                 work.append(value)
@@ -1443,7 +1469,34 @@ def _add_local_callable_effect(
             return
 
 
-def _project_effect_scope_nodes(nodes):
+def _generation_plain_annotation(annotation) -> bool:
+    if annotation is None:
+        return True
+    kind = type(annotation)
+    if kind is ClassType or kind is ValueClassType:
+        return type(annotation.name) is str and type(annotation.module) is str
+    return (
+        kind is Type or kind is RawPointerType or kind is IntType
+        or kind is FloatType or kind is ComplexType or kind is BoolType
+        or kind is NoneType or kind is StrType or kind is BytesType
+        or kind is ByteArrayType or kind is MemoryViewType or kind is ListType
+        or kind is SetType or kind is DictType or kind is TupleType
+        or kind is FuncType or kind is DynType or kind is ValueArrayType
+    )
+
+
+def _generation_exact_residual_node(kind) -> bool:
+    return (
+        kind is Lambda or kind is Arg or kind is Break or kind is BytesLit
+        or kind is ComplexLit or kind is Continue or kind is DictExpr
+        or kind is FloatLit or kind is Pass or kind is Raise
+        or kind is SourceSpan or kind is Stmt or kind is Expr
+        or kind is float or kind is complex or kind is bytes
+        or kind is list or kind is dict or kind is set or kind is frozenset
+    )
+
+
+def _project_effect_scope_nodes(nodes, _sharing_guard=None):
     """Ordered, conservative scanner views of one complete lexical scope.
 
     The lexical walk and class-hint reader still observe every original node.
@@ -1480,6 +1533,8 @@ def _project_effect_scope_nodes(nodes):
         else:
             # These may satisfy several isinstance checks or expose custom
             # fields. Retain all original scanner observations and ordering.
+            if _sharing_guard is not None and not _generation_exact_residual_node(kind):
+                _sharing_guard[0] = False
             call_nodes.append(node)
             assignment_nodes.append(node)
             binding_nodes.append(node)
@@ -1487,10 +1542,18 @@ def _project_effect_scope_nodes(nodes):
 
 
 def _effect_callable_context_row(fd, module_aliases, value_aliases, methods,
-                                 owned_projection: bool):
-    nodes = _function_scope_nodes(fd)
+                                 owned_projection: bool, _sharing_guard=None):
+    if _sharing_guard is None:
+        nodes = _function_scope_nodes(fd)
+    else:
+        nodes = _function_scope_nodes(fd, _sharing_guard)
     if owned_projection:
-        binding_nodes, call_nodes, assignment_nodes = _project_effect_scope_nodes(nodes)
+        if _sharing_guard is None:
+            binding_nodes, call_nodes, assignment_nodes = _project_effect_scope_nodes(nodes)
+        else:
+            binding_nodes, call_nodes, assignment_nodes = _project_effect_scope_nodes(
+                nodes, _sharing_guard,
+            )
     else:
         binding_nodes = nodes
         call_nodes = nodes
@@ -1504,7 +1567,8 @@ def _effect_callable_context_row(fd, module_aliases, value_aliases, methods,
     return row, assignment_nodes
 
 
-def _local_vthread_context(module: Module, *, owned_projection: bool = False):
+def _local_vthread_context(module: Module, *, owned_projection: bool = False,
+                          _sharing_guard=None):
     """Per-module analysis inputs that do not depend on ``native_exports``.
 
     Each callable's lexical nodes, virtual-thread bindings, attribute calls and
@@ -1522,16 +1586,28 @@ def _local_vthread_context(module: Module, *, owned_projection: bool = False):
     callable_context = {}
     threading_rows = {} if owned_projection else callable_context
     for fd in functions:
-        row, assignment_nodes = _effect_callable_context_row(
-            fd, module_aliases, value_aliases, methods, owned_projection,
-        )
+        if _sharing_guard is None:
+            row, assignment_nodes = _effect_callable_context_row(
+                fd, module_aliases, value_aliases, methods, owned_projection,
+            )
+        else:
+            row, assignment_nodes = _effect_callable_context_row(
+                fd, module_aliases, value_aliases, methods, owned_projection,
+                _sharing_guard,
+            )
         callable_context[id(fd)] = row
         if owned_projection:
             threading_rows[id(fd)] = (assignment_nodes,)
     for _class_name, fd in method_defs:
-        row, assignment_nodes = _effect_callable_context_row(
-            fd, module_aliases, value_aliases, methods, owned_projection,
-        )
+        if _sharing_guard is None:
+            row, assignment_nodes = _effect_callable_context_row(
+                fd, module_aliases, value_aliases, methods, owned_projection,
+            )
+        else:
+            row, assignment_nodes = _effect_callable_context_row(
+                fd, module_aliases, value_aliases, methods, owned_projection,
+                _sharing_guard,
+            )
         callable_context[id(fd)] = row
         if owned_projection:
             threading_rows[id(fd)] = (assignment_nodes,)
@@ -1573,6 +1649,7 @@ def _compute_local_vthread_effects(
     local_context=None,
     summary_only: bool = False,
     fresh_summary: bool = False,
+    _shared_owned_context: bool = False,
 ) -> Optional[tuple[set[int], set[str], set[int], set[str]]]:
     """Collect callable effects, then normally solve the local fixed point.
 
@@ -1588,7 +1665,7 @@ def _compute_local_vthread_effects(
     summary.  Supplied summaries retain their original reset/alias behavior.
     """
     # Supplied contexts keep their original per-callable snapshot behavior.
-    borrow_methods = local_context is None
+    borrow_methods = local_context is None or _shared_owned_context
     if local_context is None:
         local_context = _fresh_local_vthread_context(module)
     (
@@ -2547,6 +2624,8 @@ def classify_vthread_park_boundaries(
     may_park_function_names: set[str],
     native_exports: Optional[dict] = None,
     may_park_method_keys: Optional[set[str]] = None,
+    *,
+    _owned_local_context=None,
 ) -> dict[str, str]:
     """Classify unresolved calls which may cross a parking method boundary.
 
@@ -2555,6 +2634,7 @@ def classify_vthread_park_boundaries(
     an open-world boundary and is rejected explicitly instead of silently
     blocking a carrier or discarding a child continuation.
     """
+    share_requested = _owned_local_context is not None and may_park_method_keys is not None
     top_functions = _module_function_defs(module)
     top_names: set[str] = set()
     for fd in top_functions:
@@ -2573,34 +2653,40 @@ def classify_vthread_park_boundaries(
         )
     method_defs = _class_method_defs(module)
     methods, bases = _class_method_tables(module)
-    callable_context = {}
     proof_cache = {}
-    for fd in top_functions:
-        nodes = _function_scope_nodes(fd)
-        callable_context[id(fd)] = (
-            nodes,
-            _function_vthread_bindings(
-                fd,
-                vthread_modules,
-                vthread_values,
+    if share_requested and _generation_rows_are_current(
+        _owned_local_context, vthread_modules, vthread_values,
+        top_functions, method_defs, methods,
+    ):
+        callable_context = _owned_local_context[6]
+    else:
+        callable_context = {}
+        for fd in top_functions:
+            nodes = _function_scope_nodes(fd)
+            callable_context[id(fd)] = (
                 nodes,
-            ),
-            _function_attr_calls(fd, nodes),
-            _function_local_class_hints(fd, methods, nodes),
-        )
-    for _class_name, fd in method_defs:
-        nodes = _function_scope_nodes(fd)
-        callable_context[id(fd)] = (
-            nodes,
-            _function_vthread_bindings(
-                fd,
-                vthread_modules,
-                vthread_values,
+                _function_vthread_bindings(
+                    fd,
+                    vthread_modules,
+                    vthread_values,
+                    nodes,
+                ),
+                _function_attr_calls(fd, nodes),
+                _function_local_class_hints(fd, methods, nodes),
+            )
+        for _class_name, fd in method_defs:
+            nodes = _function_scope_nodes(fd)
+            callable_context[id(fd)] = (
                 nodes,
-            ),
-            _function_attr_calls(fd, nodes),
-            _function_local_class_hints(fd, methods, nodes),
-        )
+                _function_vthread_bindings(
+                    fd,
+                    vthread_modules,
+                    vthread_values,
+                    nodes,
+                ),
+                _function_attr_calls(fd, nodes),
+                _function_local_class_hints(fd, methods, nodes),
+            )
     effect_method_names = _collect_all_method_effect_names(
         module,
         native_exports,
@@ -2776,6 +2862,83 @@ def classify_vthread_park_boundaries(
                     changed = True
                     break
     return rejected
+
+
+_OWNED_GENERATION_COMPUTE = compute_vthread_may_park_callables
+_OWNED_GENERATION_CLASSIFY = classify_vthread_park_boundaries
+_OWNED_GENERATION_COMPUTE_LOCAL = _compute_local_vthread_effects
+_OWNED_GENERATION_FRESH_CONTEXT = _fresh_local_vthread_context
+_OWNED_GENERATION_SCOPE = _function_scope_nodes
+_OWNED_GENERATION_LEXICAL = _lexical_scope_nodes
+_OWNED_GENERATION_PROJECT = _project_effect_scope_nodes
+_OWNED_GENERATION_ROW = _effect_callable_context_row
+
+
+def _generation_local_vthread_context(module, native_exports, compute, classify):
+    """Borrow a generation-owned projection, retaining custom observations."""
+    if (
+        compute is _OWNED_GENERATION_COMPUTE
+        and classify is _OWNED_GENERATION_CLASSIFY
+        and _compute_local_vthread_effects is _OWNED_GENERATION_COMPUTE_LOCAL
+        and _fresh_local_vthread_context is _OWNED_GENERATION_FRESH_CONTEXT
+        and _local_vthread_context is _OWNED_LOCAL_VTHREAD_CONTEXT
+        and _function_scope_nodes is _OWNED_GENERATION_SCOPE
+        and _lexical_scope_nodes is _OWNED_GENERATION_LEXICAL
+        and _project_effect_scope_nodes is _OWNED_GENERATION_PROJECT
+        and _effect_callable_context_row is _OWNED_GENERATION_ROW
+        and type(module) is Module
+        and (native_exports is None or type(native_exports) is dict)
+    ):
+        sharing_guard = [True]
+        context = _local_vthread_context(
+            module, owned_projection=True, _sharing_guard=sharing_guard,
+        )
+        return context, sharing_guard[0]
+    return None
+
+
+def _generation_plain_mapping_matches(first, second) -> bool:
+    if len(first) != len(second):
+        return False
+    for key, value in first.items():
+        if type(key) is not str or type(value) is not str:
+            return False
+    for key, value in second.items():
+        if type(key) is not str or type(value) is not str:
+            return False
+    return first == second
+
+
+def _generation_rows_are_current(context, module_aliases, value_aliases,
+                                 functions, method_defs, methods) -> bool:
+    # The classifier still performs its original module-level observations.
+    # Only the context rows are reused, and only when their inputs match.
+    if not _generation_plain_mapping_matches(context[0], module_aliases):
+        return False
+    if not _generation_plain_mapping_matches(context[1], value_aliases):
+        return False
+    if len(context[2]) != len(functions) or len(context[5]) != len(method_defs):
+        return False
+    for index, fd in enumerate(functions):
+        if fd is not context[2][index]:
+            return False
+    for index, item in enumerate(method_defs):
+        old_name, old_fd = context[5][index]
+        name, fd = item
+        if type(name) is not str or type(old_name) is not str:
+            return False
+        if name != old_name or fd is not old_fd:
+            return False
+    # Local class hints consume only the class-name membership view.
+    if len(context[3]) != len(methods):
+        return False
+    for name in context[3]:
+        if type(name) is not str:
+            return False
+    for name in methods:
+        if type(name) is not str or name not in context[3]:
+            return False
+    return True
 
 
 def annotate_closed_world_vthread_effects(
