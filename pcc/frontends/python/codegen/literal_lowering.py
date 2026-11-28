@@ -1219,7 +1219,7 @@ class LiteralLoweringMixin:
                 return ~inner
         return None
 
-    def _static_literal_object_constant(self, expr):
+    def _static_literal_object_constant(self, expr, word_cache=None):
         """The compile-time object pointer for ``expr``, or None.
 
         Only literals whose runtime object *is* a constant: a pooled immortal
@@ -1228,7 +1228,10 @@ class LiteralLoweringMixin:
         value = self._static_literal_int_value(expr)
         if value is not None:
             if self._STATIC_TAGGED_INT_MIN <= value <= self._STATIC_TAGGED_INT_MAX:
-                return ir.Constant(_I64, (value << 1) | 1).inttoptr(_CSTR)
+                bits = (value << 1) | 1
+                if word_cache is not None:
+                    return self._static_descriptor_word(bits, word_cache)
+                return ir.Constant(_I64, bits).inttoptr(_CSTR)
             return None
         if type(expr) is StrLit:
             return self._emit_str_literal(expr.value).bitcast(_CSTR)
@@ -1293,7 +1296,7 @@ class LiteralLoweringMixin:
 
     _STATIC_AGG_HEADER = {"DictExpr": 2, "TupleExpr": 4, "ListExpr": 6}
 
-    def _static_singleton_marker(self, expr):
+    def _static_singleton_marker(self, expr, word_cache=None):
         """Descriptor leaf for None/False/True, or None.
 
         ``py_static_aggregate_build`` maps 10/12/14 to the immortal
@@ -1305,7 +1308,22 @@ class LiteralLoweringMixin:
             marker = 14 if expr.value else 12
         else:
             return None
+        if word_cache is not None:
+            return self._static_descriptor_word(marker, word_cache)
         return ir.Constant(_I64, marker).inttoptr(_CSTR)
+
+    def _static_descriptor_word(self, bits: object, word_cache):
+        # Descriptor words are consumed solely by the constant initializer.
+        # Share only numeric renderings within this descriptor, never user
+        # objects, pooled string operations, or unrelated compiler values.
+        if word_cache is None:
+            return ir.Constant(_I64, bits).inttoptr(_CSTR)
+        word = word_cache.get(bits)
+        if word is None:
+            word = ir.Constant(_I64, bits).inttoptr(_CSTR)
+            if len(word_cache) < 4096:
+                word_cache[bits] = word
+        return word
 
     def _static_aggregate_words(self, expr):
         """Descriptor words for a constant aggregate, or None.
@@ -1316,47 +1334,56 @@ class LiteralLoweringMixin:
         take the general path.
         """
         words = []
-        if self._append_static_aggregate_words(expr, words):
+        # Large root aggregates can repeat thousands of numeric words.
+        # Do not allocate a memo for ordinary small literals.
+        word_cache = None
+        if type(expr) is DictExpr:
+            if len(expr.pairs) >= 256:
+                word_cache = {}
+        elif type(expr) is TupleExpr or type(expr) is ListExpr:
+            if len(expr.elems) >= 256:
+                word_cache = {}
+        if self._append_static_aggregate_words(expr, words, word_cache):
             return words
         return None
 
-    def _append_static_aggregate_words(self, expr, words: list) -> bool:
+    def _append_static_aggregate_words(self, expr, words: list, word_cache) -> bool:
         # Only the top-level caller owns the descriptor. Every recursive visit
         # appends to it in the same encounter order; a rejected prefix is
         # simply discarded rather than becoming a partial descriptor.
-        leaf = self._static_literal_object_constant(expr)
+        leaf = self._static_literal_object_constant(expr, word_cache)
         if leaf is not None:
             words.append(leaf)
             return True
-        singleton = self._static_singleton_marker(expr)
+        singleton = self._static_singleton_marker(expr, word_cache)
         if singleton is not None:
             words.append(singleton)
             return True
         header = self._STATIC_AGG_HEADER.get(type(expr).__name__)
         if header is None:
             return False
-        words.append(ir.Constant(_I64, header).inttoptr(_CSTR))
+        words.append(self._static_descriptor_word(header, word_cache))
         if header == 2:
             pairs = expr.pairs
             if not pairs:
                 return False
-            words.append(ir.Constant(_I64, (len(pairs) << 1) | 1).inttoptr(_CSTR))
+            words.append(self._static_descriptor_word((len(pairs) << 1) | 1, word_cache))
             for key_expr, value_expr in pairs:
                 if isinstance(key_expr, Name) and key_expr.ident == "**":
                     return False
-                key = self._static_literal_object_constant(key_expr)
+                key = self._static_literal_object_constant(key_expr, word_cache)
                 if key is None:
                     return False
                 words.append(key)
-                if not self._append_static_aggregate_words(value_expr, words):
+                if not self._append_static_aggregate_words(value_expr, words, word_cache):
                     return False
             return True
         elems = expr.elems
         if not elems:
             return False
-        words.append(ir.Constant(_I64, (len(elems) << 1) | 1).inttoptr(_CSTR))
+        words.append(self._static_descriptor_word((len(elems) << 1) | 1, word_cache))
         for elem in elems:
-            if not self._append_static_aggregate_words(elem, words):
+            if not self._append_static_aggregate_words(elem, words, word_cache):
                 return False
         return True
 

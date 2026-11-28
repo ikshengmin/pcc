@@ -137,3 +137,76 @@ def test_static_nested_descriptor_failure_retains_original_literal_order():
         assert words is not None
         assert len(words) == 6
         assert list(host._str_obj_pool) == ["before", "key"]
+
+
+def test_large_descriptor_reuses_only_exact_numeric_words(monkeypatch):
+    from collections import Counter
+    from pcc.frontends.python.codegen.literal_lowering import _CSTR
+    from pcc.ir.compat import ir
+
+    item = '(-4611686018427387904, 4611686018427387903, None, True, False, "s")'
+    host, expr = _descriptor_host("(" + ",".join([item] * 256) + ",)")
+    original = ir.Constant.inttoptr
+    calls = Counter()
+
+    def counted(self, target):
+        calls[self.value] += 1
+        return original(self, target)
+
+    monkeypatch.setattr(ir.Constant, "inttoptr", counted)
+    words = host._static_aggregate_words(expr)
+    assert words is not None
+    assert len(words) == 2 + 256 * 8
+    expected_bits = {4, 513, 13, -9223372036854775807, 9223372036854775807, 10, 14, 12}
+    assert calls == Counter({bits: 1 for bits in expected_bits})
+    # All value words, including the most negative and positive tagged
+    # signed values, retain the exact prior spelling and descriptor order.
+    expected_item = [
+        "inttoptr (i64 4 to ptr)",
+        "inttoptr (i64 13 to ptr)",
+        "inttoptr (i64 -9223372036854775807 to ptr)",
+        "inttoptr (i64 9223372036854775807 to ptr)",
+        "inttoptr (i64 10 to ptr)",
+        "inttoptr (i64 14 to ptr)",
+        "inttoptr (i64 12 to ptr)",
+        str(host._str_obj_pool["s"].bitcast(_CSTR)),
+    ]
+    assert list(map(str, words[2:])) == expected_item * 256
+    assert list(host._str_obj_pool) == ["s"]
+    calls.clear()
+    again = host._static_aggregate_words(expr)
+    assert calls == Counter({bits: 1 for bits in expected_bits})
+    assert again is not words and again[0] is not words[0]
+    assert list(map(str, again)) == list(map(str, words))
+
+    # Below the admission threshold, no memo is installed.
+    calls.clear()
+    small_host, small_expr = _descriptor_host("(" + item + "," + item + ")")
+    small = small_host._static_aggregate_words(small_expr)
+    assert small is not None
+    assert calls[4] == 3
+    assert calls[10] == 2
+
+
+def test_large_descriptor_numeric_memo_stops_admitting_at_bound(monkeypatch):
+    from collections import Counter
+    from pcc.ir.compat import ir
+
+    items = list(range(4100)) + [0, 4099, 4099]
+    host, expr = _descriptor_host("(" + ",".join(map(str, items)) + ",)")
+    original = ir.Constant.inttoptr
+    calls = Counter()
+
+    def counted(self, target):
+        calls[self.value] += 1
+        return original(self, target)
+
+    monkeypatch.setattr(ir.Constant, "inttoptr", counted)
+    words = host._static_aggregate_words(expr)
+    assert words is not None
+    assert len(words) == len(items) + 2
+    assert calls[1] == 1  # already-admitted low value still hits
+    assert calls[8199] == 3  # later unique value stays uncached
+    assert list(map(str, words[2:])) == [
+        "inttoptr (i64 " + str((i << 1) | 1) + " to ptr)" for i in items
+    ]
