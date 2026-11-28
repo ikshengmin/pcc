@@ -1579,12 +1579,10 @@ jobs:
       - name: Validate optional exact Stage1 x64 function map
         id: stage1_function_map
         if: ${{ !cancelled() && steps.stage1_bundle.outcome == 'success' && github.event_name == 'push' && matrix.platform == 'linux-x86_64' && contains(github.event.head_commit.message, '[stage1-x64-function-map]') }}
-        continue-on-error: true
         run: uv run --frozen --no-sync python scripts/ci_stage1_function_map.py
 
       - name: Preserve optional exact Stage1 x64 function map
         if: ${{ !cancelled() && steps.stage1_function_map.outcome == 'success' }}
-        continue-on-error: true
         uses: actions/upload-artifact@v6
         with:
           name: stage1-function-map-linux-x86_64-${{ github.sha }}-${{ github.run_attempt }}

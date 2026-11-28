@@ -255,7 +255,8 @@ def test_workflow_marker_and_independent_exact_artifact_boundary():
     validate, tail = stage.split("      - name: Preserve optional exact Stage1 x64 function map\n", 1)
     upload = tail.split("      - name:", 1)[0]
     assert "steps.stage1_bundle.outcome == 'success'" in validate and marker in validate
-    assert "continue-on-error: true" in validate and "continue-on-error: true" in upload
+    # Optional selection does not make failures in an admitted diagnostic optional.
+    assert "continue-on-error" not in validate and "continue-on-error" not in upload
     assert "steps.stage1_function_map.outcome == 'success'" in upload
     assert [line.strip() for line in upload.splitlines() if line.startswith("            build/")] == [
         "build/stage1-function-map-export/function-map.jsonl", "build/stage1-function-map-export/receipt.json",
