@@ -11,6 +11,7 @@ import gc
 import hashlib
 import importlib.util
 import json
+import ntpath
 import operator
 import os
 from pathlib import Path
@@ -195,6 +196,118 @@ def test_original_join_and_normpath_limits_remain_explicit():
     assert provider.path.commonpath(["/root", "relative"]) == ""
     with pytest.raises(ValueError):
         posixpath.commonpath(["/root", "relative"])
+
+
+@pytest.mark.parametrize("parts", (
+    ("a", "b", "c"), ("/tmp", "x"), ("a", "/b", "c"),
+    ("base", ""), ("", "child"), ("a/", "b"),
+    ("C:", "child"), ("C:/base", "c:child"), ("C:/base", "D:child"),
+    ("C:/base", "\\child"), ("C:/base", "/child"),
+    ("\\\\host\\share", "leaf"), ("\\\\host\\share\\base", "\\child"),
+))
+def test_native_windows_join_matches_target_lexical_oracle(parts):
+    provider = load_provider(native=True)
+    provider._platform_name = "win32"
+    calls = []
+
+    def helper(values):
+        assert type(values) is list
+        calls.append(tuple(values))
+        return ntpath.join(*values)
+
+    provider._path_join = helper
+    assert provider.path.join(*parts) == ntpath.join(*parts)
+    assert calls == [parts]
+
+
+def test_native_windows_join_preserves_protocol_error_and_zero_argument_contract():
+    provider = load_provider(native=True)
+    provider._platform_name = "win32"
+    events = []
+
+    class Part:
+        def __fspath__(self):
+            events.append("fspath")
+            return "C:/base"
+
+        def __str__(self):
+            raise AssertionError("unexpected path stringification")
+
+    def helper(values):
+        events.append(tuple(values))
+        return ntpath.join(*values)
+
+    provider._path_join = helper
+    assert provider.path.join() == "" and events == []
+    assert provider.path.join(Part(), "child") == ntpath.join("C:/base", "child")
+    assert events == ["fspath", ("C:/base", "child")]
+    with pytest.raises(NotImplementedError, match="bytes paths"):
+        provider.path.join(b"base", "child")
+    assert events == ["fspath", ("C:/base", "child")]
+    failure = LookupError("original Windows join failure")
+
+    def fail(values):
+        raise failure
+
+    provider._path_join = fail
+    with pytest.raises(LookupError) as captured:
+        provider.path.join("base", "child")
+    assert captured.value is failure
+    provider._path_join = lambda values: None
+    with pytest.raises(MemoryError, match="join result allocation failed"):
+        provider.path.join("base", "child")
+
+
+@pytest.mark.parametrize("native,platform", ((False, "win32"), (False, "linux"),
+                                            (True, "darwin"), (True, "linux")))
+def test_original_join_body_unchanged_outside_native_windows(native, platform):
+    provider = load_provider(native=native)
+    provider._platform_name = platform
+    provider._path_join = lambda values: pytest.fail("original join entered Windows ABI")
+    assert provider.path.join("a", "b", "c") == "a/b/c"
+    assert provider.path.join("", "child") == "/child"
+    assert provider.path.join("base", "") == "base"
+    assert provider.path.join() == ""
+
+
+def test_path_basics_join_uses_compiled_windows_provider(tmp_path):
+    from pcc.frontends.python.codegen.layer1 import L1CodeGen
+    from pcc.frontends.python.pipeline_context import build_closed_world_context
+    from pcc.frontends.python.type_infer import infer_module
+    from tests.owned_ir_validation import verify_ir_text
+    from tests.python.test_owned_path_basename import function_body
+    import re
+
+    # Use the actual CI corpus source and ordinary closed-world OS provider.
+    paths = [str(ROOT / "tests/runtime_oracle/path_basics.py"), str(PROVIDER),
+             str(ROOT / "pcc/stdlib/sys.py")]
+    names = ["path_basics", "os", "sys"]
+    modules, exports, derived = build_closed_world_context(paths, names)
+    emitted = {}
+    for index in (0, 1):
+        name = names[index]
+        external = {key: value for key, value in exports.items() if key != name}
+        module = infer_module(modules[index], external_exports=external, derived_class_map=derived)
+        generator = L1CodeGen(module, emit_cpy_main_exitcode=False, ir_scaffold_mode="on")
+        generator._target_triple = "x86_64-pc-windows-msvc"
+        generator._strict_no_libpython = True
+        generator._prefer_native_callable_values = True
+        generator._skip_program_main = True
+        generator._sibling_module_inits = names
+        generator._native_module_exports = external
+        text = str(generator.generate())
+        (tmp_path / (name + ".ll")).write_text(text)
+        verify_ir_text(text)
+        emitted[name] = text
+    caller = function_body(emitted["path_basics"], "user_path_basics_main")
+    wrapper = function_body(emitted["os"], "user_os__path_join")
+    assert len(re.findall(r"call ptr[^\n]*@py_obj_getattr\([^\n]*@\.pyattr\.join,", caller)) == 2
+    assert len(re.findall(r"%import\.method\.join\.invoke\.[^ ]+ = call i64[^\n]*@py_obj_call_slots\(", caller)) == 2
+    assert "@py_os_path_join(" not in caller
+    assert len(re.findall(r"call ptr[^\n]*@py_os_path_join\(ptr [^,\n]+\)", wrapper)) == 1
+    for body in (caller, wrapper):
+        assert not re.search(r"call[^\n]*@py_cpy_", body)
+        assert "strict.nolib.stub" not in body
 
 
 def test_scalar_width_checks_run_before_helpers():

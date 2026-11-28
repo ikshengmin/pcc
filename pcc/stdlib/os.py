@@ -63,6 +63,7 @@ _http_download = extern("py_http_download_to_file", (c_obj, c_obj), c_int64)
 _file_digest = extern("py_sha256_file_hex", (c_obj,), c_obj)
 _file_digest_bounded = extern("py_sha256_file_hex_bounded", (c_obj, c_int64), c_obj)
 
+_path_join = extern("py_os_path_join", (c_obj,), c_obj)
 _path_basename = extern("py_os_path_basename", (c_obj,), c_obj)
 _path_dirname = extern("py_os_path_dirname", (c_obj,), c_obj)
 _path_split = extern("py_os_path_split", (c_obj,), c_obj)
@@ -700,6 +701,17 @@ class _path:
     def join(*parts: str) -> str:
         if not parts:
             return ""
+        # The ordinary module namespace must use the same Windows lexical
+        # ABI as direct compiler lowering. Preserve the existing host and
+        # POSIX provider contracts; this branch belongs to native Win32 only.
+        if _platform_name == "win32" and _native_sys.implementation.name == "pcc":
+            values = [_native_path_text(value) for value in parts]
+            result = _path_join(values)
+            if _error_pending():
+                raise
+            if ptr_is_null(result):
+                raise MemoryError('owned os.path.join result allocation failed')
+            return result
         out = parts[0]
         for p in parts[1:]:
             if not p:
