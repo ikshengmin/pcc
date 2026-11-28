@@ -745,6 +745,20 @@ def test_overlapping_growth_cancels_and_requeues_one_peer_with_same_cap(tmp_path
     _exercise_overlap_trim(tmp_path, monkeypatch, capsys)
 
 
+def _retired_parent_environment(tmp_path, outer_environment):
+    from tests import pcc1_route
+
+    environment = dict(outer_environment)
+    for name in ("PYTEST_XDIST_WORKER", "PYTEST_XDIST_WORKER_COUNT", "PYTEST_XDIST_TESTRUNUID"):
+        environment.pop(name, None)
+    # An independent pytest session must not summarize its parent's in-flight
+    # compiler invocations. Preserve strict mode and all compiler inputs.
+    routing_dir = tmp_path / "retired-history-routing"
+    routing_dir.mkdir()
+    environment[pcc1_route.LOG_ENV] = str(routing_dir / "pcc1-routing.jsonl")
+    return environment
+
+
 def test_overlapping_growth_with_retired_parent_rss(tmp_path):
     # Replay the exact original node after a genuine retired allocation in
     # an isolated pytest coordinator: do not inflate the six-worker suite's
@@ -759,9 +773,25 @@ def test_overlapping_growth_with_retired_parent_rss(tmp_path):
         "assert _worker_peak_rss_bytes()>=256*1024**2\n"
         "raise SystemExit(pytest.main(sys.argv[1:]))\n"
     )
-    environment = dict(os.environ)
-    for name in ("PYTEST_XDIST_WORKER", "PYTEST_XDIST_WORKER_COUNT", "PYTEST_XDIST_TESTRUNUID"):
-        environment.pop(name, None)
+    outer_environment = dict(os.environ)
+    # Reproduce another worker's in-flight compile without writing to the
+    # actual outer session's shared log. This nested witness does not compile;
+    # standalone host runs can exercise strict routing with a sentinel compiler.
+    from tests import pcc1_route
+
+    outer_log = tmp_path / "outer-routing.jsonl"
+    outer_record = json.dumps({
+        "route": "native", "event": "attempt", "invocation": "outer-in-flight",
+    }) + "\n"
+    outer_log.write_text(outer_record, encoding="utf-8")
+    outer_environment.setdefault("PCC_TEST_COMPILER", sys.executable)
+    outer_environment.setdefault("PCC_RUNTIME_ARCHIVE", str(tmp_path / "unused-runtime.a"))
+    outer_environment[pcc1_route.STRICT_ENV] = "1"
+    outer_environment[pcc1_route.LOG_ENV] = str(outer_log)
+    environment = _retired_parent_environment(tmp_path, outer_environment)
+    for name in ("PCC_TEST_COMPILER", "PCC_RUNTIME_ARCHIVE", pcc1_route.STRICT_ENV):
+        assert environment[name] == outer_environment[name]
+    assert environment[pcc1_route.LOG_ENV] != outer_environment[pcc1_route.LOG_ENV]
     evidence = tmp_path / "retired-history"
     result = run_process_tree_timeout(
         [sys.executable, "-B", "-c", launcher, "-q", "-n0", "--override-ini=addopts=",
@@ -770,6 +800,12 @@ def test_overlapping_growth_with_retired_parent_rss(tmp_path):
         cwd=root, env=environment, evidence=evidence, timeout=30,
     )
     assert result.returncode == 0 and "1 passed" in result.stdout, (result.stdout, result.stderr)
+    assert "native attempts: 0" in result.stdout
+    assert "incomplete invocations: 0" in result.stdout
+    assert f"(log: {environment[pcc1_route.LOG_ENV]})" in result.stdout
+    assert outer_environment[pcc1_route.LOG_ENV] == str(outer_log)
+    assert outer_log.read_text(encoding="utf-8") == outer_record
+    assert pcc1_route.summarize(str(outer_log))["counts"]["native_incomplete"] == 1
     traces = list((tmp_path / "nested-pytest").glob("test_overlapping_growth_cancel[0-9]*/progressive.tsv"))
     assert len(traces) == 1
     rows = [line.split("\t") for line in traces[0].read_text().splitlines()]
