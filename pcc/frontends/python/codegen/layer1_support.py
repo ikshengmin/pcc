@@ -2034,6 +2034,17 @@ def _populate_owned_optimizer_exports(out):
             ),
         }
 
+    # This provider uses the same (text, changed) result, but its positional
+    # argument is named text rather than ir_text. Preserve the real binder.
+    owner = "pcc.frontends.python.fused_protocol_pass"
+    name = "fused_protocol_text"
+    out[owner] = {
+        name: _native_function_object_export(
+            owner, name, changed_text, (text,), (_export_arg("text", text),),
+            docstring="Apply the pass to one module's IR text; returns (text, changed).",
+        ),
+    }
+
     # Defaults are actual lifted literals, not None placeholders or serialized
     # repr strings. The synthetic span carries no provider source location.
     span = SourceSpan(file="<native-export>", line=0, col=0, end_line=0, end_col=0)

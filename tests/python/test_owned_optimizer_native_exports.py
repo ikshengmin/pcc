@@ -32,6 +32,8 @@ INLINE_OWNER = "pcc.ir.optimization.inline"
 INLINE_SYMBOL = "user_pcc_ir_optimization_inline_inline_module"
 JUMP_THREAD_OWNER = "pcc.ir.optimization.jump_thread"
 JUMP_THREAD_SYMBOL = "user_pcc_ir_optimization_jump_thread_jump_thread_text"
+FUSED_PROTOCOL_OWNER = "pcc.frontends.python.fused_protocol_pass"
+FUSED_PROTOCOL_SYMBOL = "user_pcc_frontends_python_fused_protocol_pass_fused_protocol_text"
 PROVIDERS = (
     ("pcc.ir.optimization.mem2reg", "mem2reg_text", "ptr", ("ptr",)),
     ("pcc.ir.optimization.instsimplify", "simplify_module_text", "ptr", ("ptr",)),
@@ -41,6 +43,7 @@ PROVIDERS = (
     ("pcc.ir.optimization.dce", "dce_module_text", "ptr", ("ptr", "ptr")),
     (INLINE_OWNER, "inline_module", "ptr", ("ptr", "i1", "i1", "ptr")),
     (JUMP_THREAD_OWNER, "jump_thread_text", "ptr", ("ptr",)),
+    (FUSED_PROTOCOL_OWNER, "fused_protocol_text", "ptr", ("ptr",)),
     ("pcc.frontends.python.compiled_default_passes", "_has_py_cpy_call", "i1", ("ptr",)),
     ("pcc.frontends.python.compiled_default_passes", "_mem2reg_function", "ptr", ("ptr",)),
     ("pcc.frontends.python.compiled_default_passes", "_sroa_function", "ptr", ("ptr",)),
@@ -219,6 +222,7 @@ def test_strict_standalone_jump_thread_keeps_real_owner_import(tmp_path):
     text = output.read_text(encoding="utf-8")
     verify_parsed_module(parse_self_backend_module(text))
     assert f"declare external ptr @{JUMP_THREAD_SYMBOL}(ptr)" in text
+    assert f"declare external ptr @{FUSED_PROTOCOL_SYMBOL}(ptr)" in text
     assert "strict.nolib.stub" not in text
     assert not re.search(r"\bcall [^\n]*@py_cpy_", text)
 
@@ -238,10 +242,13 @@ def test_strict_standalone_jump_thread_keeps_real_owner_import(tmp_path):
 
     dispatch = re.search(rf"(?ms)^define [^\n]*@user_{owner_prefix}_run_owned_passes\(.*?^\}}", text)[0]
     assert re.search(rf"\bcall ptr[^\n]*@{JUMP_THREAD_SYMBOL}\(ptr %[^,\s)]+\)", dispatch)
+    assert re.search(rf"\bcall ptr[^\n]*@{FUSED_PROTOCOL_SYMBOL}\(ptr %[^,\s)]+\)", dispatch)
+    assert "no-libpython function unavailable" not in dispatch
     # This is a caller-only artifact. Neither a declaration nor its binder
     # manufactures an initializer or supplies the required provider body.
     assert not re.search(r"\bcall [^\n]*@py_compiled_module_register_init\(", text)
     assert not re.search(rf"(?m)^define [^\n]*@{JUMP_THREAD_SYMBOL}\(", text)
+    assert not re.search(rf"(?m)^define [^\n]*@{FUSED_PROTOCOL_SYMBOL}\(", text)
 
 
 def _assert_complete_binding_body(text):
