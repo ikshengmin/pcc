@@ -18,6 +18,7 @@ from dataclasses import dataclass
 import os
 import sys
 
+from pcc.frontends.python import py_lex as _py_lex
 from pcc.frontends.python.py_lex import Lexer, Token
 
 # Keep these token-kind strings local to avoid pulling sibling-module
@@ -490,7 +491,12 @@ class Parser:
     :mod:`pcc.frontends.python.py_ast` nodes.
     """
 
+    # Direct/public Parser use (including subclasses and manually supplied
+    # token streams) keeps the original recursive-descent hook chain.
+    _owned_binary_precedence = False
+
     def __init__(self, src: str, filename: str = "<input>") -> None:
+        self._owned_binary_precedence = False
         self.filename = filename
         lexer = Lexer(src, filename)
         self.tokens: list[Token] = Lexer.tokenize(lexer)
@@ -2008,7 +2014,29 @@ class Parser:
         line = comparisons[0].line
         return _BoolOp(op="and", values=comparisons, line=line)
 
+    def _parse_binary_precedence(self, minimum: int):
+        # Only the six left-associative bitwise/arithmetic levels participate.
+        # Unary, power, comparisons, boolean syntax and all atom readers retain
+        # their existing grammar and location/error owners.
+        lhs = self._parse_unary()
+        while True:
+            t = self._peek()
+            if t.kind != TK_OP:
+                return lhs
+            op = t.text
+            priority = _BINARY_PRECEDENCE.get(op, 0)
+            if priority < minimum:
+                return lhs
+            self._advance()
+            rhs = self._parse_binary_precedence(priority + 1)
+            # Legacy levels use the lookahead after the higher-precedence RHS,
+            # not the operator token's location.
+            line = self._peek().line
+            lhs = _BinOp(op=op, lhs=lhs, rhs=rhs, line=line)
+
     def _parse_bitor(self):
+        if self._owned_binary_precedence:
+            return self._parse_binary_precedence(1)
         lhs = self._parse_bitxor()
         while self._peek().kind == TK_OP and self._peek().text == "|":
             self._advance()
@@ -2727,6 +2755,70 @@ class Parser:
         return gens
 
 
+_BINARY_PRECEDENCE_ITEMS = (
+    ("|", 1), ("^", 2), ("&", 3), ("<<", 4), (">>", 4),
+    ("+", 5), ("-", 5), ("*", 6), ("/", 6), ("//", 6), ("%", 6), ("@", 6),
+)
+_BINARY_PRECEDENCE = {
+    "|": 1, "^": 2, "&": 3, "<<": 4, ">>": 4,
+    "+": 5, "-": 5, "*": 6, "/": 6, "//": 6, "%": 6, "@": 6,
+}
+_OWNED_BINARY_PRECEDENCE = _BINARY_PRECEDENCE
+_OWNED_BINARY_PARSER = Parser
+_OWNED_BINARY_LEXER = Lexer
+_OWNED_BINARY_TOKEN = Token
+
+
+def _binary_precedence_hooks():
+    # Capture the original producer and all methods whose call count/order
+    # the precedence replacement can change, plus its direct atom owner.
+    return (
+        Parser.__init__, Parser.parse_module, Parser._parse_compare,
+        Parser._peek, Parser._advance, Parser._parse_bitor,
+        Parser._parse_bitxor, Parser._parse_bitand, Parser._parse_shift,
+        Parser._parse_add, Parser._parse_mul, Parser._parse_binary_precedence,
+        Parser._parse_unary, Parser._parse_power, Parser._parse_atom_trailer,
+        Parser._parse_atom,
+        Lexer.__init__, Lexer.tokenize, Lexer._code_at, Lexer._slice,
+        Lexer._peek_code, Lexer._peek, Lexer._emit_indent, Lexer._emit_newline,
+        Lexer._name_codepoint, Lexer._read_name, Lexer._read_number,
+        Lexer._read_string, Lexer._read_op,
+    )
+
+
+_OWNED_BINARY_HOOKS = _binary_precedence_hooks()
+
+
+def _binary_precedence_route_is_owned(parser, source, filename):
+    # Untyped receiver/type check is intentional: a typed narrowed receiver
+    # can fold an exact-type predicate and admit a caller's subclass.
+    if (type(parser) is not _OWNED_BINARY_PARSER
+            or type(source) is not str or type(filename) is not str
+            or Parser is not _OWNED_BINARY_PARSER
+            or Lexer is not _OWNED_BINARY_LEXER
+            or Token is not _OWNED_BINARY_TOKEN
+            or _py_lex.Lexer is not _OWNED_BINARY_LEXER
+            or _py_lex.Token is not _OWNED_BINARY_TOKEN
+            or _BINARY_PRECEDENCE is not _OWNED_BINARY_PRECEDENCE):
+        return False
+    try:
+        current = _binary_precedence_hooks()
+        for i in range(len(_OWNED_BINARY_HOOKS)):
+            if current[i] is not _OWNED_BINARY_HOOKS[i]:
+                return False
+        if len(_BINARY_PRECEDENCE) != len(_BINARY_PRECEDENCE_ITEMS):
+            return False
+        for op, priority in _BINARY_PRECEDENCE_ITEMS:
+            if _BINARY_PRECEDENCE.get(op, 0) != priority:
+                return False
+    except Exception:
+        # A substituted or removed hook retains the legacy parser route.
+        return False
+    return True
+
+
 def parse(src: str, filename: str = "<input>") -> _Module:
     parser = Parser(src, filename)
+    if _binary_precedence_route_is_owned(parser, src, filename):
+        parser._owned_binary_precedence = True
     return Parser.parse_module(parser)
