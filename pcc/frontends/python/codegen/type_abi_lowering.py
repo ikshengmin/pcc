@@ -11,6 +11,47 @@ from pcc.ir.compat import ir
 from pcc.frontends.python.py_ast import (
     RawPointerType,
     Arg,
+    Assign,
+    Attr,
+    AugAssign,
+    BinOp,
+    BoolExpr,
+    BoolLit,
+    Break,
+    BytesLit,
+    Call,
+    Compare,
+    ComplexLit,
+    Continue,
+    Delete,
+    DictExpr,
+    ExceptHandler,
+    Expr,
+    ExprStmt,
+    FloatLit,
+    For,
+    Global,
+    If,
+    IfExpr,
+    IntLit,
+    Lambda,
+    ListExpr,
+    Module,
+    Name,
+    NoneLit,
+    Nonlocal,
+    Pass,
+    Raise,
+    Return,
+    Slice,
+    Stmt,
+    StrLit,
+    Subscript,
+    Try,
+    TupleExpr,
+    UnaryOp,
+    While,
+    With,
     BoolType,
     ByteArrayType,
     BytesType,
@@ -631,10 +672,70 @@ class TypeAbiLoweringMixin:
                 return True
             # Function/class bodies own their statements separately. This
             # walk covers only this statement's evaluated operands/defaults.
-            for attr in ("value", "expr", "lhs", "rhs", "left", "right", "operand", "cond",
+            # The frozen source AST has fixed fields. Project their intersection
+            # with the old probe order, rather than asking the native runtime
+            # for every absent attribute on every node. Keep default lookup for
+            # malformed instances and the full probe order for subclasses or
+            # foreign objects. The payload check above remains dynamic.
+            kind = type(node)
+            if kind is Name or kind is NoneLit or kind is ComplexLit or kind is bytes:
+                continue
+            elif kind is Call:
+                attrs = ("func", "args", "kwargs")
+            elif kind is Attr:
+                attrs = ("obj",)
+            elif kind is Assign:
+                attrs = ("value", "targets")
+            elif (kind is IntLit or kind is FloatLit or kind is BoolLit
+                  or kind is StrLit or kind is BytesLit or kind is Return):
+                attrs = ("value",)
+            elif kind is ExprStmt:
+                attrs = ("expr",)
+            elif kind is BinOp or kind is Compare:
+                attrs = ("lhs", "rhs")
+            elif kind is Subscript:
+                attrs = ("obj", "idx")
+            elif kind is If or kind is While:
+                attrs = ("cond",)
+            elif kind is BoolExpr:
+                attrs = ("left", "right")
+            elif kind is UnaryOp:
+                attrs = ("operand",)
+            elif kind is TupleExpr or kind is ListExpr:
+                attrs = ("elems",)
+            elif kind is DictExpr:
+                attrs = ("pairs",)
+            elif kind is IfExpr:
+                attrs = ("cond", "then_e", "else_e")
+            elif kind is Slice:
+                attrs = ("lo", "hi", "step")
+            elif kind is For:
+                attrs = ("target", "iter")
+            elif kind is AugAssign:
+                attrs = ("value", "target")
+            elif kind is Raise:
+                attrs = ("exc", "cause")
+            elif kind is With:
+                attrs = ("items",)
+            elif kind is Delete:
+                attrs = ("targets",)
+            elif kind is Arg:
+                attrs = ("default",)
+            elif kind is FuncDef:
+                attrs = ("args", "decorators")
+            elif kind is ClassDef:
+                attrs = ("decorators",)
+            elif (kind is Lambda or kind is Try or kind is Import or kind is ImportFrom
+                  or kind is Pass or kind is Break or kind is Continue or kind is Global
+                  or kind is Nonlocal or kind is ExceptHandler or kind is Expr
+                  or kind is Stmt or kind is Module):
+                continue
+            else:
+                attrs = ("value", "expr", "lhs", "rhs", "left", "right", "operand", "cond",
                          "then_e", "else_e", "obj", "idx", "lo", "hi", "step", "func", "args",
                          "kwargs", "elems", "pairs", "targets", "target", "iter", "exc", "cause",
-                         "items", "default", "decorators"):
+                         "items", "default", "decorators")
+            for attr in attrs:
                 child = getattr(node, attr, None)
                 if child is not None:
                     pending.append(child)
