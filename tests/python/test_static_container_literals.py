@@ -69,3 +69,71 @@ def test_static_container_probe_reaches_each_counter(tmp_path, monkeypatch):
     compile_python(str(source), str(plain_output), backend="self",
                    ir_scaffold_mode="on", emit_llvm_only=True)
     assert "@.pcc.static.agg." not in plain_output.read_text()
+
+
+def _descriptor_host(expr_text):
+    from pcc.frontends.python.codegen.layer1 import L1CodeGen
+    from pcc.frontends.python.py_lift import parse_and_lift
+
+    module = parse_and_lift("table = " + expr_text + "\n", "table.py", "table")
+    host = L1CodeGen(module, ir_scaffold_mode="on")
+    return host, module.body[0].value
+
+
+def test_static_nested_descriptor_has_one_accumulator(monkeypatch):
+    from pcc.frontends.python.codegen.layer1 import L1CodeGen
+    from pcc.frontends.python.codegen.literal_lowering import _CSTR, _I64
+    from pcc.ir.compat import ir
+
+    host, expr = _descriptor_host(
+        '("start", {"left": [None, True, False, -7], "right": (9, "tail")})'
+    )
+    original = L1CodeGen._static_aggregate_words
+    visits = []
+
+    def counted(self, node):
+        visits.append(node)
+        return original(self, node)
+
+    monkeypatch.setattr(L1CodeGen, "_static_aggregate_words", counted)
+    words = host._static_aggregate_words(expr)
+    assert visits == [expr]  # the descriptor list is allocated once, not at every node
+    assert list(host._str_obj_pool) == ["start", "left", "right", "tail"]
+
+    def number(value):
+        return str(ir.Constant(_I64, value).inttoptr(_CSTR))
+
+    def string(value):
+        return str(host._str_obj_pool[value].bitcast(_CSTR))
+
+    expected = [
+        number(4), number(5), string("start"), number(2), number(5),
+        string("left"), number(6), number(9), number(10), number(14),
+        number(12), number(-13), string("right"), number(4), number(5),
+        number(19), string("tail"),
+    ]
+    assert list(map(str, words)) == expected
+    again = host._static_aggregate_words(expr)
+    assert again is not words
+    assert list(map(str, again)) == expected
+
+
+def test_static_nested_descriptor_failure_retains_original_literal_order():
+    for expr_text in (
+        '("before", {"key": [1, len("dynamic"), "after"]})',
+        '("before", {"key": 1, **mapping, "after": 2})',
+        '("before", {"key": [], "after": 2})',
+        '("before", {"key": [1, 1267650600228229401496703205376, "after"]})',
+    ):
+        host, expr = _descriptor_host(expr_text)
+        assert host._static_aggregate_words(expr) is None
+        # No later strings are pooled after rejection, and the already visited
+        # prefix remains in encounter order, just as in the general lowering.
+        assert list(host._str_obj_pool) == ["before", "key"]
+        # A discarded partial descriptor cannot affect later independent
+        # descriptor construction on the same lowering host.
+        _, accepted = _descriptor_host('("key", [2])')
+        words = host._static_aggregate_words(accepted)
+        assert words is not None
+        assert len(words) == 6
+        assert list(host._str_obj_pool) == ["before", "key"]

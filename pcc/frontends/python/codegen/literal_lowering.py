@@ -1315,43 +1315,50 @@ class LiteralLoweringMixin:
         elements.  Any non-constant element anywhere makes the whole literal
         take the general path.
         """
+        words = []
+        if self._append_static_aggregate_words(expr, words):
+            return words
+        return None
+
+    def _append_static_aggregate_words(self, expr, words: list) -> bool:
+        # Only the top-level caller owns the descriptor. Every recursive visit
+        # appends to it in the same encounter order; a rejected prefix is
+        # simply discarded rather than becoming a partial descriptor.
         leaf = self._static_literal_object_constant(expr)
         if leaf is not None:
-            return [leaf]
+            words.append(leaf)
+            return True
         singleton = self._static_singleton_marker(expr)
         if singleton is not None:
-            return [singleton]
+            words.append(singleton)
+            return True
         header = self._STATIC_AGG_HEADER.get(type(expr).__name__)
         if header is None:
-            return None
-        words = [ir.Constant(_I64, header).inttoptr(_CSTR)]
+            return False
+        words.append(ir.Constant(_I64, header).inttoptr(_CSTR))
         if header == 2:
             pairs = expr.pairs
             if not pairs:
-                return None
+                return False
             words.append(ir.Constant(_I64, (len(pairs) << 1) | 1).inttoptr(_CSTR))
             for key_expr, value_expr in pairs:
                 if isinstance(key_expr, Name) and key_expr.ident == "**":
-                    return None
+                    return False
                 key = self._static_literal_object_constant(key_expr)
                 if key is None:
-                    return None
-                value = self._static_aggregate_words(value_expr)
-                if value is None:
-                    return None
+                    return False
                 words.append(key)
-                words.extend(value)
-            return words
+                if not self._append_static_aggregate_words(value_expr, words):
+                    return False
+            return True
         elems = expr.elems
         if not elems:
-            return None
+            return False
         words.append(ir.Constant(_I64, (len(elems) << 1) | 1).inttoptr(_CSTR))
         for elem in elems:
-            sub = self._static_aggregate_words(elem)
-            if sub is None:
-                return None
-            words.extend(sub)
-        return words
+            if not self._append_static_aggregate_words(elem, words):
+                return False
+        return True
 
     def _maybe_emit_static_aggregate(self, expr, label):
         """One global + one runtime call for a nested constant table, or None.
