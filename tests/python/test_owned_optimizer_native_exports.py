@@ -44,6 +44,7 @@ PROVIDERS = (
     (INLINE_OWNER, "inline_module", "ptr", ("ptr", "i1", "i1", "ptr")),
     (JUMP_THREAD_OWNER, "jump_thread_text", "ptr", ("ptr",)),
     (FUSED_PROTOCOL_OWNER, "fused_protocol_text", "ptr", ("ptr",)),
+    ("pcc.ir.optimization.outline_slow_paths", "outline_slow_paths_text", "ptr", ("ptr",)),
     ("pcc.frontends.python.compiled_default_passes", "_has_py_cpy_call", "i1", ("ptr",)),
     ("pcc.frontends.python.compiled_default_passes", "_mem2reg_function", "ptr", ("ptr",)),
     ("pcc.frontends.python.compiled_default_passes", "_sroa_function", "ptr", ("ptr",)),

@@ -1,4 +1,10 @@
-"""Only unchanged scalar sibling-call inputs can keep a forwarding leaf frame-free."""
+"""A leaf whose only call is a scalar sibling call runs without a frame.
+
+Unchanged inputs forward with no move; permuted or replaced register
+arguments are one parallel move (x16 breaks a swap) before the branch.
+Nothing is live after a sibling call, so neither needs LR saved, a
+callee-saved register or a slot.
+"""
 import platform
 import re
 import subprocess
@@ -63,26 +69,34 @@ def test_unchanged_tail_forwarding_has_no_saved_return_or_frame(monkeypatch):
     assert "ldapr " in emitted
 
 
-@pytest.mark.parametrize("arguments", ("ptr %slot, ptr %owner", "ptr @left, ptr %slot"))
+ARGUMENT_FORMS = ("ptr %owner, ptr %slot", "ptr %slot, ptr %owner", "ptr @left, ptr %slot")
+
+
+def _source(arguments):
+    return SOURCE.replace("@callee(ptr %owner, ptr %slot)\n", "@callee(" + arguments + ")\n")
+
+
+@pytest.mark.parametrize("arguments", ARGUMENT_FORMS[1:])
 @pytest.mark.usefixtures("branch_protection_on")
-def test_permuted_or_replaced_inputs_retain_protected_tail_frame(arguments, monkeypatch):
+def test_permuted_or_replaced_inputs_are_frameless_sibling_calls(arguments, monkeypatch):
     monkeypatch.setenv("PCC_SELF_CALLEE_SAVED_REGISTERS", "1")
-    source = SOURCE.replace("@callee(ptr %owner, ptr %slot)\n", "@callee("+arguments+")\n")
-    emitted = body(emit_aarch64_darwin_asm(source, optimize=True))
-    assert "paciasp" in emitted and "autiasp" in emitted
-    assert "  b _callee" in emitted
+    emitted = body(emit_aarch64_darwin_asm(_source(arguments), optimize=True))
+    assert "bti c" in emitted and "  b _callee" in emitted
+    assert "paciasp" not in emitted and "autiasp" not in emitted
+    assert "x29" not in emitted and "sp" not in emitted
 
 
 # owned Darwin arm64 execution
 @pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 @pytest.mark.parametrize("registers", ("0", "1"))
 @pytest.mark.parametrize("optimize", (False, True))
-def test_forwarding_fast_and_slow_paths_execute(tmp_path, monkeypatch, registers, optimize):
+@pytest.mark.parametrize("arguments", ARGUMENT_FORMS)
+def test_forwarding_fast_and_slow_paths_execute(tmp_path, monkeypatch, registers, optimize, arguments):
     from pcc.backend.native_object import NativeObject
     from pcc.backend.self_backend_aarch64_darwin import emit_aarch64_darwin_indexed_transport
     from pcc.backend.self_backend_parse import parse_self_backend_module
     monkeypatch.setenv("PCC_SELF_CALLEE_SAVED_REGISTERS", registers)
-    transport = emit_aarch64_darwin_indexed_transport(parse_self_backend_module(SOURCE),
+    transport = emit_aarch64_darwin_indexed_transport(parse_self_backend_module(_source(arguments)),
                                                     optimize=optimize, structured_instructions=True)
     sections, undefined = transport.assemble_sections()
     data = NativeObject.from_sections(sections, undefined=undefined).to_macho()

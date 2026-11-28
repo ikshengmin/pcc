@@ -3691,6 +3691,23 @@ in the relevant section or issue and removes the entry.
    against three arms built from one runtime IR: self, `clang-codegen`
    (LLVM code generation only) and `clang-O2` (LLVM IR optimization plus
    code generation), by exact instructions, classes and cycles.
+   (aq) Three-way gap (Claude, 2026-11-28, exact instructions per handler
+   request, one runtime IR): self h41-head 94158, `clang-codegen` h41-cg
+   88703 (-5.79%; hardware cycles -20.27%), `clang-O2` h41-o2 82704
+   (-12.16%). Code generation by class, clang against self: branches
+   -2028, register copies -1744, stack slots -1504, frame setup -1103,
+   atomics -621 (self executed 660 LDAR where clang took LDAPR, now
+   matched: measured neutral here), immediates -445; clang has more
+   callee-saved saves (+1566) and loads (+1104, LDAPR counted as loads).
+   The frame gap is shrink-wrapping: on invocations with no call and no
+   stack slot self ran about 4800 frame and argument-copy instructions.
+   `outline-slow-paths` (pcc IR, AArch64 modules) moves the paths that
+   need a frame behind tail calls: h44c -> h48-outline 94158 -> 92269
+   (-2.01%), 35% of the code-generation gap; throughput inconclusive
+   (11.8% control floor). Next by size: register copies and stack slots
+   (allocation without live-range splitting), branches (layout and
+   compare-and-branch selection), then LLVM's IR-level third (GVN, LICM).
+   The x86-64 backends make no sibling call, so outlining stays off there.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2

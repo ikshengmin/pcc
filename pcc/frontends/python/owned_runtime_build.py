@@ -83,6 +83,30 @@ def cross_module_inline_target(target: str) -> bool:
     return target.startswith(("arm64-apple-darwin", "aarch64-apple-darwin"))
 
 
+OUTLINE_PASS = "outline-slow-paths"
+
+
+def _without_pass(passes: str, pass_name: str) -> str:
+    return ",".join(name.strip() for name in passes.split(",")
+                    if name.strip() and name.strip() != pass_name)
+
+
+def _defers_outlining(runtime_dir, name: str, target: str, passes: str) -> bool:
+    """Whether a two-phase build outlines ``name``'s slow paths in its object
+    phase instead of its IR phase.
+
+    The object phase inlines cross-module definitions into an importing
+    module. Outlining before that would let the inliner copy a fast path,
+    with the tail calls into its slow functions, into a caller, where those
+    calls are ordinary calls that need the caller's frame. So the outlining
+    of an importing module runs after the import, whether or not anything
+    is imported.
+    """
+    return (OUTLINE_PASS in [part.strip() for part in passes.split(",")]
+            and cross_module_inline_target(target)
+            and _imports_cross_module_definitions(runtime_dir, name))
+
+
 def _imports_cross_module_definitions(runtime_dir, name: str) -> bool:
     """Freestanding modules allow no helper beyond their exports, the kernel
     keeps its uninlined paths and modules without implicit polls must not
@@ -374,6 +398,8 @@ def _build_runtime_module(runtime_dir, name, target, output_dir, passes, config,
         # text, as the single-phase build kept it in memory.
         with open(ir_path, "rb") as stream:
             ir_text = stream.read().decode("utf-8").replace("\r\n", "\n")
+        outlined = False
+        deferred = _defers_outlining(runtime_dir, name, target, passes)
         if inline_table and _imports_cross_module_definitions(runtime_dir, name):
             from pcc.frontends.python.runtime_cross_module_inline import (
                 IMPORT_PASSES,
@@ -381,10 +407,16 @@ def _build_runtime_module(runtime_dir, name, target, output_dir, passes, config,
             )
             imported, copies = import_cross_module_definitions(ir_text, inline_table, name)
             if copies:
-                ir_text = optimize_ir(imported, IMPORT_PASSES)
+                import_passes = IMPORT_PASSES if deferred else _without_pass(IMPORT_PASSES, OUTLINE_PASS)
+                ir_text = optimize_ir(imported, import_passes)
+                outlined = deferred
                 # The receipt hashes the IR the object is emitted from.
                 with open(ir_path, "w", encoding="utf-8") as stream:
                     stream.write(ir_text)
+        if deferred and not outlined:
+            ir_text = optimize_ir(ir_text, OUTLINE_PASS + ",dce")
+            with open(ir_path, "w", encoding="utf-8") as stream:
+                stream.write(ir_text)
         return _emit_runtime_module_object(
             name, source, ir_path, object_path, ir_text, target, runtime_dir, config,
             source_transform, image_local_globals,
@@ -425,6 +457,8 @@ def _build_runtime_module(runtime_dir, name, target, output_dir, passes, config,
     remaining_passes = _runtime_passes_after_frontend(passes, frontend_prefix, ir_text)
     if remaining_passes is not None and name == _THREAD_KERNEL_MODULE:
         remaining_passes = _without_inlining(remaining_passes)
+    if remaining_passes and phase == "ir" and _defers_outlining(runtime_dir, name, target, passes):
+        remaining_passes = _without_pass(remaining_passes, OUTLINE_PASS)
     if remaining_passes:
         ir_text = optimize_ir(ir_text, remaining_passes)
     with open(ir_path, "w", encoding="utf-8") as stream:

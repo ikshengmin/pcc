@@ -28,9 +28,11 @@ INLINE_SUFFIX = ".pcc.xinl"
 # Copies the inliner then sees; its own limit (96) decides the call sites.
 MAX_INSTRUCTIONS = 64
 # Twice, as the runtime's own list: a copy's calls to other copies are
-# inlined in the second round.
+# inlined in the second round. Slow paths are outlined after this inlining
+# (owned_runtime_build defers the module's own outlining to it).
 IMPORT_PASSES = (
-    "inline-defined-wide,instsimplify,inline-defined-wide,jump-thread,instsimplify,instcombine,dce"
+    "inline-defined-wide,instsimplify,inline-defined-wide,jump-thread,instsimplify,instcombine,"
+    "outline-slow-paths,dce"
 )
 
 _DEFINE_RE = re.compile(

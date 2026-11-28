@@ -197,3 +197,26 @@ def test_the_build_imports_only_into_ordinary_darwin_modules(tmp_path):
     (py / "py_runtime_log.py").write_text("x = 1\n")
     assert not build._imports_cross_module_definitions(str(tmp_path), "py_runtime_log")
     assert not build._imports_cross_module_definitions(str(tmp_path), "missing")
+
+
+def test_importing_modules_outline_after_the_object_phase_import(tmp_path):
+    """An importing module's slow paths are outlined after its imports are
+    inlined: in the object phase's IMPORT_PASSES, or alone when nothing
+    was imported. Others outline in the IR phase."""
+    from pcc.frontends.python import owned_runtime_build as build
+
+    py = tmp_path / "py"
+    py.mkdir()
+    (py / "plain.py").write_text("x = 1\n")
+    (py / "bare.py").write_text('"""doc"""\n__pcc_freestanding__ = True\n')
+    passes = "mem2reg,sroa,instcombine,outline-slow-paths,dce"
+    assert build._defers_outlining(str(tmp_path), "plain", "arm64-apple-darwin", passes)
+    assert not build._defers_outlining(str(tmp_path), "bare", "arm64-apple-darwin", passes)
+    assert not build._defers_outlining(str(tmp_path), "plain", "aarch64-unknown-linux-gnu", passes)
+    assert not build._defers_outlining(str(tmp_path), "plain", "arm64-apple-darwin",
+                                       "mem2reg,sroa,dce")
+    assert build._without_pass(passes, build.OUTLINE_PASS) == "mem2reg,sroa,instcombine,dce"
+    names = xinline.IMPORT_PASSES.split(",")
+    assert names.index("outline-slow-paths") == len(names) - 2 and names[-1] == "dce"
+    assert names.index("outline-slow-paths") > max(
+        index for index, name in enumerate(names) if name.startswith("inline"))

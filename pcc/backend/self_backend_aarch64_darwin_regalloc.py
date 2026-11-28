@@ -2433,7 +2433,25 @@ def _is_unchanged_argument_tail_call(func: ParsedFunction, kernel, call_id: int)
     return True
 
 
+def _is_frameless_sibling_call(func: ParsedFunction, kernel, call_id: int) -> bool:
+    """A planned sibling call a frameless function may make.
+
+    Its operands are scalar register arguments (the simple-call predicate),
+    so their setup is one parallel move into x0-x7 with no stack argument,
+    and nothing is live after it: the transfer never returns to this
+    function. An unchanged-argument forward is the case with no move.
+    """
+    if call_id not in func.aarch64_tail_call_ids:
+        return False
+    if _is_unchanged_argument_tail_call(func, kernel, call_id):
+        return True
+    return call_operands_may_use_caller_registers(kernel, call_id)
+
+
 def _unchanged_tail_positions(func: ParsedFunction, kernel, block_base) -> set[int]:
+    """Positions of planned sibling calls. None returns, so no value is live
+    across one: they are not call barriers (each operand already ends at
+    its call)."""
     positions: set[int] = set()
     if not func.aarch64_tail_call_ids:
         return positions
@@ -2443,7 +2461,7 @@ def _unchanged_tail_positions(func: ParsedFunction, kernel, block_base) -> set[i
             continue
         last: CompilerInt4 = kernel.instruction_metadata_by_id(block.first + block.second - 1)
         if last.first == PARSED_INSTRUCTION_KIND_CALL:
-            if _is_unchanged_argument_tail_call(func, kernel, last.second):
+            if _is_frameless_sibling_call(func, kernel, last.second):
                 positions.add(block_base[block_id] + block.second - 1)
     return positions
 
@@ -2496,7 +2514,7 @@ def _is_frameless_leaf(func: ParsedFunction, kernel) -> bool:
             instruction_id = block_fact.first + instruction_index
             metadata: CompilerInt4 = kernel.instruction_metadata_by_id(instruction_id)
             if metadata.first == PARSED_INSTRUCTION_KIND_CALL:
-                if not _is_unchanged_argument_tail_call(func, kernel, metadata.second):
+                if not _is_frameless_sibling_call(func, kernel, metadata.second):
                     return False
                 # The sibling transfer materializes no result or return PC in
                 # this frame. Its old result slot is never addressed.

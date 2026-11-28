@@ -45,7 +45,10 @@ PCC_IR_TO_OBJ ?= $(PYTHON) -m pcc.tools.ir_to_obj
 # constants decide the branch, and merging the straight-line remains, turns
 # them into direct compare-and-branch chains (pcc_gc_store_root: 295 -> 165
 # blocks, 157 -> 29 unconditional branches).
-PCC_RUNTIME_IR_PASSES ?= mem2reg,sroa,instsimplify,inline-defined-wide,instsimplify,inline-defined-wide,jump-thread,instsimplify,instcombine,dce
+# outline-slow-paths: a helper's null, tagged and immortal exits run with no
+# frame once the paths that call or need stack memory are outlined behind
+# tail calls (LLVM shrink-wraps the same exits).
+PCC_RUNTIME_IR_PASSES ?= mem2reg,sroa,instsimplify,inline-defined-wide,instsimplify,inline-defined-wide,jump-thread,instsimplify,instcombine,outline-slow-paths,dce
 PCC_REPO_ROOT ?= $(abspath ../..)
 
 CFLAGS   ?= -O2 -fPIC -Wall -Wextra -std=c11
