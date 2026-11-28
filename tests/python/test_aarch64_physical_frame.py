@@ -4,6 +4,7 @@ The collect fixture is emitted production IR, not a replacement runtime. The
 standalone native test owns its tiny root-rewrite fixture in ordinary IR.
 """
 from pathlib import Path
+import re
 import platform
 import subprocess
 import sys
@@ -57,7 +58,9 @@ def test_real_collect_shape_reclaims_unused_spill_holes(monkeypatch):
     assert observations == [(144, 32, [(24, 32)], 6)]
     body = assembly.split("_pcc_gc_collect:", 1)[1].split(".section", 1)[0]
     assert "[sp, #-80]!" in body
-    assert "[x29, #-32]" in body and "xzr" in body
+    # The reclaimed hole (24, 32) is not cleared: nothing scans stacks
+    # conservatively (see test_aarch64_padding_zero_stores).
+    assert not re.search(r"\b[wx]zr, \[x29, #-32\]", body), body
     for old in (120, 128, 136):
         assert f"[x29, #-{old}]" not in body
     for new in (8, 16, 24):
@@ -125,7 +128,8 @@ entry:
         layout.restore(function)
         old_plan.packed_records.close()
     assembly = backend.emit_aarch64_darwin_asm(source)
-    assert "sturb wzr" in assembly  # byte padding beside the 25-byte object
+    # The byte padding beside the 25-byte object is not cleared any more.
+    assert "sturb wzr" not in assembly
 
 
 @pytest.mark.parametrize("kind", ("dynamic", "tls", "linux_vararg"))

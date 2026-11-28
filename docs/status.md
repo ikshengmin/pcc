@@ -3609,6 +3609,14 @@ in the relevant section or issue and removes the entry.
    an intrinsic call lies on a path reaching it (instead of anywhere in
    the function) gave h35 -> h36-sib 98334 -> 98328 (-0.01%): the hot
    functions of that shape were the list entries (aj) split by hand.
+   (al) Merged as a simplification (Claude, 2026-11-28): the AArch64
+   prologue no longer clears frame alignment holes and the odd
+   callee-saved pad. Only conservative stack scanning read them, and
+   `pcc_thread_enable_conservative_roots` has no caller, so the clears
+   were dead stores on every call. Exact h35-wrap -> h37-nohole 98334 ->
+   97275 (-1.08%); throughput h35 -> h37 (control h35c) w1 76765 -> 77230
+   (+0.6%, 5/5 pairs, inside the 1.0% control floor), w4 -0.5% (floor
+   4.8%): no measured throughput gain.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2

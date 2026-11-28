@@ -126,13 +126,12 @@ def test_slot_clearing_pairs_descending_zero_stores():
         zero_stores = [line.strip() for line in initialization.splitlines()
                        if re.fullmatch(r"\s+(?:stp xzr, xzr|stur xzr), \[x29, #-\d+\]", line)]
         # The 48-byte aligned frame has five 8-byte slots. Its remaining
-        # alignment word is cleared in the prologue, independently of the
-        # body-store pairing pass, so conservative capture sees no stale root.
-        assert zero_stores[:1] == ["stur xzr, [x29, #-48]"]
+        # alignment word is no longer cleared in the prologue: nothing scans
+        # stacks conservatively (see test_aarch64_padding_zero_stores).
         expected = paired_stores if optimize else [
             f"stur xzr, [x29, #-{offset}]" for offset in slot_offsets
         ]
-        assert zero_stores[1:] == expected
+        assert zero_stores == expected
 
     # Cross-emitted production object bytes must retain the same stores;
     # assembly text alone does not exercise the structured instruction route.
@@ -158,7 +157,7 @@ def test_slot_clearing_pairs_descending_zero_stores():
         elif word & 0xFFE00FFF == 0xF80003BF:
             immediate = (word >> 12) & 0x1FF
             stores.append(("stur", immediate - 512 if immediate >= 256 else immediate))
-    assert stores == [("stur", -48), ("stp", -16), ("stp", -32), ("stur", -40)]
+    assert stores == [("stp", -16), ("stp", -32), ("stur", -40)]
 
 
 @_NATIVE

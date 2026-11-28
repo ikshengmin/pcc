@@ -80,8 +80,6 @@ def function_uses_darwin_tls(func: ParsedFunction, module_symbols: PreparedModul
 
 
 # Zeroing stores for frame alignment holes, by width in bytes.
-_PADDING_UNSCALED_STORES = {8: "stur", 4: "stur", 2: "sturh", 1: "sturb"}
-_PADDING_STORES = {8: "str", 4: "str", 2: "strh", 1: "strb"}
 
 
 def emit_function_prologue(
@@ -172,36 +170,14 @@ def emit_function_prologue(
         )
         # Save before any argument is committed into a callee-saved register.
         lines.extend(emit_callee_saved_frame(func, False))
-        # Reserved alignment bytes contain no program storage. Clear them
-        # before the first body poll so raw stack capture cannot retain a
-        # prior activation's object through an uninitialized frame hole.
-        # Each store is the widest naturally aligned one (x29 is 16-byte
-        # aligned) that stays inside the hole: a 4-byte hole beside an i32
-        # slot is one ``stur wzr``, not four byte stores.
-        for low, high in padding:
-            offset = high
-            while offset > low:
-                width = 1
-                for candidate in (8, 4, 2):
-                    if offset % candidate == 0 and offset - low >= candidate:
-                        width = candidate
-                        break
-                register = "xzr" if width == 8 else "wzr"
-                if offset <= 255:
-                    lines.append(emitted_memory_instruction_line(
-                        _PADDING_UNSCALED_STORES[width], register, "x29", -offset,
-                    ))
-                else:
-                    lines.extend(emit_add_offset("x9", "x29", -offset))
-                    lines.append(emitted_memory_instruction_line(
-                        _PADDING_STORES[width], register, "x9",
-                    ))
-                offset -= width
-        count = len(func.aarch64_callee_saved)
-        if count % 2 != 0:
-            lines.append(emitted_memory_instruction_line(
-                "str", "xzr", "sp", func.platform_frame_extra + count * 8,
-            ))
+        # Alignment holes and the odd callee-saved pad stay as they are.
+        # They were cleared for the tracing collectors' conservative stack
+        # scans (a hole could hold an earlier activation's object); the one
+        # collector roots compiled frames by their precise stack maps, and
+        # the conservative stack roots and raw stack capture behind
+        # pcc_thread_conservative_roots_enabled are never enabled
+        # (pcc_thread_enable_conservative_roots has no caller). The clears
+        # ran on every call: about 1000 stores per handler request.
     if func.platform_frame_extra:
         # Preserve incoming variadic registers before normal argument lowering.
         for index in range(8):

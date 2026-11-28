@@ -1,13 +1,14 @@
-"""Frame alignment holes are cleared with the widest aligned stores.
+"""Frame alignment holes are left as they are.
 
-The prologue clears reserved alignment bytes so raw stack capture cannot
-retain an earlier activation's pointer through a frame hole. It cleared
-every hole that was not 8-byte aligned one byte at a time: a 4-byte hole
-beside an i32 slot took four ``sturb`` on every call, about 5k executed
-stores more than LLVM's code generation in a stepped handler window
-(docs/status.md, item 3 P0 notes). Each store is now the widest naturally
-aligned one (8, 4, 2, then 1 byte) that stays inside the hole; the same
-bytes are cleared. The program runs and reads its slots back.
+The prologue cleared reserved alignment bytes (and the odd callee-saved
+pad) so that a conservative stack scan of the removed tracing collectors
+could not retain an earlier activation's pointer through a frame hole. The
+one collector roots compiled frames by their precise stack maps, and the
+conservative stack roots and raw stack capture behind
+``pcc_thread_conservative_roots_enabled`` are never enabled
+(``pcc_thread_enable_conservative_roots`` has no caller), so the clears
+were about 2000 stores per handler request that nothing read
+(docs/status.md, item 3). The program runs and reads its slots back.
 """
 import re
 import subprocess
@@ -57,18 +58,20 @@ def _prologue(assembly: str, name: str) -> list[str]:
     return [line.strip() for line in body.splitlines() if line.strip()]
 
 
-def test_alignment_holes_use_the_widest_aligned_zero_stores():
+def test_alignment_holes_are_not_cleared():
     lines = _prologue(emit_aarch64_darwin_asm(SOURCE, optimize=True), "flags")
-    zeroes = [line for line in lines if re.match(r"stu?r[bh]? [wx]zr, \[x29", line)]
-    assert zeroes, lines
-    assert any(line.startswith("stur wzr, [x29, #-") for line in zeroes), zeroes
-    for line in zeroes:
-        width = {"sturb": 1, "sturh": 2}.get(line.split()[0], 8 if "xzr" in line else 4)
-        offset = int(line.rsplit("#-", 1)[1].rstrip("]"))
-        assert offset % width == 0, line  # naturally aligned below x29
-    # No hole is cleared byte by byte where a wider aligned store fits.
-    for first, second in zip(zeroes, zeroes[1:]):
-        assert not (first.startswith("sturb") and second.startswith("sturb")), zeroes
+    zeroes = [line for line in lines
+              if re.match(r"stu?r[bh]? [wx]zr, \[(x29|sp)", line)]
+    assert zeroes == [], lines
+
+
+def test_nothing_enables_the_conservative_stack_roots():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[2] / "pcc"
+    call = re.compile(r"(?<!def )\bpcc_thread_enable_conservative_roots\(\)")
+    callers = [path for path in root.rglob("*.py")
+               if call.search(path.read_text(encoding="utf-8"))]
+    assert callers == [], callers
 
 
 # owned Darwin arm64 execution
