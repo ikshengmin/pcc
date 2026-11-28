@@ -1060,6 +1060,23 @@ def _strict_check_body(body, indexed, *, actual=False):
     closure.require_definition(text, symbol, bodies=bodies)
 
 
+def _fused_catch_text(body, *, actual=False):
+    from pcc.frontends.python.fused_protocol_pass import fused_protocol_text
+
+    symbol = 'user_pcc_backend_precise_stackmap__native_record_reads_available' if actual else 'user_test'
+    header = ('define i1 @' + symbol + '()' if actual
+              else 'define ptr @' + symbol + '(ptr %exception, i1 %owned)')
+    text, changed = fused_protocol_text(header + ' {\n' + body + '}\n')
+    return symbol, text, changed
+
+
+def _strict_check_section(text, symbol, indexed):
+    from tests.integration import test_worker_size_prior_closed_world as closure
+
+    bodies = closure._index_definition_bodies(text) if indexed else None
+    closure.require_definition(text, symbol, bodies=bodies)
+
+
 @pytest.mark.parametrize('indexed', (False, True))
 @pytest.mark.parametrize('shape', ('direct', 'rooted', 'quoted', 'anonymous', 'restore-current', 'actual-source-ir'))
 def test_strict_body_accepts_only_catch_class_references(indexed, shape):
@@ -1101,7 +1118,56 @@ def test_strict_body_accepts_only_catch_class_references(indexed, shape):
     local_body = body.replace('pcc_gc_frame_enter', 'pcc_gc_frame_enter_local')
     local_body = local_body.replace('pcc_gc_frame_leave', 'pcc_gc_frame_leave_local')
     _strict_check_body(local_body, indexed, actual=shape == 'actual-source-ir')
+    if shape in ('rooted', 'anonymous', 'restore-current', 'actual-source-ir'):
+        # Run the actual production transform on the old transport, including
+        # the byte-pinned historical source IR, rather than hand-authoring an
+        # equivalent-looking replacement. Its dedicated NULL word is in the
+        # owning module section, outside the function body.
+        symbol, fused, changed = _fused_catch_text(local_body, actual=shape == 'actual-source-ir')
+        assert changed and '@.pcc.gc.null.slot = internal constant ptr null' in fused
+        _strict_check_section(fused, symbol, indexed)
     if shape == 'rooted':
+        # The #658 actual failure is a null comparison on the ROOT ADDRESS,
+        # not a comparison (or other use) of the caught exception CLASS.
+        # Match the exact three production operations and prove the gate still
+        # rejects counterfeit guards, mutable sentinels and escaped aliases.
+        symbol, fused, changed = _fused_catch_text(_STRICT_CATCH_BODY)
+        assert changed
+        guard = '%class.live.pcc.null = icmp eq ptr %class.load, null'
+        select = '%class.live.pcc.slot = select i1 %class.live.pcc.null, ptr @.pcc.gc.null.slot, ptr %class.load'
+        load = '%class.live = load ptr, ptr %class.live.pcc.slot'
+        definition = '@.pcc.gc.null.slot = internal constant ptr null'
+        for old, new in (
+            (definition, ''),
+            (definition, definition + '\n' + definition),
+            (definition, definition + '\n@".pcc.gc.null.slot" = internal constant ptr null'),
+            (definition, definition + '\n@"\\2Epcc.gc.null.slot" = internal constant ptr null'),
+            (definition, '@.pcc.gc.null.slot = internal global ptr null'),
+            (definition, '@.pcc.gc.null.slot = internal constant ptr @other'),
+            (guard, guard.replace('icmp eq', 'icmp ne')),
+            (guard, guard.replace('%class.load', '%class.slot')),
+            (select, select.replace('ptr @.pcc.gc.null.slot, ptr %class.load', 'ptr %class.load, ptr @.pcc.gc.null.slot')),
+            (select, select.replace('%class.live.pcc.null', '%owned')),
+            (select, select.replace('@.pcc.gc.null.slot', '@other')),
+            (load, load.replace('%class.live.pcc.slot', '%class.load')),
+            (select, select + '\n call void @unowned_sink(ptr %class.live.pcc.slot)'),
+            (guard, guard + '\n call void @unowned_flag(i1 %class.live.pcc.null)'),
+            (load, load + '\n call void @unowned_sink(ptr %class.live.pcc.slot)'),
+            (load, load + '\n call void @unowned_flag(i1 %class.live.pcc.null)'),
+            (load, load + '\n call void @unowned_sink(ptr %"class.live.pcc.slot")'),
+            (load, load + '\n call void @unowned_flag(i1 %"\\63lass.live.pcc.null")'),
+            (load, load + '\n call void @py_raise_owned(ptr %class.live)'),
+            (' ret ptr null', ' ret ptr %class.live'),
+        ):
+            assert fused.count(old) == 1, old
+            with pytest.raises(AssertionError):
+                _strict_check_section(fused.replace(old, new), symbol, indexed)
+        for substitute in ('%exc.cls.NotImplementedError.1', '%cleanup.slot'):
+            invalid = fused.replace(guard, guard.replace('%class.load', substitute))
+            invalid = invalid.replace(select, select.replace('%class.load', substitute))
+            with pytest.raises(AssertionError):
+                _strict_check_section(invalid, symbol, indexed)
+        # Exact operation rejected by Windows f238 run 43355964970,
         # Exact operation rejected by Windows f238 run 43355964970,
         # job 131897138960. The surrounding reduced body is synthetic.
         local_body = local_body.replace(
@@ -1173,6 +1239,10 @@ def test_strict_body_rejects_class_construction_or_escape(indexed, shape):
     for candidate in (body, local_body):
         with pytest.raises(AssertionError):
             _strict_check_body(candidate, indexed)
+        symbol, fused, changed = _fused_catch_text(candidate)
+        if changed:
+            with pytest.raises(AssertionError):
+                _strict_check_section(fused, symbol, indexed)
     if shape == 'unparsed-frame-operand':
         local_catch = _STRICT_CATCH_BODY.replace('pcc_gc_frame_enter', 'pcc_gc_frame_enter_local')
         local_catch = local_catch.replace('pcc_gc_frame_leave', 'pcc_gc_frame_leave_local')

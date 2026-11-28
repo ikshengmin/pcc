@@ -173,7 +173,7 @@ def require_definition(text, symbol, *, bodies=None):
     body = matches[0].group("body")
     assert not re.search(r"^define\b", body, re.M), (symbol, "cross-function match")
     assert "strict.nolib" not in body and "@py_cpy_" not in body and '@"py_cpy_' not in body
-    require_no_notimplemented_stub(body, symbol)
+    require_no_notimplemented_stub(body, symbol, section=text)
     assert re.search(r"\bcall\b", body), (symbol, "empty/return-only replacement")
 
 

@@ -5,6 +5,7 @@ lookup, pointer copies, local owned roots, and handler matching are admitted.
 Unknown uses stay rejected. The integration gate still verifies the whole IR.
 """
 
+from collections import Counter
 import re
 
 
@@ -14,6 +15,53 @@ _TOKEN = re.compile(_LOCAL)
 _ASSIGN = re.compile(r'\s*(' + _LOCAL + r')\s*=\s*(.*)')
 _CALL = re.compile(r'\bcall\b[^@\n]*@("[^"\n]+"|[-\w.$]+)\((.*)\)')
 _CLASS = re.compile(r'@"?py_exc_builtin_class"?\(\s*i64\s+11\s*\)')
+# The fused collector's owned IR pass emits this exact unquoted ASCII shape.
+# A guard on a local ROOT ADDRESS is not a permission to inspect a class value.
+_FUSED_NAME = r'%[A-Za-z0-9_.$-]+'
+_FUSED_GUARD = re.compile(r'(' + _FUSED_NAME + r')\.pcc\.null = icmp eq ptr (' + _FUSED_NAME + r'), null')
+_NULL_SLOT = '@.pcc.gc.null.slot'
+_NULL_SLOT_DEFINITION = _NULL_SLOT + ' = internal constant ptr null'
+_GLOBAL_DECLARATION = re.compile(r'^[ \t]*(' + _GLOBAL + r')[ \t]*=[^\n]*$', re.M)
+
+
+def _identifier_spelling(token):
+    # LLVM permits quoted and hex-escaped spellings of the same identifier.
+    # Count them too before deleting the temporary names from the proof.
+    if token[1:2] == '"':
+        return token[0] + re.sub(r'\\([0-9A-Fa-f]{2})', lambda match: chr(int(match[1], 16)), token[2:-1])
+    return token
+
+
+def _canonical_fused_reads(body, symbol, section):
+    if _NULL_SLOT not in body:
+        return body
+    # A lookalike mutable/non-null/ambiguous global is not the pass's null
+    # word. The owning section (not another module) must supply its definition.
+    declarations = [match[0].strip() for match in _GLOBAL_DECLARATION.finditer(section or '')
+                    if _identifier_spelling(match[1]) == _NULL_SLOT]
+    assert declarations == [_NULL_SLOT_DEFINITION], (symbol, 'unproved fused null slot')
+    occurrences = Counter(_identifier_spelling(token) for token in _TOKEN.findall(body))
+    lines = body.splitlines()
+    normalized = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        guard = _FUSED_GUARD.fullmatch(line.strip())
+        if guard and index + 2 < len(lines):
+            value, slot = guard.groups()
+            null_flag, read_slot = value + '.pcc.null', value + '.pcc.slot'
+            if (lines[index + 1].strip() == read_slot + ' = select i1 ' + null_flag + ', ptr ' + _NULL_SLOT + ', ptr ' + slot
+                    and lines[index + 2].strip() == value + ' = load ptr, ptr ' + read_slot):
+                # Neither guard intermediate may have another use/definition.
+                # Match all three operations before replacing even one; all
+                # other instruction shapes retain the original fail-closed check.
+                assert occurrences[null_flag] == occurrences[read_slot] == 2, (symbol, 'escaped fused read intermediate')
+                normalized.append(value + ' = call ptr (ptr, ptr) @pcc_gc_load_ptr(ptr null, ptr ' + slot + ')')
+                index += 3
+                continue
+        normalized.append(line)
+        index += 1
+    return '\n'.join(normalized)
 
 
 def _pointer(argument):
@@ -21,7 +69,7 @@ def _pointer(argument):
     return match[1] if match else None
 
 
-def require_no_notimplemented_stub(body, symbol):
+def require_no_notimplemented_stub(body, symbol, *, section=None):
     # Both literal-message and value-message constructors create instances.
     assert not re.search(r'@"?py_exc_new(?:_with_value)?"?\(\s*i64\s+11\s*,', body), symbol
     # First-class construction can discard the builtin-class lookup's result,
@@ -32,6 +80,9 @@ def require_no_notimplemented_stub(body, symbol):
         assert "NotImplementedError" not in body, symbol
         return
 
+    # Reuse the legacy catch-only may-flow proof for the exact equivalent
+    # fused read; this does not admit arbitrary icmp/select instructions.
+    body = _canonical_fused_reads(body, symbol, section)
     instructions, classes, allocated, addresses, selected = [], set(), set(), {}, set()
     for line in body.splitlines():
         assigned = _ASSIGN.fullmatch(line)
