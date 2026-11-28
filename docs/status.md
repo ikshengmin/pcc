@@ -3617,6 +3617,20 @@ in the relevant section or issue and removes the entry.
    97275 (-1.08%); throughput h35 -> h37 (control h35c) w1 76765 -> 77230
    (+0.6%, 5/5 pairs, inside the 1.0% control floor), w4 -0.5% (floor
    4.8%): no measured throughput gain.
+   (am) Ceilings measured, not implemented (Claude, 2026-11-28, h37 kept
+   record): `steps --shrink` counts the callee-saved saves and restores
+   of invocations that never touch x19-x28. Of 4940 per request only 327
+   (0.34%) run on such invocations (`pcc_thread_safepoint` 150,
+   `pcc_current_thread_id` 105, `py_obj_truthy_rooted` 64), so deferring
+   the saves to the blocks that use them stays below the noise floor; the
+   save/restore class is the allocator giving call-crossing values
+   callee-saved registers. Repeated 64-bit constant materializations
+   (`movk` chains rebuilt within 40 steps in one function, mostly the
+   allocator's cell-state words around a CAS) are 324 per request
+   (0.33%). Request shape on h37: runtime 64924 (77.9%), program 15135,
+   dyld's TLV thunk 3005 (376 thread-local accesses per request, 66 of
+   them in list append's lock and unlock); `json.dumps` of the
+   five-string payload is about 50000 of the 97275.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2

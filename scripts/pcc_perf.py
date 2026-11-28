@@ -25,8 +25,12 @@
                         request thread (Darwin, lldb single-stepping); with B,
                         the functions that differ most; --callers F / --callees
                         F count the calls into / out of F per request with
-                        their inclusive lengths; --reuse attributes the kept
-                        record instead of stepping again
+                        their inclusive lengths; --annotate F lists each of
+                        F's instructions with its executions per request;
+                        --shrink counts the callee-saved saves and restores
+                        of invocations that never use those registers;
+                        --reuse attributes the kept record instead of
+                        stepping again
     table NAME          one and four workers, against the recorded asyncio
                         figure for the same worker count
     asyncio             measure the CPython asyncio counterpart with one and
@@ -2038,6 +2042,130 @@ def step_instruction_classes(binary: Path, pcs: list[int], slide: int) -> dict:
     return dict(kinds)
 
 
+def step_annotation(binary: Path, symbols: list[tuple[int, str]], pcs: list[int], slide: int,
+                    function: str) -> list[tuple[int, str, int]]:
+    """(address, instruction, executions) of each instruction of ``function``
+    in address order: where its own instructions go, with the calls it
+    makes counted at their call sites only."""
+    start = step_marker_address(symbols, function)
+    later = [address for address, _name in symbols if address > start]
+    end = min(later) if later else start + (1 << 62)
+    executed = collections.Counter(pc - slide for pc in pcs if start <= pc - slide < end)
+    text = subprocess.run(["xcrun", "otool", "-tv", str(binary)], capture_output=True,
+                          text=True, check=True).stdout
+    rows = []
+    for line in text.splitlines():
+        if len(line) > 17 and line[16] == "\t":
+            try:
+                address = int(line[:16], 16)
+            except ValueError:
+                continue
+            if start <= address < end:
+                rows.append((address, line[17:], executed.get(address, 0)))
+    return rows
+
+
+def print_step_annotation(name: str, function: str, rows: list, requests: int) -> None:
+    """Executions per request of each instruction of one function."""
+    total = sum(count for _address, _text, count in rows)
+    print(f"{name}: {function}, {total / requests:.1f} own instructions per request")
+    for address, text, count in rows:
+        mark = f"{count / requests:8.2f}" if count else "       ."
+        print(f"{mark}  {address:x}  {text}")
+
+
+_CALLEE_SAVED_RE = re.compile(r"\b[xw](?:19|2[0-8])\b")
+
+
+def callee_saved_use(text: str) -> tuple[bool, bool]:
+    """(saves, touches) of one ``otool -tv`` instruction: whether it saves or
+    restores callee-saved registers x19-x28 at ``[sp``, and whether it
+    otherwise reads or writes one of them."""
+    mnemonic, _tab, operands = text.partition("\t")
+    mnemonic = mnemonic.strip()
+    operands = operands.split(";", 1)[0].strip()
+    named = _CALLEE_SAVED_RE.findall(operands)
+    if mnemonic in ("stp", "ldp", "str", "ldr") and "[sp" in operands:
+        data = [part.strip() for part in operands.split("[", 1)[0].split(",") if part.strip()]
+        if data and all(_CALLEE_SAVED_RE.fullmatch(register) and register.startswith("x")
+                        for register in data):
+            return True, False
+    return False, bool(named)
+
+
+def step_shrink_wrap(binary: Path, symbols: list[tuple[int, str]], pcs: list[int],
+                     slide: int) -> dict:
+    """function -> [invocations, invocations that never use a callee-saved
+    register, saves and restores those executed, saves and restores of all
+    invocations]: the ceiling of saving callee-saved registers only on the
+    paths that use them. An invocation runs from a step onto the function's
+    first instruction to the next one (a recursive call splits it); steps
+    before the record's first entry belong to no counted invocation."""
+    addresses = [address for address, _name in symbols]
+    wanted = {pc - slide for pc in pcs}
+    text = subprocess.run(["xcrun", "otool", "-tv", str(binary)], capture_output=True,
+                          text=True, check=True).stdout
+    kinds: dict[int, tuple[bool, bool]] = {}
+    for line in text.splitlines():
+        if len(line) > 17 and line[16] == "\t":
+            try:
+                address = int(line[:16], 16)
+            except ValueError:
+                continue
+            if address in wanted:
+                kinds[address] = callee_saved_use(line[17:])
+    rows: dict = {}
+    current: dict = {}
+
+    def close(name: str) -> None:
+        opened = current.pop(name, None)
+        if opened is None:
+            return
+        row = rows.setdefault(name, [0, 0, 0, 0])
+        row[0] += 1
+        if not opened[1]:
+            row[1] += 1
+            row[2] += opened[0]
+        row[3] += opened[0]
+
+    for pc in pcs:
+        address = pc - slide
+        index = bisect.bisect_right(addresses, address) - 1
+        if index < 0:
+            continue
+        start, name = symbols[index]
+        if address == start:
+            close(name)
+            current[name] = [0, False]
+        opened = current.get(name)
+        if opened is None:
+            continue
+        saves, touches = kinds.get(address, (False, False))
+        if saves:
+            opened[0] += 1
+        if touches:
+            opened[1] = True
+    for name in list(current):
+        close(name)
+    return rows
+
+
+def print_step_shrink_wrap(name: str, rows: dict, requests: int, limit: int) -> None:
+    """Saves and restores per request that run on invocations never using
+    the registers they save, by function."""
+    avoidable = sum(row[2] for row in rows.values())
+    total = sum(row[3] for row in rows.values())
+    print(f"{name}: callee-saved saves and restores per request {total / requests:.1f}, "
+          f"on invocations that never use those registers {avoidable / requests:.1f}")
+    print("(invocations, unused share, avoidable per request, all per request)")
+    ordered = sorted(rows.items(), key=lambda item: (-item[1][2], item[0]))
+    for function, (calls, unused, saved, everything) in ordered[:limit]:
+        if not saved:
+            break
+        print(f"{calls / requests:8.1f} {100.0 * unused / calls:5.0f}% "
+              f"{saved / requests:8.1f} {everything / requests:8.1f}  {function}")
+
+
 def parse_step_sections(otool_text: str) -> list[tuple[int, int, str]]:
     """(start, end, name) of each __TEXT section in ``otool -l`` output."""
     sections = []
@@ -2126,16 +2254,18 @@ def step_rows(first: dict, first_requests: int, second: dict | None, *,
 
 def run_steps(name: str, count: int, warm: int, marker: str, rounds: int,
               reuse: bool = False, callers: str = "", callees: str = "",
-              classes: bool = False) -> tuple:
+              classes: bool = False, annotate: str = "", shrink: bool = False) -> tuple:
     """(instructions by function, marker hits, steps, exact request lengths,
-    step_callers of ``callers`` or None, step_callees of ``callees`` or None)
-    for one arm. ``reuse`` reads the arm's kept record of the same count and
+    step_callers of ``callers`` or None, step_callees of ``callees`` or None,
+    instruction classes or None, step_annotation of ``annotate`` or None,
+    step_shrink_wrap or None) for one arm. ``reuse`` reads the arm's kept record of the same count and
     marker instead of stepping again."""
     binary = binary_of(name)
     kept = arm_dir(name) / f"steps-{count}-{marker}.txt"
     if reuse and kept.is_file():
         markers, slide, pcs = parse_step_output(kept.read_text())
-        return _step_attribution(binary, markers, slide, pcs, marker, callers, callees, classes)
+        return _step_attribution(binary, markers, slide, pcs, marker, callers, callees, classes,
+                                 annotate, shrink)
     with tempfile.TemporaryDirectory(prefix="pcc-steps-") as scratch:
         script = Path(scratch) / "pcc_step.py"
         script.write_text(_STEP_SCRIPT)
@@ -2154,11 +2284,13 @@ def run_steps(name: str, count: int, warm: int, marker: str, rounds: int,
         markers, slide, pcs = parse_step_output(record)
     # Keep the raw record: a new attribution needs no new half-hour of stepping.
     kept.write_text(record)
-    return _step_attribution(binary, markers, slide, pcs, marker, callers, callees, classes)
+    return _step_attribution(binary, markers, slide, pcs, marker, callers, callees, classes,
+                             annotate, shrink)
 
 
 def _step_attribution(binary: Path, markers: int, slide: int, pcs: list[int], marker: str,
-                      callers: str, callees: str, classes: bool = False) -> tuple:
+                      callers: str, callees: str, classes: bool = False,
+                      annotate: str = "", shrink: bool = False) -> tuple:
     nm = subprocess.run(["xcrun", "nm", "-n", str(binary)], capture_output=True, text=True,
                         check=True).stdout
     otool = subprocess.run(["xcrun", "otool", "-l", str(binary)], capture_output=True, text=True,
@@ -2169,7 +2301,9 @@ def _step_attribution(binary: Path, markers: int, slide: int, pcs: list[int], ma
     called = step_callers(symbols, pcs, slide, callers) if callers else None
     calling = step_callees(symbols, pcs, slide, callees) if callees else None
     kinds = step_instruction_classes(binary, pcs, slide) if classes else None
-    return counts, markers, len(pcs), lengths, called, calling, kinds
+    annotated = step_annotation(binary, symbols, pcs, slide, annotate) if annotate else None
+    wrapped = step_shrink_wrap(binary, symbols, pcs, slide) if shrink else None
+    return counts, markers, len(pcs), lengths, called, calling, kinds, annotated, wrapped
 
 
 def runtime_function_names(name: str) -> set:
@@ -2220,15 +2354,18 @@ def print_step_callers(name: str, title: str, called: dict, requests: int) -> No
 
 def print_steps(names: list[str], count: int, warm: int, marker: str, rounds: int,
                 limit: int, reuse: bool = False, callers: str = "",
-                callees: str = "", classes: bool = False) -> None:
+                callees: str = "", classes: bool = False, annotate: str = "",
+                shrink: bool = False) -> None:
     if sys.platform != "darwin":
         raise SystemExit("steps single-steps under lldb and needs Darwin")
     if not 1 <= len(names) <= 2:
         raise SystemExit("steps takes one arm or two")
-    measured = [run_steps(name, count, warm, marker, rounds, reuse, callers, callees, classes)
+    measured = [run_steps(name, count, warm, marker, rounds, reuse, callers, callees, classes,
+                          annotate, shrink)
                 for name in names]
     exact = []
-    for name, (counts, markers, steps, lengths, called, calling, _kinds) in zip(names, measured):
+    for name, (counts, markers, steps, lengths, called, calling, _kinds,
+               annotated, wrapped) in zip(names, measured):
         print(f"{name}: {steps} steps, {markers} requests (hits of {marker}), "
               f"{steps / markers:.0f} instructions per request on the stepped thread")
         if lengths:
@@ -2242,6 +2379,10 @@ def print_steps(names: list[str], count: int, warm: int, marker: str, rounds: in
         if calling is not None:
             print_step_callers(name, f"calls {callees} makes per request by callee", calling,
                                markers)
+        if annotated is not None:
+            print_step_annotation(name, annotate, annotated, markers)
+        if wrapped is not None:
+            print_step_shrink_wrap(name, wrapped, markers, limit)
     if len(exact) == 2:
         print(f"exact per request {names[0]} -> {names[1]}: {exact[0]} -> {exact[1]} "
               f"({100.0 * (exact[1] - exact[0]) / exact[0]:+.2f}%)")
@@ -2976,6 +3117,10 @@ def main(argv: list[str] | None = None) -> int:
                        help="executed instructions per request by class; with B, the change")
     steps.add_argument("--callees", default="",
                        help="a function: the calls it makes per request by callee")
+    steps.add_argument("--annotate", default="",
+                       help="a function: executions per request of each of its instructions")
+    steps.add_argument("--shrink", action="store_true",
+                       help="callee-saved saves and restores on invocations that never use them")
 
     table = commands.add_parser("table")
     table.add_argument("name")
@@ -3100,7 +3245,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "steps":
         print_steps(args.names, args.count, args.warm, args.marker, args.rounds, args.limit,
-                    args.reuse, args.callers, args.callees, args.classes)
+                    args.reuse, args.callers, args.callees, args.classes, args.annotate,
+                    args.shrink)
         return
     if args.command == "instr":
         if args.short_rounds < 0 or args.long_rounds <= args.short_rounds:

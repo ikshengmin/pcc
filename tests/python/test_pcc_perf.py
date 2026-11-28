@@ -1448,6 +1448,77 @@ def test_step_classes_count_executed_instructions(monkeypatch, tmp_path):
     assert kinds == {"save/restore": 1, "copy": 2, "branch": 1, "<outside>": 1}
 
 
+def test_step_annotation_counts_each_instruction_of_one_function(monkeypatch, tmp_path):
+    listing = ("bin:\n(__TEXT,__text) section\n_alpha:\n"
+               "0000000100001000\tstp\tx29, x30, [sp, #-0x10]!\n"
+               "0000000100001004\tbl\t_beta\n"
+               "0000000100001008\tret\n"
+               "_beta:\n"
+               "000000010000100c\tmov\tx0, #0x1\n"
+               "0000000100001010\tret\n")
+
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(command, 0, stdout=listing, stderr="")
+    monkeypatch.setattr(PERF.subprocess, "run", fake_run)
+    symbols = [(0x100001000, "alpha"), (0x10000100c, "beta")]
+    slide = 0x4000
+    pcs = [0x100005000, 0x100005004, 0x10000500c, 0x100005010, 0x100005008,
+           0x100005000, 0x100005004, 0x10000500c, 0x100005010, 0x180000000]
+    rows = PERF.step_annotation(tmp_path / "bin", symbols, pcs, slide, "alpha")
+    assert rows == [(0x100001000, "stp\tx29, x30, [sp, #-0x10]!", 2),
+                    (0x100001004, "bl\t_beta", 2),
+                    (0x100001008, "ret", 1)]
+    with pytest.raises(SystemExit, match="gamma"):
+        PERF.step_annotation(tmp_path / "bin", symbols, pcs, slide, "gamma")
+
+
+@pytest.mark.parametrize("text, saves, touches", (
+    ("stp\tx19, x20, [sp, #-0x50]!", True, False),
+    ("ldp\tx21, x22, [sp, #0x10]", True, False),
+    ("ldr\tx25, [sp, #0x30]", True, False),
+    ("stp\tx29, x30, [sp, #-0x10]!", False, False),
+    ("mov\tx20, x0", False, True),
+    ("ldr\tw1, [x19, #0x8]", False, True),
+    ("str\tx19, [x29, #-0x8]", False, True),
+    ("add\tx1, x9, x1", False, False),
+    ("bl\t_x19_helper", False, False),
+))
+def test_callee_saved_instructions_are_recognized(text, saves, touches):
+    assert PERF.callee_saved_use(text) == (saves, touches)
+
+
+def test_step_shrink_wrap_counts_saves_of_invocations_that_never_use_them(monkeypatch, tmp_path):
+    listing = ("bin:\n(__TEXT,__text) section\n_alpha:\n"
+               "0000000100001000\tstp\tx29, x30, [sp, #-0x10]!\n"
+               "0000000100001004\tstp\tx19, x20, [sp, #-0x10]!\n"
+               "0000000100001008\tcbz\tx0, 0x100001014\n"
+               "000000010000100c\tmov\tx19, x0\n"
+               "0000000100001010\tbl\t_beta\n"
+               "0000000100001014\tldp\tx19, x20, [sp], #0x10\n"
+               "0000000100001018\tldp\tx29, x30, [sp], #0x10\n"
+               "000000010000101c\tret\n"
+               "_beta:\n"
+               "0000000100001020\tstp\tx19, x20, [sp, #-0x10]!\n"
+               "0000000100001024\tldp\tx19, x20, [sp], #0x10\n"
+               "0000000100001028\tret\n")
+
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(command, 0, stdout=listing, stderr="")
+    monkeypatch.setattr(PERF.subprocess, "run", fake_run)
+    symbols = [(0x100001000, "alpha"), (0x100001020, "beta")]
+    slide = 0
+    fast = [0x100001000, 0x100001004, 0x100001008, 0x100001014, 0x100001018, 0x10000101c]
+    slow = [0x100001000, 0x100001004, 0x100001008, 0x10000100c, 0x100001010,
+            0x100001020, 0x100001024, 0x100001028,
+            0x100001014, 0x100001018, 0x10000101c]
+    # A record starting inside an invocation does not count that invocation.
+    pcs = [0x100001018, 0x10000101c] + fast + slow + fast
+    rows = PERF.step_shrink_wrap(tmp_path / "bin", symbols, pcs, slide)
+    # alpha: three invocations, two never touch x19/x20 (2 saves each);
+    # beta: one invocation, it saves without using them.
+    assert rows == {"alpha": [3, 2, 4, 6], "beta": [1, 1, 2, 2]}
+
+
 def test_steps_refuse_hosts_without_lldb(monkeypatch):
     monkeypatch.setattr(PERF.sys, "platform", "linux")
     with pytest.raises(SystemExit, match="Darwin"):
