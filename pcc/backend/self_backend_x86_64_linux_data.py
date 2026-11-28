@@ -218,6 +218,24 @@ def emit_typed_initializer(
             )
         lines: list[str] = []
         stride = _align_to(ty.elem.slot_size, ty.elem.align)
+        if ty.elem.is_ptr and len(items) >= 1024:
+            # Static descriptors often repeat the same typed pointer operand
+            # thousands of times. Reuse only successful renderings within
+            # this array's fixed type and symbol/layout context. Keep the
+            # memo bounded even for arrays containing only unique operands.
+            rendered_items: dict[str, list[str]] = {}
+            for item in items:
+                rendered = rendered_items.get(item)
+                if rendered is None:
+                    rendered = emit_typed_initializer(
+                        ty.elem, strip_typed_initializer(item, type_context=module_symbols.type_context),
+                        global_name, module_symbols,
+                    )
+                    if len(rendered_items) < 4096:
+                        rendered_items[item] = rendered
+                lines.extend(rendered)
+                lines.extend(emit_zero_fill(stride - ty.elem.slot_size))
+            return lines
         for item in items:
             lines.extend(emit_typed_initializer(ty.elem, strip_typed_initializer(item, type_context=module_symbols.type_context), global_name, module_symbols))
             lines.extend(emit_zero_fill(stride - ty.elem.slot_size))

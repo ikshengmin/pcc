@@ -169,3 +169,93 @@ def test_reinitializing_a_context_invalidates_its_abi_signature_cache():
     parser._parse_named_types('%T = type { x86_fp80 }\n', type_context=context)
     with pytest.raises(BackendUnavailable, match='x86_fp80'):
         parser._parse_call_signature('(%T)', type_context=context)
+
+
+def _pointer_array_module(items, *, declared_count=None, prefix=""):
+    count = len(items) if declared_count is None else declared_count
+    text = ('target triple = "x86_64-unknown-linux-gnu"\n' + prefix
+            + f'@array = internal constant [{count} x ptr] ['
+            + ", ".join(items) + ']\n')
+    parsed = parser.parse_self_backend_module(text)
+    symbols = prepare_module_symbols(text, list(parsed.globals_), list(parsed.functions), parsed.triple)
+    array = next(g for g in parsed.globals_ if g.name == "array")
+    return array, symbols
+
+
+def test_repeated_large_pointer_items_render_once_without_changing_order(monkeypatch):
+    atoms = [
+        "ptr @base",
+        "ptr @rax",
+        "ptr inttoptr (i64 -3 to ptr)",
+        "ptr bitcast (ptr @base to ptr)",
+        "ptr getelementptr (%T, ptr @storage, i32 0, i32 1)",
+        "ptr null",
+    ]
+    items = atoms * 256
+    array, symbols = _pointer_array_module(
+        items,
+        prefix="%T = type { i8, i64 }\n@storage = global %T zeroinitializer\n"
+               "@base = internal global i64 0\n@rax = global i64 0\n",
+    )
+    expected = [
+        x86_data.emit_typed_initializer(
+            array.type.elem, parser.strip_typed_initializer(item, type_context=symbols.type_context),
+            array.name, symbols,
+        )[0]
+        for item in atoms
+    ] * 256
+    calls = []
+    original = x86_data.strip_typed_initializer
+
+    def counted(item, **kwargs):
+        calls.append(item)
+        return original(item, **kwargs)
+
+    monkeypatch.setattr(x86_data, "strip_typed_initializer", counted)
+    assert x86_data.emit_global_initializer(array, symbols).splitlines() == expected
+    assert calls == atoms
+
+
+def test_pointer_item_reuse_is_bounded_and_small_arrays_keep_original_path(monkeypatch):
+    atoms = [f"ptr inttoptr (i64 {2 * i + 1} to ptr)" for i in range(4097)]
+    calls = []
+    original = x86_data.strip_typed_initializer
+
+    def counted(item, **kwargs):
+        calls.append(item)
+        return original(item, **kwargs)
+
+    monkeypatch.setattr(x86_data, "strip_typed_initializer", counted)
+    small, symbols = _pointer_array_module(["ptr null"] * 4)
+    assert x86_data.emit_global_initializer(small, symbols).splitlines() == ["  .quad 0"] * 4
+    assert calls == ["ptr null"] * 4
+    calls.clear()
+    large, symbols = _pointer_array_module(atoms + atoms)
+    expected = [f"  .quad {2 * i + 1}" for i in range(4097)] * 2
+    assert x86_data.emit_global_initializer(large, symbols).splitlines() == expected
+    # The first 4096 distinct items can be retained by this array alone;
+    # the next one is rendered on every occurrence without growing the memo.
+    assert calls == atoms + atoms[-1:]
+
+
+def test_repeated_pointer_array_memo_cannot_share_named_type_layout():
+    items = ["ptr getelementptr (%T, ptr @storage, i32 0, i32 1)"] * 1024
+    a, a_symbols = _pointer_array_module(items, prefix="%T = type { i8, i64 }\n@storage = global %T zeroinitializer\n")
+    b, b_symbols = _pointer_array_module(items, prefix="%T = type { i16, i16 }\n@storage = global %T zeroinitializer\n")
+    assert x86_data.emit_global_initializer(a, a_symbols).splitlines() == ["  .quad storage+8"] * 1024
+    assert x86_data.emit_global_initializer(b, b_symbols).splitlines() == ["  .quad storage+2"] * 1024
+    assert x86_data.emit_global_initializer(a, a_symbols).splitlines() == ["  .quad storage+8"] * 1024
+
+
+def test_repeated_pointer_array_keeps_first_scalar_and_count_error():
+    bad = "ptr invalid"
+    other_bad = "ptr also_invalid"
+    array, symbols = _pointer_array_module(["ptr null"] * 1024 + [bad, other_bad])
+    with pytest.raises(ValueError) as original:
+        x86_data.emit_typed_initializer(array.type.elem, parser.strip_typed_initializer(bad, type_context=symbols.type_context), array.name, symbols)
+    with pytest.raises(type(original.value)) as actual:
+        x86_data.emit_global_initializer(array, symbols)
+    assert str(actual.value) == str(original.value)
+    wrong_count, symbols = _pointer_array_module(["ptr null"] * 1024, declared_count=1025)
+    with pytest.raises(BackendUnavailable, match="expected 1025 array items .* got 1024"):
+        x86_data.emit_global_initializer(wrong_count, symbols)
