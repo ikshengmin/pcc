@@ -286,14 +286,13 @@ def test_large_remainder_filter_uses_one_set_and_keeps_exact_item_order(tmp_path
              and isinstance(node.left, ast.Attribute) and node.left.attr == "nodeid"]
     assert len(tests) == 2 and all(isinstance(node.comparators[0], ast.Name)
                                   and node.comparators[0].id == "selected_set" for node in tests)
-    registered, deselected, saved = [], [], []
+    registered, deselected = [], []
     config = SimpleNamespace(workerinput={"workerid": "gw0"},
                              getoption=lambda name: "integration",
                              pluginmanager=SimpleNamespace(register=lambda plugin, name: registered.append(plugin)),
                              hook=SimpleNamespace(pytest_deselected=lambda items: deselected.extend(items)))
     monkeypatch.setenv("PCC_MARKER_REPORT_DIR", str(tmp_path))
     monkeypatch.setenv("PCC_MARKER_PARTITION", "remainder")
-    monkeypatch.setattr(gate, "save", lambda path, value: saved.append(value))
     class Item:
         def __init__(self, nodeid): self.nodeid = nodeid
         def get_closest_marker(self, marker): return object() if marker == "integration" else None
@@ -305,5 +304,7 @@ def test_large_remainder_filter_uses_one_set_and_keeps_exact_item_order(tmp_path
     next(hook)
     with pytest.raises(StopIteration): next(hook)
     assert items == remaining and deselected == owned
-    assert saved[0]["selected"] == [item.nodeid for item in remaining]
-    assert saved[0]["transferred"] == list(partition.BOOTSTRAP_NODES)
+    inventory = json.loads((tmp_path / "inventory-gw0.json").read_text())
+    assert inventory["selected"] == [item.nodeid for item in remaining]
+    assert inventory["transferred"] == list(partition.BOOTSTRAP_NODES)
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["inventory-gw0.json"]
