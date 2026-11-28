@@ -3601,6 +3601,11 @@ in the relevant section or issue and removes the entry.
    h35-wrap 98874 -> 98334 (-0.55%): `py_list_append_from_slots` 627 -> 131
    per request. List/dict container files: identical results on the h34
    and h35 snapshots (145 passed).
+   (ak) Rejected experiment (Claude, 2026-11-28): sibling-call planning
+   that refuses a call only when an alloca use, a frame-protocol call or
+   an intrinsic call lies on a path reaching it (instead of anywhere in
+   the function) gave h35 -> h36-sib 98334 -> 98328 (-0.01%): the hot
+   functions of that shape were the list entries (aj) split by hand.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2
