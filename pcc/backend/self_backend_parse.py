@@ -72,6 +72,10 @@ _VALUE_REF_TOKEN = (
     r'(?:%(?:"[^"]+"|(?:[A-Za-z_.$][\w.$-]*|\d+))|@(?:"[^"]+"|[A-Za-z_.$][\w.$-]*))'
 )
 _LABEL_REF_TOKEN = r'%(?:"[^"]+"|(?:[A-Za-z_.$][\w.$-]*|\d+))'
+# An atomic access's address: a value, a global, or a null that constant
+# folding left in dead code (valid IR, undefined only if executed; a plain
+# load of null was always accepted).
+_ATOMIC_POINTER_TOKEN = rf"(?:{_VALUE_REF_TOKEN}|null)"
 _TARGET_TRIPLE_RE = re.compile(r'^target triple = "([^"]+)"$', re.MULTILINE)
 _NAMED_TYPEDEF_RE = re.compile(
     r'^(?P<name>%(?:"[^"]+"|[A-Za-z_.$][\w.$-]*)) = type (?P<body>.+)$',
@@ -140,23 +144,23 @@ _LOAD_RE = re.compile(
 )
 _LOAD_ATOMIC_RE = re.compile(
     rf"^(?P<dest>%.*)\s*=\s*load\s+atomic\s+(?P<val_type>{_TYPE_TOKEN}),\s+"
-    rf"(?P<ptr_type>{_TYPE_TOKEN})\s+(?P<ptr>{_VALUE_REF_TOKEN})\s+"
+    rf"(?P<ptr_type>{_TYPE_TOKEN})\s+(?P<ptr>{_ATOMIC_POINTER_TOKEN})\s+"
     r"(?P<ordering>unordered|monotonic|acquire|seq_cst)(?:,\s+align\s+(?P<align>\d+))?$"
 )
 _STORE_ATOMIC_RE = re.compile(
     rf"^store\s+atomic\s+(?P<val_type>{_TYPE_TOKEN})\s+(?P<value>.+?),\s+"
-    rf"(?P<ptr_type>{_TYPE_TOKEN})\s+(?P<ptr>{_VALUE_REF_TOKEN})\s+"
+    rf"(?P<ptr_type>{_TYPE_TOKEN})\s+(?P<ptr>{_ATOMIC_POINTER_TOKEN})\s+"
     r"(?P<ordering>unordered|monotonic|release|seq_cst)(?:,\s+align\s+(?P<align>\d+))?$"
 )
 _ATOMICRMW_RE = re.compile(
     rf"^(?P<dest>%.*)\s*=\s*atomicrmw\s+(?P<op>add|sub|and|or|xchg)\s+"
-    rf"(?P<ptr_type>{_TYPE_TOKEN})\s+(?P<ptr>{_VALUE_REF_TOKEN}),\s+"
+    rf"(?P<ptr_type>{_TYPE_TOKEN})\s+(?P<ptr>{_ATOMIC_POINTER_TOKEN}),\s+"
     rf"(?P<val_type>{_TYPE_TOKEN})\s+(?P<value>.+?)\s+"
     r"(?P<ordering>monotonic|acquire|release|acq_rel|seq_cst)(?:,\s+align\s+\d+)?$"
 )
 _CMPXCHG_RE = re.compile(
     rf"^(?P<dest>%.*)\s*=\s*cmpxchg\s+(?:weak\s+)?"
-    rf"(?P<ptr_type>{_TYPE_TOKEN})\s+(?P<ptr>{_VALUE_REF_TOKEN}),\s+"
+    rf"(?P<ptr_type>{_TYPE_TOKEN})\s+(?P<ptr>{_ATOMIC_POINTER_TOKEN}),\s+"
     rf"(?P<expected_type>{_TYPE_TOKEN})\s+(?P<expected>.+?),\s+"
     rf"(?P<desired_type>{_TYPE_TOKEN})\s+(?P<desired>.+?)\s+"
     r"(?P<success>monotonic|acquire|release|acq_rel|seq_cst)\s+"

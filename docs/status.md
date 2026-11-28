@@ -3712,6 +3712,15 @@ in the relevant section or issue and removes the entry.
    (allocation without live-range splitting), branches (layout and
    compare-and-branch selection), then LLVM's IR-level third (GVN, LICM).
    The x86-64 backends make no sibling call, so outlining stays off there.
+   (ar) instsimplify folds a zero-offset GEP as LLVM's SimplifyGEPInst does
+   (local base at every use, global base for a single address use, never a
+   thread-local base) and reads `false`/`true` as i1 0/1; the self backend
+   accepts `null` as an atomic address. h49c -> h51-gep (Claude,
+   2026-11-28, local Mac): exact 92269 -> 91189 (-1.17%; stack slots -461,
+   copies -365), hardware counters -1.36% instructions, -0.66% cycles.
+   Throughput h41-head -> h51-gep, five pairs, no control arm (a screen):
+   w1 76232 -> 78463 (+2.9%, 5/5), w4 158290 -> 161421 (+2.0%, 5/5).
+   Go/no-go uses `instr` (seconds); lldb `steps` only attributes classes.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2

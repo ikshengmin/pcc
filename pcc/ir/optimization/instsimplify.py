@@ -17,12 +17,17 @@ full recursive simplifier:
 
     Arithmetic: x+0, x-0, x-x, x*0, x*1, x*-1 (→ neg)
                 constant/constant integer folding for the covered binops
-    Bitwise:    x&x, x|x, x^x, x&-1, x&0, x|0, x|-1, x^-1 (→ ~x placeholder)
+    Bitwise:    x&x, x|x, x^x, x&-1, x&0, x|0, x|-1, x^-1 (→ ~x placeholder);
+                an i1 operand spelled false/true counts as 0/1
     Shifts:     x<<0, x>>0, 0<<x, 0>>x, and constant/constant shifts
                 with W ≥ bit-width → poison
     Compares:   eq/ne on equal constants, eq on same SSA value, etc.
     Selects:    select true,x,y → x; select false,x,y → y;
                 select c,x,x → x.
+    Addresses:  getelementptr T, ptr X, 0... → X (``SimplifyGEPInst``) for
+                a local X at every use, and for a global X when the GEP's
+                one use is a load or store address; a thread-local X keeps
+                its GEP, whose one TLV call each direct use would repeat.
 
 Unsupported transformations leave their input unchanged. Upstream
 ``opt -passes=instsimplify`` is an external reference only, never an
@@ -97,6 +102,49 @@ _BOOL_EXTENSION_RE = re.compile(
     r"^\s*%(?P<result>[\w.$-]+)\s*=\s*zext\s+i1\s+"
     r"(?P<value>[^\s,]+)\s+to\s+(?P<type>i\d+)\s*$"
 )
+_ZERO_GEP_RE = re.compile(
+    r"^\s*%(?P<result>[\w.$-]+)\s*=\s*getelementptr\s+(?:inbounds\s+)?"
+    r"(?P<ty>[^,]+?),\s*ptr\s+(?P<base>[%@][\w.$-]+)"
+    r"(?:\s*,\s*i(?:8|16|32|64)\s+0)+\s*$"
+)
+_LOAD_ADDRESS_RE = re.compile(
+    r"^\s*%[\w.$-]+\s*=\s*load\s+(?:atomic\s+)?(?:volatile\s+)?[^,]+,"
+    r"\s*ptr\s+%(?P<address>[\w.$-]+)(?:\s|,|$)"
+)
+_STORE_ADDRESS_RE = re.compile(
+    r"^\s*store\s+(?:atomic\s+)?(?:volatile\s+)?\S+\s+(?P<value>[^,]+),"
+    r"\s*ptr\s+%(?P<address>[\w.$-]+)(?:\s|,|$)"
+)
+_LOCAL_NAME_RE = re.compile(r"%([\w.$-]+)")
+_THREAD_LOCAL_RE = re.compile(r"^@(?P<name>[\w.$-]+)\s*=\s*[^=]*\bthread_local\b", re.M)
+
+
+def _single_address_uses(fn_text: str, candidates: set[str]) -> set[str]:
+    """The candidate names used exactly once, as a load or store address."""
+    counts: dict[str, int] = {}
+    address: dict[str, bool] = {}
+    for line in fn_text.splitlines():
+        names = _LOCAL_NAME_RE.findall(line)
+        if not names:
+            continue
+        stripped = line.strip()
+        defined = ""
+        if stripped.startswith("%") and "=" in stripped:
+            defined = stripped[1:].split("=", 1)[0].strip()
+        for name in names:
+            if name not in candidates or name == defined:
+                continue
+            counts[name] = counts.get(name, 0) + 1
+            load = _LOAD_ADDRESS_RE.match(line)
+            store = _STORE_ADDRESS_RE.match(line)
+            address[name] = bool(
+                (load is not None and load.group("address") == name)
+                or (store is not None and store.group("address") == name
+                    and store.group("value").strip() != "%" + name)
+            )
+    return {name for name in candidates if counts.get(name) == 1 and address.get(name)}
+
+
 _INVERSE_INTEGER_PREDICATES = {
     "eq": "ne", "ne": "eq", "slt": "sge", "sle": "sgt",
     "sgt": "sle", "sge": "slt", "ult": "uge", "ule": "ugt",
@@ -181,7 +229,30 @@ def _fold_constant_binop(
     return None
 
 
+_I1_LITERALS = {"false": "0", "true": "1"}
+_I1_SPELLINGS = {"0": "false", "1": "true", "-1": "true"}
+
+
 def _simplify_binop(
+    op: str,
+    ty: str,
+    lhs: str,
+    rhs: str,
+    flags="",
+) -> str | None:
+    if ty == "i1":
+        # An i1 constant is spelled false/true as often as 0/1; the
+        # identities below compare against the digits. A constant result
+        # goes back to the literal spelling.
+        folded = _simplify_binop_digits(op, ty, _I1_LITERALS.get(lhs.strip(), lhs),
+                                        _I1_LITERALS.get(rhs.strip(), rhs), flags)
+        if folded is None:
+            return None
+        return _I1_SPELLINGS.get(folded.strip(), folded)
+    return _simplify_binop_digits(op, ty, lhs, rhs, flags)
+
+
+def _simplify_binop_digits(
     op: str,
     ty: str,
     lhs: str,
@@ -305,10 +376,25 @@ def simplify_module_text(ir_text: str) -> tuple[str, bool]:
     return current, any_change
 
 
-def _rewrite_function_text(fn_text: str) -> tuple[str, bool]:
+def _rewrite_function_text(fn_text: str, thread_locals: frozenset = frozenset()) -> tuple[str, bool]:
     replacements: dict[str, str] = {}
     kept: list[str] = []
     changed = False
+    global_geps: set[str] = set()
+    if "getelementptr" in fn_text:
+        for line in fn_text.splitlines():
+            if "getelementptr" not in line:
+                continue
+            gep = _ZERO_GEP_RE.match(line)
+            if gep is not None and gep.group("base").startswith("@") \
+                    and gep.group("base")[1:] not in thread_locals:
+                global_geps.add(gep.group("result"))
+    foldable_global_geps = _single_address_uses(fn_text, global_geps) if global_geps else set()
+    # A zero GEP is decided after the other replacements resolve: its base
+    # may itself fold, to a value or to a constant (a null base would turn
+    # a load's address into a constant operand). Its line stays in place
+    # until then.
+    gep_candidates: list[tuple[str, int, str]] = []
     # Collect definitions independently of textual block order. LLVM SSA
     # dominance does not require a defining block to appear earlier in text.
     boolean_extensions: dict[str, tuple[str, str]] = {}
@@ -330,6 +416,13 @@ def _rewrite_function_text(fn_text: str) -> tuple[str, bool]:
 
     for line in fn_text.splitlines(keepends=True):
         stripped = line.rstrip("\n")
+        if "getelementptr" in stripped:
+            gep = _ZERO_GEP_RE.match(stripped)
+            if gep is not None and (gep.group("base").startswith("%")
+                                    or gep.group("result") in foldable_global_geps):
+                gep_candidates.append((gep.group("result"), len(kept), gep.group("base")))
+                kept.append(line)
+                continue
         if "bitcast " in stripped:
             identity = _IDENTITY_BITCAST_RE.match(stripped)
             if identity is not None and identity.group("source_type") == identity.group("target_type"):
@@ -407,9 +500,36 @@ def _rewrite_function_text(fn_text: str) -> tuple[str, bool]:
 
         kept.append(line)
 
+    resolved = _resolve_aliases(replacements)
+    if resolved is None:
+        return fn_text, False
+    folded_geps = True
+    while folded_geps:
+        folded_geps = False
+        for name, index, base in gep_candidates:
+            if name in replacements:
+                continue
+            final = base
+            if base.startswith("%") and base[1:] in resolved:
+                final = resolved[base[1:]]
+            elif base.startswith("%") and base[1:] in replacements:
+                final = replacements[base[1:]]
+            if final.startswith("%") or (final == base and base.startswith("@")):
+                replacements[name] = final
+                resolved[name] = final
+                kept[index] = ""
+                changed = True
+                folded_geps = True
     if not changed:
         return fn_text, False
+    resolved = _resolve_aliases(replacements)
+    if resolved is None:
+        return fn_text, False
+    return replace_local_names("".join(kept), resolved), True
 
+
+def _resolve_aliases(replacements: dict[str, str]) -> dict[str, str] | None:
+    """Each replaced name's final value, or None for a cyclic alias."""
     # Resolve alias chains before one lexical replacement. A fixed number of
     # text sweeps can leave dangling names after deleting a long cast chain;
     # regex word boundaries can also corrupt %name.suffix or inline assembly.
@@ -427,12 +547,12 @@ def _rewrite_function_text(fn_text: str) -> tuple[str, bool]:
             if len(chain) > len(replacements):
                 # Invalid cyclic aliases must not make this optimizer loop or
                 # erase their definitions before the verifier diagnoses them.
-                return fn_text, False
+                return None
             chain.append(next_name)
             rep = replacements[next_name]
         for alias in chain:
             resolved[alias] = rep
-    return replace_local_names("".join(kept), resolved), True
+    return resolved
 
 
 def _one_pass(ir_text: str) -> tuple[str, bool]:
@@ -440,6 +560,7 @@ def _one_pass(ir_text: str) -> tuple[str, bool]:
     changed = False
     in_function = False
     fn_lines: list[str] = []
+    thread_locals = frozenset(_THREAD_LOCAL_RE.findall(ir_text)) if "thread_local" in ir_text else frozenset()
 
     for line in ir_text.splitlines(keepends=True):
         stripped = line.lstrip()
@@ -450,7 +571,7 @@ def _one_pass(ir_text: str) -> tuple[str, bool]:
         if in_function:
             fn_lines.append(line)
             if stripped.startswith("}"):
-                rewritten, fn_changed = _rewrite_function_text("".join(fn_lines))
+                rewritten, fn_changed = _rewrite_function_text("".join(fn_lines), thread_locals)
                 out.append(rewritten)
                 changed = changed or fn_changed
                 in_function = False
@@ -459,7 +580,7 @@ def _one_pass(ir_text: str) -> tuple[str, bool]:
         out.append(line)
 
     if in_function and fn_lines:
-        rewritten, fn_changed = _rewrite_function_text("".join(fn_lines))
+        rewritten, fn_changed = _rewrite_function_text("".join(fn_lines), thread_locals)
         out.append(rewritten)
         changed = changed or fn_changed
 

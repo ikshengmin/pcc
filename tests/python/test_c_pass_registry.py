@@ -1067,7 +1067,10 @@ def test_mldst_motion_alias_controls_bitcast_exact_slot_reuse(monkeypatch):
     monkeypatch.setenv("PCC_DISABLE_PASSES", "mldst-motion")
     disabled_artifact = _compile_preprocessed_translation_unit_artifact("probe.c", code)
 
-    assert disabled_artifact["ir_text"].count(" load ") >= 5
+    # The loads of p, *p, a and x stay when store-to-load forwarding is off.
+    disabled_loads = disabled_artifact["ir_text"].count(" load ")
+    assert disabled_loads >= 4
+    assert disabled_loads > default_artifact["ir_text"].count(" load ")
     assert "memory_opt.store_load_forward" not in disabled_artifact["pass_report"]["stats"]
     assert disabled_artifact["pass_report"]["passes"]["memory-opt-ir"]["skips"] >= 1
 
