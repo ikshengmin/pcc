@@ -192,3 +192,37 @@ def test_real_encrypted_zip_is_an_explicit_owned_boundary(tmp_path):
         with pytest.raises(NotImplementedError, match="password handling"):
             actual.read("secret.txt", pwd=b"pcc-secret")
 
+
+
+@pytest.mark.parametrize("port", [port_tarfile, port_zipfile])
+@pytest.mark.parametrize("root_spelling", ["forward", "backward"])
+def test_owned_archive_valid_windows_target_separator_spelling(monkeypatch, port, root_spelling):
+    """Normal Windows separator spellings compare alike without changing paths."""
+    import ntpath
+    from types import SimpleNamespace
+
+    root = r"C:\work\output"
+    existing = ntpath.join(root, "tree")
+    returned = ntpath.join(existing, "payload.txt")
+    root_resolved = "C:/work/output" if root_spelling == "forward" else root
+    existing_resolved = existing if root_spelling == "forward" else "C:/work/output/tree"
+    probes = []
+
+    def realpath(path):
+        probes.append(("realpath", path))
+        return {root: root_resolved, existing: existing_resolved}[path]
+
+    def exists(path):
+        probes.append(("exists", path))
+        return path == existing
+
+    monkeypatch.setattr(port, "os", SimpleNamespace(
+        sep="\\", path=SimpleNamespace(join=ntpath.join, realpath=realpath, exists=exists),
+    ))
+    assert port._safe_target(root, "tree/payload.txt") == returned
+    assert probes == [
+        ("realpath", root),
+        ("exists", existing),
+        ("realpath", existing),
+        ("exists", returned),
+    ]

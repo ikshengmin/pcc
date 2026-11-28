@@ -263,7 +263,11 @@ def _safe_target(root, name):
     # target outside the resolved extraction root.  The port never creates
     # symlink members, so later members cannot introduce a new escape path.
     resolved_root = os.path.realpath(str(root))
-    root_prefix = resolved_root
+    # Only Windows treats both spellings as path separators. Normalize the
+    # containment comparison, not the paths used for filesystem operations.
+    windows_separators = os.sep == "\\"
+    comparison_root = resolved_root.replace("\\", "/") if windows_separators else resolved_root
+    root_prefix = comparison_root
     if not root_prefix.endswith("/"):
         root_prefix = root_prefix + "/"
     lexical_prefix = str(root)
@@ -274,9 +278,10 @@ def _safe_target(root, name):
             resolved_prefix = os.path.realpath(lexical_prefix)
         else:
             resolved_prefix = os.path.join(resolved_prefix, piece)
+        comparison_prefix = resolved_prefix.replace("\\", "/") if windows_separators else resolved_prefix
         if (
-            resolved_prefix != resolved_root
-            and not resolved_prefix.startswith(root_prefix)
+            comparison_prefix != comparison_root
+            and not comparison_prefix.startswith(root_prefix)
         ):
             raise ExtractError("tar member resolves outside the extraction root")
     return target
