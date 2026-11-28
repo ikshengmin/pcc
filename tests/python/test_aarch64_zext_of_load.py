@@ -121,7 +121,7 @@ def test_zext_of_a_load_emits_nothing(monkeypatch):
     assembly = emit_aarch64_darwin_asm(SOURCE, optimize=True)
     for name in ("byte", "half", "word", "atomic_word"):
         body = _body(assembly, name)
-        assert re.search(r"\b(ldrb|ldrh|ldr|ldar) w\d+, \[", body), (name, body)
+        assert re.search(r"\b(ldrb|ldrh|ldr|ldar|ldapr) w\d+, \[", body), (name, body)
         assert not re.search(r"\bmov w(\d+), w\1\b", body), (name, body)
     both = _body(assembly, "both")
     loaded = re.search(r"\bldrb w(\d+), ", both).group(1)

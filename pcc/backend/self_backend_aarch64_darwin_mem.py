@@ -129,7 +129,8 @@ def emitted_memory_instruction_line(
 
     records = _DIRECT_INSTRUCTION_RECORDS
     if records is not None:
-        if mnemonic in ("ldar", "stlr", "ldarb", "ldarh", "stlrb", "stlrh"):
+        if mnemonic in ("ldar", "stlr", "ldarb", "ldarh", "stlrb", "stlrh",
+                        "ldapr", "ldaprb", "ldaprh"):
             if offset != 0 or not register.startswith(("w", "x")):
                 raise EncodeError("atomic scalar memory requires a bare address and integer register")
             # Reuse the established typed register/address validation.
@@ -145,6 +146,7 @@ def emitted_memory_instruction_line(
                 "ldar": 0x88DFFC00, "stlr": 0x889FFC00,
                 "ldarb": 0x08DFFC00, "ldarh": 0x48DFFC00,
                 "stlrb": 0x089FFC00, "stlrh": 0x489FFC00,
+                "ldapr": 0xB8BFC000, "ldaprb": 0x38BFC000, "ldaprh": 0x78BFC000,
             }[mnemonic]
             word = opcode | (ordinary & 0x40000000) | (ordinary & 0x3FF)
         else:

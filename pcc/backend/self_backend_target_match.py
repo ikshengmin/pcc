@@ -93,3 +93,16 @@ def target_os_name(triple: str) -> str:
     if _matches_versioned_os(os_part, "freebsd"):
         return "freebsd"
     return "unknown"
+
+
+def aarch64_has_rcpc(triple: str) -> bool:
+    """Whether the target's cores implement FEAT_LRCPC (LDAPR).
+
+    Every Apple arm64 core pcc targets (M1 and later) does, and LLVM selects
+    LDAPR for an acquire load there. Linux AArch64 promises only the base
+    architecture (it gets no LSE either), so it keeps LDAR.
+    """
+    parts = _target_components(triple)
+    if not parts or parts[0] not in ("aarch64", "arm64"):
+        return False
+    return target_os_name(triple) == "darwin"

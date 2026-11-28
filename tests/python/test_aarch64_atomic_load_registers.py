@@ -27,7 +27,10 @@ entry:
     assembly = emit_aarch64_darwin_asm(text, optimize=False)
     body = assembly.split("_probe:", 1)[1].split(".section", 1)[0]
     suffix = "b" if width == 8 else "h" if width == 16 else ""
-    opcode = ("ldar" if ordering in ("acquire", "seq_cst") else "ldr") + suffix
+    # An acquire load is LLVM's choice for Apple targets, the RCpc LDAPR
+    # (FEAT_LRCPC, every Apple arm64 core): it need not wait for an earlier
+    # release store, which only seq_cst requires (LDAR).
+    opcode = {"acquire": "ldapr", "seq_cst": "ldar"}.get(ordering, "ldr") + suffix
     register = "x" if width == 64 else "w"
     assert len(re.findall(r"  " + opcode + r" " + register + r"[1-8], \[x0\]", body)) == 2
     assert not re.search(r"\b(?:str|stur)[bh]? w10,", body)

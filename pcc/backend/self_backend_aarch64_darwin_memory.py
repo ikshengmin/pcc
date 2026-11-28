@@ -83,6 +83,7 @@ from .self_backend_ir import (
     _PARSED_INSTRUCTION_KIND_IDS,
 )
 from .self_backend_module_symbols import PreparedModuleSymbols
+from .self_backend_target_match import aarch64_has_rcpc
 from .self_backend_parse import (
     const_int_from_value,
     decode_global_name,
@@ -837,10 +838,16 @@ def emit_memory_instruction_by_id(
                 result_register_name = reg_name(value_type, result_register)
         elif value_type.is_int:
             result_register_name = allocated_register_name(func, dest, value_type)
-        load_op = (
-            "ldar" + _atomic_size_suffix(value_type)
-            if ordering in ("acquire", "seq_cst") else mem_load_op(value_type)
-        )
+        # LLVM's AArch64 selection: seq_cst loads are LDAR (ordered after an
+        # earlier STLR), acquire loads the RCpc LDAPR where FEAT_LRCPC is
+        # guaranteed, which need not wait for earlier release stores.
+        load_op = mem_load_op(value_type)
+        if ordering == "seq_cst" or (
+                ordering == "acquire"
+                and not aarch64_has_rcpc(module_symbols.target_triple)):
+            load_op = "ldar" + _atomic_size_suffix(value_type)
+        elif ordering == "acquire":
+            load_op = "ldapr" + _atomic_size_suffix(value_type)
         if page_symbol:
             lines.append(emitted_pageoff_memory_line(
                 load_op,

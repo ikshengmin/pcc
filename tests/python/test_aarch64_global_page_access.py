@@ -9,7 +9,7 @@ ARM64_RELOC_PAGEOFF12 the linker scales by the access size. The stepped
 handler window executed about 17k such triples per 600000 instructions
 (docs/status.md, item 3 P0 notes), mostly the safepoint polls on every
 pcc-Python loop backedge. An external global without ``dso_local`` keeps
-its GOT load, an acquire load keeps ``ldar`` through the address, and a
+its GOT load, an acquire load keeps ``ldapr`` through the address, and a
 nonzero offset keeps the add. Words and relocations are clang 20's; two
 objects are linked by pcc's linker and executed.
 """
@@ -205,7 +205,7 @@ def test_local_global_accesses_fold_the_page_offset(monkeypatch):
         assert re.search(r"\b" + pattern, body), (name, body)
         assert not re.search(r"\badd x9, x9, _\w+@PAGEOFF", body), (name, body)
     acquire = _body(assembly, "acquire")
-    assert re.search(r"\badd x\d+, x\d+, _flag@PAGEOFF", acquire) and "ldar w" in acquire, acquire
+    assert re.search(r"\badd x\d+, x\d+, _flag@PAGEOFF", acquire) and "ldapr w" in acquire, acquire
     remote = _body(assembly, "load_remote")
     assert "_remote@GOTPAGEOFF" in remote and "_remote@PAGEOFF" not in remote, remote
     table = _body(assembly, "load_table_two")

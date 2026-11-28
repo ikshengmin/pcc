@@ -23,7 +23,7 @@ entry:
 '''
     assembly = emit_aarch64_darwin_asm(source, optimize=False)
     body = assembly.split("_read_cell:", 1)[1].split(".section", 1)[0]
-    assert re.search(r"ldar x[0-9]+, \[x0\]", body), body
+    assert re.search(r"ldapr x[0-9]+, \[x0\]", body), body
     assert not re.search(r"\bmov x(?:9|11),", body), body
 
 

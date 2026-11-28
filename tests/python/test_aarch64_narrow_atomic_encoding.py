@@ -113,3 +113,51 @@ def test_invalid_narrow_direct_register_cannot_publish_a_word(mnemonic):
         assert len(borrow_direct_instruction_records()) == 0
     finally:
         end_direct_instruction_capture()
+
+
+# Arm ARM C6.2.122-124 LDAPR/LDAPRB/LDAPRH (FEAT_LRCPC): the RCpc load-acquire
+# LLVM selects for an acquire load on Apple targets. Bytes as LLVM's
+# llvm/test/MC/AArch64/armv8.3a-rcpc.s gives them (ldapr x4, [sp] is
+# f8bfc3e4 there, and the narrow forms change only the size bits).
+@pytest.mark.parametrize("instruction, encoding", [
+    ("ldapr x4, [sp]", "e4c3bff8"),
+    ("ldapr w4, [sp]", "e4c3bfb8"),
+    ("ldaprb w4, [sp]", "e4c3bf38"),
+    ("ldaprh w4, [sp]", "e4c3bf78"),
+    ("ldapr x9, [x10]", "49c1bff8"),
+    ("ldapr w8, [x10]", "48c1bfb8"),
+])
+def test_rcpc_acquire_load_words_match_independent_reference(instruction, encoding):
+    assembled = assemble_text(instruction)
+    assert assembled.code == bytes.fromhex(encoding)
+    assert assembled.relocations == []
+
+
+@pytest.mark.parametrize("mnemonic", ["ldaprb", "ldaprh"])
+@pytest.mark.parametrize("operands", ["x2, [x4]", "w2, [w4]", "w2, [x4, #1]", "w2, [x4]!"])
+def test_narrow_rcpc_operands_fail_closed(mnemonic, operands):
+    with pytest.raises(EncodeError):
+        assemble_text(mnemonic + " " + operands)
+
+
+@pytest.mark.parametrize("operands", ["x2, [w4]", "x2, [x4, #8]", "x2, [x4]!"])
+def test_rcpc_address_operands_fail_closed(operands):
+    with pytest.raises(EncodeError):
+        assemble_text("ldapr " + operands)
+
+
+@pytest.mark.parametrize("mnemonic, register", [
+    ("ldapr", "x3"), ("ldapr", "w3"), ("ldaprb", "w3"), ("ldaprh", "w3"),
+])
+@pytest.mark.parametrize("base", ["x6", "sp"])
+def test_direct_rcpc_word_matches_text_without_fallback(mnemonic, register, base):
+    expected, = struct.unpack("<I", assemble_text(mnemonic + " " + register + ", [" + base + "]").code)
+    begin_direct_instruction_capture()
+    try:
+        line = emitted_memory_instruction_line(mnemonic, register, base)
+        words = borrow_direct_instruction_records().diagnostic_values()
+        assert line == DIRECT_INSTRUCTION_PLACEHOLDER
+        assert len(words) == 4
+        assert words[0] == expected
+    finally:
+        end_direct_instruction_capture()

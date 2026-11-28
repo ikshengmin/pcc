@@ -68,7 +68,9 @@ def test_atomic_capture_text_codec_and_object_parity(monkeypatch, tmp_path, widt
     assert direct_asm == emit_aarch64_darwin_asm(text, optimize=False)
     assert all(get_indexed_function_kernel(fn).diagnostic_projections == 0 for fn in direct.functions)
     suffix = "b" if width == 8 else "h" if width == 16 else ""
-    assert ("  ldar" + suffix + " " in direct_asm) is (load_order in ("acquire", "seq_cst"))
+    # LLVM's selection on Apple arm64: seq_cst LDAR, acquire the RCpc LDAPR.
+    assert ("  ldar" + suffix + " " in direct_asm) is (load_order == "seq_cst")
+    assert ("  ldapr" + suffix + " " in direct_asm) is (load_order == "acquire")
     assert ("  stlr" + suffix + " " in direct_asm) is (store_order in ("release", "seq_cst"))
 
     fresh = _module(monkeypatch, width=width, load_order=load_order, store_order=store_order,

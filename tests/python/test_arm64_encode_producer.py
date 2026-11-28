@@ -262,6 +262,7 @@ def test_shifted_orr_literal_and_reference():
 @pytest.mark.parametrize("mnemonic", [
     "ldar", "ldxr", "ldaxr", "stlr", "ldarb", "ldarh", "ldxrb", "ldxrh",
     "ldaxrb", "ldaxrh", "stlrb", "stlrh", "stxr", "stlxr", "stxrb", "stxrh", "stlxrb", "stlxrh",
+    "ldapr", "ldaprb", "ldaprh",
 ])
 @pytest.mark.parametrize("wide", [False, True])
 def test_exclusive_and_acquire_release_domains(mnemonic, wide):

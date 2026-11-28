@@ -60,7 +60,7 @@ def test_unchanged_tail_forwarding_has_no_saved_return_or_frame(monkeypatch):
     assert "bti c" in emitted and "  b _callee" in emitted
     assert "paciasp" not in emitted and "autiasp" not in emitted
     assert "x29" not in emitted and "sp" not in emitted
-    assert "ldar " in emitted
+    assert "ldapr " in emitted
 
 
 @pytest.mark.parametrize("arguments", ("ptr %slot, ptr %owner", "ptr @left, ptr %slot"))

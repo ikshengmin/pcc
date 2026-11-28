@@ -266,8 +266,10 @@ def test_atomic_intrinsics_lower_to_aarch64_exclusives(tmp_path):
     ):
         assert needle in asm, f"missing {needle!r} in self-backend asm"
     # relaxed accesses must stay plain: the monotonic i64 load emits ldr,
-    # not ldar; count both mnemonics to prove the ordering actually chooses.
-    assert asm.count("ldar ") >= 3
+    # not ldar; count the ordered loads to prove the ordering actually
+    # chooses. On Apple arm64 acquire loads are LDAPR, seq_cst ones LDAR.
+    assert asm.count("ldar ") + asm.count("ldapr ") >= 3
+    assert "ldapr " in asm
     assert "cbnz w13," in asm
 
 

@@ -3585,7 +3585,7 @@ def _encode_one(line, at, labels, resolve_branch, relocations, undefined,
 
     if mn in (
         "ldar", "ldaxr", "ldxr", "stlr", "ldarb", "ldarh", "ldaxrb", "ldaxrh",
-        "ldxrb", "ldxrh", "stlrb", "stlrh",
+        "ldxrb", "ldxrh", "stlrb", "stlrh", "ldapr", "ldaprb", "ldaprh",
     ):
         rt, t64 = _reg(ops[0])
         base, imm, mode = _mem(ops[1])
@@ -3600,11 +3600,16 @@ def _encode_one(line, at, labels, resolve_branch, relocations, undefined,
                 "ldaxrb": 0x085FFC00, "ldaxrh": 0x485FFC00,
                 "ldxrb": 0x085F7C00, "ldxrh": 0x485F7C00,
                 "stlrb": 0x089FFC00, "stlrh": 0x489FFC00,
+                # FEAT_LRCPC load-acquire (RCpc), Arm ARM C6.2.123/124.
+                "ldaprb": 0x38BFC000, "ldaprh": 0x78BFC000,
             }[mn]
             return base_op | (base << 5) | rt
         sf_bit = 0x40000000 if t64 else 0
         if mn == "ldar":
             return 0x88DFFC00 | sf_bit | (base << 5) | rt
+        if mn == "ldapr":
+            # FEAT_LRCPC load-acquire (RCpc), Arm ARM C6.2.122.
+            return 0xB8BFC000 | sf_bit | (base << 5) | rt
         if mn == "ldaxr":
             return 0x885FFC00 | sf_bit | (base << 5) | rt
         if mn == "ldxr":

@@ -234,7 +234,8 @@ def encode_producer_atomic(
              "ldarb": 0x08DFFC00, "ldarh": 0x48DFFC00,
              "ldaxrb": 0x085FFC00, "ldaxrh": 0x485FFC00,
              "ldxrb": 0x085F7C00, "ldxrh": 0x485F7C00,
-             "stlrb": 0x089FFC00, "stlrh": 0x489FFC00}
+             "stlrb": 0x089FFC00, "stlrh": 0x489FFC00,
+             "ldapr": 0xB8BFC000, "ldaprb": 0x38BFC000, "ldaprh": 0x78BFC000}
     if mnemonic not in bases:
         raise EncodeError("unsupported producer atomic opcode")
     narrow = mnemonic.endswith("b") or mnemonic.endswith("h")
