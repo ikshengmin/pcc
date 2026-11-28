@@ -207,8 +207,11 @@ def test_macho_bridge_preserves_untimed_kwargs_and_timer_identity(monkeypatch):
                 SelfBackendLinkError=LinkError,
                 _owned_macho_link_covers_surface=lambda **kwargs: True,
                 _owned_macho_link_in_process=lambda **kwargs: calls.append(kwargs),
+                # The single-function AST stub does not inherit the module's
+                # opt-in ELF map constant. An ordinary Mach-O link keeps it off.
+                _FUNCTION_MAP_FOR="PCC_OWNED_ELF_FUNCTION_MAP_FOR",
                 os=types.SimpleNamespace(path=types.SimpleNamespace(isfile=lambda path: True),
-                                         access=lambda path, mode: True, X_OK=1),
+                                         access=lambda path, mode: True, X_OK=1, environ={}),
             )
             invoke = _function("run_link_command", namespace)
             for _ in range(2):
