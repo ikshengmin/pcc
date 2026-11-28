@@ -853,10 +853,29 @@ def pcc_diagnostics_runtime_log_event_code(
     value1: int,
     pointer: c_ptr,
 ) -> None:
+    """One relaxed load answers the common case, logging off.
+
+    Small enough for the runtime archive's cross-module import, so the call
+    sites that do not test the fast state themselves (py_obj_getitem_i64,
+    the virtual-thread joins and queue) test it inline instead of paying a
+    call and a frame: 17 calls per handler request did nothing.
+    """
     if atomic_load_i32(
         global_addr("pcc_diagnostics_runtime_log_fast_state"), 0, "relaxed"
     ) == 0:
         return
+    pcc_diagnostics_runtime_log_event_code_enabled(category, event, value0, value1, pointer)
+
+
+@c_abi_export("pcc_diagnostics_runtime_log_event_code_enabled")
+def pcc_diagnostics_runtime_log_event_code_enabled(
+    category: int,
+    event: int,
+    value0: int,
+    value1: int,
+    pointer: c_ptr,
+) -> None:
+    """pcc_diagnostics_runtime_log_event_code once the fast state is on."""
     if (
         atomic_load_i32(global_addr("pcc_log_init_state"), 0, "relaxed") == 2
         and load_i32(global_addr("pcc_log_mask"), 0) == 0

@@ -3576,6 +3576,13 @@ in the relevant section or issue and removes the entry.
    h26 (control h33-ctl, load 4.6) is w1 80487 -> 80072 (-0.5%, 1/5,
    within the 2.9% floor) and w4 +0.4% inconclusive; the default stays
    off.
+   (ai) Merged (Claude, 2026-11-28): `pcc_diagnostics_runtime_log_event_code`
+   is one relaxed load and a call to `..._enabled`, small enough for the
+   cross-module import, so its unguarded callers (py_obj_getitem_i64, the
+   virtual-thread joins and queue: 17 calls per request with logging off)
+   test the fast state inline. Exact h26-xinl -> h34-log 99312 -> 98874
+   (-0.44%), archive +70 KB. Runtime-log, immortal-refcount and generator
+   files give the same results on the h33 and h34 snapshots (48 passed).
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2
