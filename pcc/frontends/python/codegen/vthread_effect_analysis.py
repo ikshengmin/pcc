@@ -20,7 +20,7 @@ from typing import Optional
 
 from pcc.backend.self_backend_value_arena import CompilerIntArena
 
-from pcc.frontends.python.py_ast import Assign, Attr, AugAssign, BoolType, BytesType, Call, ClassDef, ClassType, DictType, FloatType, IntType, ListType, NoneType, SetType, StrType, TupleType, Delete, ExceptHandler, For, FuncDef, Global, Import, ImportFrom, Lambda, ListExpr, Module, Name, Nonlocal, TupleExpr, With
+from pcc.frontends.python.py_ast import Assign, Attr, AugAssign, BoolType, BytesType, Call, ClassDef, ClassType, DictType, FloatType, IntType, ListType, NoneType, SetType, StrType, TupleType, Delete, ExceptHandler, Expr, For, FuncDef, Global, Import, ImportFrom, Lambda, ListExpr, Module, Name, Nonlocal, TupleExpr, With
 from pcc.frontends.python.codegen.hoist_analysis import _dataclass_field_names, _dataclass_field_value
 from pcc.frontends.python.vthread_effect_summary_wire import (
     effect_module_exports as _effect_module_exports,
@@ -158,7 +158,10 @@ def _module_scope_imports(module: Module) -> list[object]:
             for item in node:
                 work.append(item)
             continue
-        if isinstance(node, (FuncDef, ClassDef)):
+        # Python imports are statements; a typed expression has no
+        # statement children. Do not walk literal/operand/type metadata here.
+        # The lexical binding traversal still visits expressions (walrus).
+        if isinstance(node, (FuncDef, ClassDef, Expr)):
             continue
         if isinstance(node, (Import, ImportFrom)):
             out.append(node)

@@ -1658,3 +1658,55 @@ def test_native_alias_and_call_proofs_share_one_binding_walk(monkeypatch):
     assert NativeModuleAliasMixin._native_builtin_module_for_name(host, "vt") is None
     assert NativeModuleAliasMixin._native_builtin_value_for_name(host, "pause") is None
     assert scans == {"module": 1, "function": 1}
+
+
+def test_module_import_only_walk_preserves_order_without_visiting_expressions(monkeypatch):
+    from pcc.frontends.python.parser import parse
+    from pcc.frontends.python.py_ast import Expr
+    from pcc.frontends.python.codegen import vthread_effect_analysis as analysis
+
+    module = parse(
+        """import first
+values = [1, {"key": (2, 3)}]
+if flag:
+    import branch
+else:
+    from pcc.virtual_thread import yield_now as pause
+for value in values:
+    import loop
+try:
+    import protected
+except ValueError:
+    import handler
+finally:
+    import ending
+with resource:
+    import context
+def helper():
+    import hidden_function
+class Hidden:
+    import hidden_class
+import last
+""", "imports_only.py",
+    )
+    original_fields = analysis._dataclass_field_names
+
+    def syntax_fields(node):
+        assert not isinstance(node, Expr), "import-only traversal entered an expression"
+        return original_fields(node)
+
+    monkeypatch.setattr(analysis, "_dataclass_field_names", syntax_fields)
+    imports = analysis._module_scope_imports(module)
+    # Preserve the historical breadth-first order, including handler depth,
+    # while ignoring function/class scopes and all expression subtrees.
+    assert [(getattr(node, "module", None), node.names) for node in imports] == [
+        (None, (("first", None),)),
+        (None, (("last", None),)),
+        (None, (("branch", None),)),
+        ("pcc.virtual_thread", (("yield_now", "pause"),)),
+        (None, (("loop", None),)),
+        (None, (("protected", None),)),
+        (None, (("ending", None),)),
+        (None, (("context", None),)),
+        (None, (("handler", None),)),
+    ]
