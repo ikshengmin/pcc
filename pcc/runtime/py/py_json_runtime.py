@@ -1109,31 +1109,41 @@ def _owned_ast_tape_string_end(data, n: int, pos) -> int:
     return -1
 
 
-def _owned_ast_tape_integer_end(data, n: int, pos) -> int:
+def _owned_ast_tape_integer_value(data, n: int, pos) -> int:
+    # Tape leaves use the existing full signed tagged-int range. The
+    # sentinel is outside that range and safely representable in i64.
+    invalid: int = -4611686018427387905
     i: int = load_i64(pos, 0)
+    negative: int = 0
     if i < n and _byte_at(data, i) == 45:
+        negative = 1
         i = i + 1
     if i >= n or _byte_at(data, i) < 48 or _byte_at(data, i) > 57:
-        return -1
+        return invalid
     first: int = i
+    limit: int = 4611686018427387903
+    if negative != 0:
+        limit = 4611686018427387904
     value: int = 0
     while i < n:
         c: int = _byte_at(data, i)
         if c < 48 or c > 57:
             break
         if first != i and _byte_at(data, first) == 48:
-            return -1
+            return invalid
         digit: int = c - 48
-        if value > (1152921504606846975 - digit) // 10:
-            return -1
+        if value > (limit - digit) // 10:
+            return invalid
         value = value * 10 + digit
         i = i + 1
     if i < n:
         c = _byte_at(data, i)
         if c == 46 or c == 69 or c == 101:
-            return -1
+            return invalid
     store_i64(pos, 0, i)
-    return 0
+    if negative != 0:
+        return 0 - value
+    return value
 
 
 def _owned_ast_tape_sequence(data, n: int, pos, buf, depth: int, kind: int, start: int) -> int:
@@ -1193,7 +1203,13 @@ def _owned_ast_tape_value(data, n: int, pos, buf, depth: int) -> int:
         store_i64(pos, 0, i + 3)
         if _owned_ast_tape_exact(data, n, pos, cstr(":"), 1) != 0:
             return -1
-        index: int = _owned_ast_tape_sequence(data, n, pos, buf, depth + 1, kind, start)
+        # A tagged wrapper is one tape container, just like a plain array.
+        # Both call value(d) -> sequence(d) -> child value(d+1); the
+        # closing brace is checked only after sequence has returned. Count
+        # the actual recursive frames, not the extra JSON punctuation.
+        # The unchanged depth>=64 limit therefore preserves the existing
+        # maximum plain-array call chain and matches frontend preflight.
+        index: int = _owned_ast_tape_sequence(data, n, pos, buf, depth, kind, start)
         if index < 0 or _owned_ast_tape_exact(data, n, pos, cstr("}"), 1) != 0:
             return -1
         return index
@@ -1206,7 +1222,7 @@ def _owned_ast_tape_value(data, n: int, pos, buf, depth: int) -> int:
     if c == 110 and _literal_matches(data, n, start, cstr("null"), 4) != 0:
         store_i64(pos, 0, start + 4)
         return _owned_ast_tape_add(buf, 5, start, start + 4)
-    if _owned_ast_tape_integer_end(data, n, pos) != 0:
+    if _owned_ast_tape_integer_value(data, n, pos) < -4611686018427387904:
         return -1
     return _owned_ast_tape_add(buf, 4, start, load_i64(pos, 0))
 
@@ -1313,10 +1329,10 @@ def pcc_json_owned_ast_v2_token_value(text, start: int, end: int, kind: int):
         store_i64(pos, 0, start)
         return _owned_ast_json_string(data, end, pos, 0)
     if kind == 4:
-        if _owned_ast_tape_integer_end(data, end, pos) != 0 or load_i64(pos, 0) != end:
+        value: int = _owned_ast_tape_integer_value(data, end, pos)
+        if value < -4611686018427387904 or load_i64(pos, 0) != end:
             return pcc_gc_retain(global_load_ptr("py_None"))
-        store_i64(pos, 0, start)
-        return _owned_ast_json_integer(data, end, pos)
+        return _owned_ast_json_checked(py_int_from_i64(value))
     if kind == 5:
         if end - start == 4 and _literal_matches(data, end, start, cstr("true"), 4) != 0:
             return pcc_gc_retain(global_load_ptr("py_True"))

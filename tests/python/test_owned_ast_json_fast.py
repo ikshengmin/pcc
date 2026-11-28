@@ -432,7 +432,7 @@ def test_compact_ast_scanner_fallback_and_allocation_faults(monkeypatch):
     def doc(value):
         return json.dumps({"schema": "pcc.frontends.python.py_ast.v2",
                            "files": [], "module": value})
-    bad = [doc({"b": [1]}), doc({"d": {"x": 1}}), doc(1.5), doc(2**60),
+    bad = [doc({"b": [1]}), doc({"d": {"x": 1}}), doc(1.5), doc(2**62), doc(-2**62-1),
            doc("\ud800"), doc(1)+" trailing", doc(1)[:-1],
            doc(1).replace("1}", "01}"), doc(1).replace("v2", "v1"),
            doc(1).replace('"module"', '"module":0,"module"')]
@@ -493,7 +493,13 @@ def test_compact_reader_full_preflight_and_constructor_parity(monkeypatch):
              py_ast.StrLit(span, py_ast.StrType("custom"), "é\x00😀"),
              py_ast.Name(span, py_ast.DynType("dynamic"), "name"))
     canonical = json.dumps(wire._py_ast_v2_payload(value))
-    valid = [canonical]
+    # Full signed tagged integers and equivalent plain/tagged logical depth
+    # are within the existing native representation and frame bound.
+    nested = None
+    for _ in range(62):
+        nested = {"n": ["UnaryOp", None, None, "+", nested]}
+    valid = [canonical, doc(2**60), doc(1469598103934665603),
+             doc(2**62-1), doc(-2**62), doc(nested)]
     for name, fields in PY_AST_FIELD_NAME_OVERRIDES.items():
         if name != "SourceSpan":
             valid.append(doc({"n": [name] + [None]*len(fields)}))
@@ -501,7 +507,7 @@ def test_compact_reader_full_preflight_and_constructor_parity(monkeypatch):
         doc({"n": ["Unknown"]}), doc({"n": ["IntType", "int"]}),
         doc({"s": [0, 1, 2, 3, 4]}), doc({"s": [True, 1, 2, 3, 4]}, ["x"]),
         doc({"s": [0, True, 2, 3, 4]}, ["x"]), doc(1, ["x", "x"]),
-        doc({"d": {"x": 1}}), doc({"b": [1, 2]}), doc(1.5), doc(2**60),
+        doc({"d": {"x": 1}}), doc({"b": [1, 2]}), doc(1.5), doc(2**62), doc(-2**62-1),
         doc("\ud800"), doc(1)+" trailing", doc(1)[:-1],
         doc({"n": ["Unknown"]})+" trailing", doc(1).replace("v2", "v1"),
         json.dumps({"module": 1, "files": [], "schema": wire._PY_AST_WIRE_SCHEMA_V2}),
@@ -523,3 +529,134 @@ def test_compact_reader_full_preflight_and_constructor_parity(monkeypatch):
         assert len(calls) == before + int(i >= len(valid)), text
     decoded = wire._decode_py_ast_wire(canonical)
     assert decoded[0].span.file is decoded[1].span.file is decoded[2].span.file
+
+
+@pytest.mark.parametrize("token,expected", [
+    ("0", 0), ("-0", 0), ("1", 1), ("-1", -1),
+    ("1152921504606846976", 2**60),
+    ("1469598103934665603", 1469598103934665603),
+    ("4611686018427387903", 2**62-1),
+    ("-4611686018427387904", -2**62),
+    ("4611686018427387904", None),
+    ("-4611686018427387905", None),
+    ("9223372036854775808", None),
+    ("-9223372036854775809", None),
+    ("00", None), ("-00", None), ("01", None), ("-01", None),
+    ("+1", None), ("-", None), ("1.0", None), ("-0.0", None),
+    ("1e2", None), ("1E-2", None), ("1x", None),
+])
+def test_compact_ast_tape_signed_tagged_integer_boundaries(monkeypatch, token, expected):
+    import struct
+    # Both the lexical scanner and the real token materializer must agree.
+    text = '{"schema":"pcc.frontends.python.py_ast.v2","files":[],"module":' + token + '}'
+    runtime, heap = _tape_heap(monkeypatch, text)
+    tape_ptr = runtime.pcc_json_scan_owned_ast_v2(heap.input)
+    assert tape_ptr and heap.pending is None
+    if expected is None:
+        assert tape_ptr == heap.constants["py_None"]
+    else:
+        tape = heap.objects[tape_ptr]
+        index = struct.unpack_from("<I", tape, 20)[0]
+        word, end = struct.unpack_from("<II", tape, 32+8*index)
+        assert word >> 29 == 4
+        start = word & 536870911
+        value = runtime.pcc_json_owned_ast_v2_token_value(heap.input, start, end, 4)
+        assert heap.objects[value] == expected
+        heap.release(value)
+    heap.release(tape_ptr)
+    heap.balanced()
+
+    runtime, heap = _tape_heap(monkeypatch, token)
+    value = runtime.pcc_json_owned_ast_v2_token_value(heap.input, 0, len(token), 4)
+    assert value and heap.pending is None
+    assert heap.objects[value] == expected
+    heap.release(value)
+    heap.balanced()
+
+
+@pytest.mark.parametrize("tagged", [False, True])
+@pytest.mark.parametrize("depth,admitted", [(30, True), (32, True), (62, True), (63, False), (64, False)])
+def test_compact_ast_tape_counts_semantic_container_frames(monkeypatch, tagged, depth, admitted):
+    # Plain arrays and tagged record wrappers have the same recursive
+    # value -> sequence -> value call shape and one tape container record.
+    # A nonempty chain at semantic depth 63 still exceeds the old leaf bound.
+    value = None
+    for _ in range(depth):
+        value = {"n": ["UnaryOp", None, None, "+", value]} if tagged else [value]
+    text = json.dumps({"schema": "pcc.frontends.python.py_ast.v2", "files": [], "module": value})
+    runtime, heap = _tape_heap(monkeypatch, text)
+    result = runtime.pcc_json_scan_owned_ast_v2(heap.input)
+    assert result and heap.pending is None
+    assert isinstance(heap.objects[result], bytes) is admitted
+    heap.release(result)
+    heap.balanced()
+
+
+def test_compact_ast_wide_token_operational_failure_not_fallback(monkeypatch):
+    token = "1469598103934665603"
+    runtime, heap = _tape_heap(monkeypatch, token, fail_at=1)
+    result = runtime.pcc_json_owned_ast_v2_token_value(heap.input, 0, len(token), 4)
+    assert result == 0
+    assert heap.pending is not None and not heap.allocations and not heap.roots
+
+
+@pytest.mark.integration
+def test_native_compact_ast_reader_tagged_depth_and_integer_boundaries(
+    tmp_path, pcc_runtime_archive, python_program_compiler,
+):
+    """Exercise the actual admitted native ABI, not a Python heap model."""
+    import subprocess
+    program = '''import sys
+from pcc.extern import extern, c_obj, c_int64
+scan = extern("pcc_json_scan_owned_ast_v2", (c_obj,), c_obj)
+token = extern("pcc_json_owned_ast_v2_token_value", (c_obj, c_int64, c_int64, c_int64), c_obj)
+def main():
+    prefix = '{"schema":"pcc.frontends.python.py_ast.v2","files":[],"module":'
+    for text, expected in (("0", 0), ("-0", 0), ("1152921504606846976", 1152921504606846976),
+                           ("1469598103934665603", 1469598103934665603),
+                           ("4611686018427387903", 4611686018427387903),
+                           ("-4611686018427387904", -4611686018427387904),
+                           ("4611686018427387904", None), ("-4611686018427387905", None),
+                           ("9223372036854775808", None), ("-9223372036854775809", None),
+                           ("01", None), ("-01", None), ("1.0", None), ("1e2", None)):
+        value = token(text, 0, len(text), 4)
+        assert value == expected
+        tape = scan(prefix + text + '}')
+        assert (tape is None) == (expected is None)
+    for depth in (30, 32, 62, 63, 64):
+        plain = prefix + '[' * depth + 'null' + ']' * depth + '}'
+        tagged = prefix + '{"n":["UnaryOp",null,null,"+",' * depth + 'null' + ']}' * depth + '}'
+        expected = depth < 63
+        assert (scan(plain) is not None) == expected
+        assert (scan(tagged) is not None) == expected
+    print("COMPACT_AST_READER_BOUNDARIES_OK")
+main()
+'''
+    source = tmp_path / "compact_reader_boundaries.py"
+    binary = tmp_path / "compact_reader_boundaries"
+    source.write_text(program, encoding="utf-8")
+    python_program_compiler(str(source), str(binary), backend="self",
+                            runtime_archive=str(pcc_runtime_archive))
+    result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "COMPACT_AST_READER_BOUNDARIES_OK\n"
+    assert result.stderr == ""
+
+
+def test_compact_ast_newly_admitted_deep_wide_tape_resource_failures(monkeypatch):
+    value = 1469598103934665603
+    for _ in range(62):
+        value = {"n": ["UnaryOp", None, None, "+", value]}
+    text = json.dumps({"schema": "pcc.frontends.python.py_ast.v2", "files": [], "module": value})
+    runtime, heap = _tape_heap(monkeypatch, text)
+    result = runtime.pcc_json_scan_owned_ast_v2(heap.input)
+    assert isinstance(heap.objects[result], bytes)
+    attempts = heap.attempt
+    heap.release(result)
+    heap.balanced()
+    assert attempts >= 2
+    for fail in range(1, attempts+1):
+        runtime, heap = _tape_heap(monkeypatch, text, fail)
+        assert runtime.pcc_json_scan_owned_ast_v2(heap.input) == 0
+        assert heap.pending is not None and not heap.allocations and not heap.roots
+        heap.balanced()
