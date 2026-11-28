@@ -117,32 +117,40 @@ def pcc_memset(dst, value: i64, size: i64) -> c_ptr:
     # Fill eight bytes per store.  A byte-at-a-time fill is what a naive
     # port looks like and it is what the whole runtime pays for: `memset` plus
     # the allocator's zeroing loop were ~23% of all samples in a
-    # `pcc1 -> pcc2` emit worker.  The destination is aligned first so every
-    # wide store is 8-byte aligned; this module must not assume unaligned wide
-    # stores are legal.  Constants stay inline: module-level ints are zeroed in
-    # stripped freestanding objects, and helper functions are not permitted
-    # here (every function must be a c_abi_export).  A zero fill (every
-    # object allocation) needs no byte pattern, and the loop stores two words
-    # per iteration.
+    # `pcc1 -> pcc2` emit worker.  As in memcpy, the word stores need not be
+    # aligned (AArch64 and x86-64 user memory take unaligned words), so
+    # nothing is stored a byte at a time from 4 bytes up: 16 bytes or more
+    # are word pairs from the start and one pair ending at the size (it may
+    # overlap the last loop pair), 8 to 15 a first and a last word, 4 to 7 a
+    # first and a last half.  Every object allocation zeroes its cell here;
+    # the aligned head and byte tail this replaces cost 56 instructions for
+    # the handler's typical 48 to 80 bytes.  Constants stay inline:
+    # module-level ints are zeroed in stripped freestanding objects, and
+    # helper functions are not permitted here (every function must be a
+    # c_abi_export).  A zero fill needs no byte pattern.
     byte: i64 = value & 255
     word: i64 = 0
     if byte != 0:
         word = wrapping_mul_i64(byte, 72340172838076673)
+    if size >= 16:
+        cursor = dst
+        last_pair = ptr_add(dst, size - 16)
+        while ptr_diff(cursor, last_pair) < 0:
+            store_i64(cursor, 0, word)
+            store_i64(cursor, 8, word)
+            cursor = ptr_add(cursor, 16)
+        store_i64(last_pair, 0, word)
+        store_i64(last_pair, 8, word)
+        return dst
+    if size >= 8:
+        store_i64(dst, 0, word)
+        store_i64(dst, size - 8, word)
+        return dst
+    if size >= 4:
+        store_i32(dst, 0, word)
+        store_i32(dst, size - 4, word)
+        return dst
     index: i64 = 0
-    head: i64 = (-ptr_diff(dst, null())) & 7
-    if head > size:
-        head = size
-    while index < head:
-        store_i8(dst, index, byte)
-        index = index + 1
-    pair_limit: i64 = size - 16
-    while index <= pair_limit:
-        store_i64(dst, index, word)
-        store_i64(dst, index + 8, word)
-        index = index + 16
-    if index <= size - 8:
-        store_i64(dst, index, word)
-        index = index + 8
     while index < size:
         store_i8(dst, index, byte)
         index = index + 1

@@ -2355,6 +2355,12 @@ def _py_decref_finish(prepared) -> None:
     flags: int = load_i64(prepared, 16)
     backend: int = load_i64(prepared, 24)
     new_rc: int = load_i64(prepared, 32)
+    _py_decref_finish_values(o, tag_dbg, flags, backend, new_rc)
+
+
+def _py_decref_finish_values(o, tag_dbg: int, flags: int, backend: int, new_rc: int) -> None:
+    """The finish of one prepared decref whose record is valid and carries
+    no underflow token: the record's fields, passed by value."""
     if new_rc < 0:
         _pcc_debug_bad_incref(o, tag_dbg)
         return
@@ -2491,14 +2497,9 @@ def _py_decref_checked_tail(o) -> None:
         return
     if new_rc == 0:
         atomic_rmw_i32("or", o, PYOBJECTHEADER_FLAGS_OFFSET, 524288, "release")
-    prepared = stack_alloc(56)
-    _py_refcount_prepared_reset(prepared, o)
-    store_i64(prepared, 8, tag)
-    store_i64(prepared, 16, flags)
-    store_i64(prepared, 24, 0)
-    store_i64(prepared, 32, new_rc)
-    store_i64(prepared, 40, 1)
-    _py_decref_finish(prepared)
+    # A valid record without an underflow token, passed by value: the
+    # 56-byte record was fifteen stores here and seven loads in finish.
+    _py_decref_finish_values(o, tag, flags, 0, new_rc)
 
 
 # Verification is a diagnostic control, set before exercising a workload.

@@ -426,12 +426,16 @@ int main(void) {
     }
 
     for (n = 0; n <= 96; ++n) {
-        int value = (int)n * 19 - 700;
-        for (i = 0; i < sizeof(dst); ++i) dst[i] = (unsigned char)(255u - i);
-        mix_u64(memset(dst + 3, value, n) == dst + 3);
-        mix_bytes(dst, sizeof(dst));
-        mix_u64(memchr(dst + 3, value, n) == dst + 3);
-        mix_u64(memchr(dst + 3, value + 1, n) == NULL);
+        for (dst_off = 0; dst_off < 8; ++dst_off) {
+            int value = (int)n * 19 - 700 + (int)dst_off;
+            for (i = 0; i < sizeof(dst); ++i) dst[i] = (unsigned char)(255u - i);
+            mix_u64(memset(dst + dst_off, value, n) == dst + dst_off);
+            mix_bytes(dst, sizeof(dst));
+            mix_u64(memchr(dst + dst_off, value, n) == dst + dst_off);
+            mix_u64(memchr(dst + dst_off, value + 1, n) == NULL);
+            mix_u64(memset(dst + dst_off, 0, n) == dst + dst_off);
+            mix_bytes(dst, sizeof(dst));
+        }
     }
 
     for (n = 0; n <= 96; ++n) {
