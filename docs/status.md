@@ -3583,6 +3583,17 @@ in the relevant section or issue and removes the entry.
    test the fast state inline. Exact h26-xinl -> h34-log 99312 -> 98874
    (-0.44%), archive +70 KB. Runtime-log, immortal-refcount and generator
    files give the same results on the h33 and h34 snapshots (48 passed).
+   (aj) Merged (Claude, 2026-11-28): the four list native entries whose
+   initialized path forwards their own arguments (`py_list_new`,
+   `py_list_from_static_items`, `py_list_from_owned_roots`,
+   `py_list_append_from_slots`) move their pre-configuration activation
+   protocol into `_<name>_framed`. The slow path's allocas had disabled
+   sibling calls and its calls kept the arguments in callee-saved
+   registers, so every append paid a frame, six copies and a call; the
+   entry is now a flag load, `cbz` and `b` with no frame. Exact h34-log ->
+   h35-wrap 98874 -> 98334 (-0.55%): `py_list_append_from_slots` 627 -> 131
+   per request. List/dict container files: identical results on the h34
+   and h35 snapshots (145 passed).
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2

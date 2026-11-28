@@ -75,6 +75,15 @@ def py_list_new(initial_capacity: int) -> c_ptr:
     # Its original input owners/counts still protect the body's raw inputs.
     if (load_i32(global_addr('pcc_gc_config_initialized'), 0) != 0):
         return pcc_list_body_py_list_new(initial_capacity)
+    return _py_list_new_framed(initial_capacity)
+
+
+def _py_list_new_framed(initial_capacity: int) -> c_ptr:
+    """py_list_new before configuration: the native activation protocol.
+
+    Kept out of the exported entry, which is then a flag test and two
+    sibling calls with its own arguments (no frame on the initialized path).
+    """
     native_frame_bytes: int = 40
     native_range_capacity: int = 8
     native_ranges_bytes: int = 128
@@ -98,6 +107,15 @@ def py_list_from_static_items(items: c_ptr, count: int) -> c_ptr:
     # Its original input owners/counts still protect the body's raw inputs.
     if (load_i32(global_addr('pcc_gc_config_initialized'), 0) != 0):
         return pcc_list_body_py_list_from_static_items(items, count)
+    return _py_list_from_static_items_framed(items, count)
+
+
+def _py_list_from_static_items_framed(items: c_ptr, count: int) -> c_ptr:
+    """py_list_from_static_items before configuration: the native activation protocol.
+
+    Kept out of the exported entry, which is then a flag test and two
+    sibling calls with its own arguments (no frame on the initialized path).
+    """
     native_frame_bytes: int = 40
     native_range_capacity: int = 8
     native_ranges_bytes: int = 128
@@ -121,6 +139,15 @@ def py_list_from_owned_roots(sources: c_ptr, count: int, output: c_ptr) -> int:
     # Its original input owners/counts still protect the body's raw inputs.
     if (load_i32(global_addr('pcc_gc_config_initialized'), 0) != 0):
         return pcc_list_body_py_list_from_owned_roots(sources, count, output)
+    return _py_list_from_owned_roots_framed(sources, count, output)
+
+
+def _py_list_from_owned_roots_framed(sources: c_ptr, count: int, output: c_ptr) -> int:
+    """py_list_from_owned_roots before configuration: the native activation protocol.
+
+    Kept out of the exported entry, which is then a flag test and two
+    sibling calls with its own arguments (no frame on the initialized path).
+    """
     native_frame_bytes: int = 40
     native_range_capacity: int = 8
     native_ranges_bytes: int = 128
@@ -145,6 +172,16 @@ def py_list_append_from_slots(list_slot: c_ptr, item_slot: c_ptr, borrowed_mask:
     if (load_i32(global_addr('pcc_gc_config_initialized'), 0) != 0):
         pcc_list_body_py_list_append_from_slots(list_slot, item_slot, borrowed_mask)
         return
+    _py_list_append_from_slots_framed(list_slot, item_slot, borrowed_mask)
+    return
+
+
+def _py_list_append_from_slots_framed(list_slot: c_ptr, item_slot: c_ptr, borrowed_mask: int) -> None:
+    """py_list_append_from_slots before configuration: the native activation protocol.
+
+    Kept out of the exported entry, which is then a flag test and two
+    sibling calls with its own arguments (no frame on the initialized path).
+    """
     native_frame_bytes: int = 40
     native_range_capacity: int = 8
     native_ranges_bytes: int = 128
