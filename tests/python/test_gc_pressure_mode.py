@@ -340,17 +340,18 @@ def test_only_completed_tracing_work_acknowledges_pressure(active, sweep, commit
     assert p.counter(2) == expected
 
 
-@pytest.mark.parametrize('materialized,tracked,oom,already,borrowed,expected', [
-    (0, 0, False, False, False, 1),   # completed empty heap, still owns its view
-    (1, 1, False, False, False, 1),   # all live: completed, but collected zero
-    (-1, 0, False, False, False, 0),  # materialization failed
-    (1, 1, True, False, False, 0),    # candidate-vector allocation failed
-    (1, 1, False, True, False, 0),    # recursive collect refused
-    (1, 1, False, False, True, 1),    # full collect borrows an existing view
-    (1, 1, True, False, True, 0),     # scratch OOM cannot release borrowed view
+@pytest.mark.parametrize('materialized,tracked,oom,already,borrowed,subset,expected', [
+    (0, 0, False, False, False, False, 1),   # completed empty heap, still owns its view
+    (1, 1, False, False, False, False, 1),   # all live: completed, but collected zero
+    (-1, 0, False, False, False, False, 0),  # materialization failed
+    (1, 1, True, False, False, False, 0),    # candidate-vector allocation failed
+    (1, 1, False, True, False, False, 0),    # recursive collect refused
+    (1, 1, False, False, True, False, 1),    # full collect borrows an existing view
+    (1, 1, False, False, False, True, 0),  # candidate subset cannot satisfy a full collection
+    (1, 1, True, False, True, False, 0),     # scratch OOM cannot release borrowed view
 ])
 def test_gc0_completion_hook_distinguishes_empty_success_from_failure(
-    materialized, tracked, oom, already, borrowed, expected,
+    materialized, tracked, oom, already, borrowed, subset, expected,
 ):
     p = Pressure()
     outer_depth = int(already or borrowed)
@@ -365,6 +366,7 @@ def test_gc0_completion_hook_distinguishes_empty_success_from_failure(
     events = []
     windows = []
     releases = []
+    allocations = []
 
     def event(name):
         events.append(name)
@@ -415,6 +417,7 @@ def test_gc0_completion_hook_distinguishes_empty_success_from_failure(
         event('reclaim')
 
     def materialize():
+        assert not subset
         assert_owned()
         assert p.cells['py_gc_collecting'] == 1
         event('materialize')
@@ -426,20 +429,34 @@ def test_gc0_completion_hook_distinguishes_empty_success_from_failure(
         assert_owned()
         assert p.cells['py_gc_collecting'] == 0
         releases.append(acquired)
-        assert acquired == int(materialized >= 0 and not borrowed)
+        assert acquired == int(materialized >= 0 and not borrowed and not subset)
         if acquired:
             p.cells['pcc_gc_tracking_materialized'] = 0
         event('dematerialize')
 
     def allocate(size):
         assert_owned()
-        assert size == max(tracked, materialized) * 8
-        event('allocate')
-        return 0 if oom else 5000
+        if not allocations:
+            assert size == max(tracked, materialized) * 8
+            event('allocate')
+            if oom:
+                return 0
+            allocations.append(5000)
+            return 5000
+        # The current collector holds a separate survivor vector even when
+        # the completed verdict contains no unreachable objects.
+        assert allocations == [5000] and size == 8 and not oom
+        allocations.append(7000)
+        event('allocate_survivors')
+        return 7000
 
     def free(value):
-        assert_owned()
-        assert value == 5000 and not oom
+        # Current raw metadata retirement occurs only after world/table
+        # ownership has been restored, and in its original drain order.
+        assert state['world'] == state['table'] == outer_depth
+        assert p.cells['py_gc_collecting'] == 0
+        assert allocations and value == allocations.pop(0)
+        assert not oom
         event('free')
 
     def mark():
@@ -447,19 +464,35 @@ def test_gc0_completion_hook_distinguishes_empty_success_from_failure(
         assert p.cells['py_gc_collecting'] == 1
         event('mark')
 
-    def weak_candidates():
+    def weak_candidates(cell, vector, count):
         assert_owned()
+        assert (cell, vector, count) == (8000, 5000, 0)
+        assert words[8000] == words[8008] == 0
         event('weak')
         return 0
 
-    def finalize(vector, count):
+    def weak_clear():
         assert_owned()
-        assert (vector, count) == (5000, 0)
-        event('finalize')
+        event('weak_clear')
         return 0
+
+    def prepare_subset(pairs, count):
+        assert_owned()
+        assert (pairs, count) == (9000, 1)
+        p.cells['pcc_gc_backend0_subset_active'] = 1
+        event('prepare_subset')
+        return tracked
+
+    def subset_node(index):
+        assert_owned()
+        assert subset and index == 0
+        return 3000
 
     def finish():
         assert_owned()
+        if subset:
+            assert p.cells['pcc_gc_backend0_subset_active'] == 1
+            p.cells['pcc_gc_backend0_subset_active'] = 0
         event('finish')
 
     def complete():
@@ -485,6 +518,8 @@ def test_gc0_completion_hook_distinguishes_empty_success_from_failure(
         atomic_load_i32=load_count,
         store_i32=store, store_i64=store, store_ptr=store,
         ptr_is_null=lambda value: value == 0,
+        null=lambda: 0, stack_alloc=lambda size: 8000 if size == 16 else pytest.fail('unexpected stack allocation'),
+        _SUBSET_REACHABLE=1, _prepare_subset=prepare_subset, _subset_node=subset_node,
         pcc_stop_the_world=stop, pcc_resume_world=resume,
         pcc_thread_safepoint=lambda: pytest.fail('unexpected contention'),
         pcc_platform_monotonic_us=monotonic,
@@ -495,17 +530,19 @@ def test_gc0_completion_hook_distinguishes_empty_success_from_failure(
         pcc_gc_tracked_dematerialize=dematerialize,
         pcc_gc_tracked_count_flush=lambda: None,
         _finish_subset=finish, _recompute_reachability=mark,
-        py_weakref_invalidate_gc0_candidates=weak_candidates,
+        py_weakref_queue_gc0_batch=weak_candidates,
         # The late clear always closes the early pass's weak window; it
         # visits only the late list, empty here.
-        py_weakref_clear_gc0_candidates=lambda: 0,
-        _maybe_finalize_unreachable=finalize, malloc=allocate, free=free,
+        py_weakref_clear_gc0_candidates=weak_clear,
+        _maybe_finalize_unreachable=lambda *args: pytest.fail('no user finalizers in this verdict'),
+        malloc=allocate, free=free, pcc_platform_abort=lambda: pytest.fail('unexpected abort'),
         pcc_gc_pressure_collection_completed=complete,
     )
     text = transform.instrument_source((RUNTIME / 'freestanding_gc_backend0_collector.py').read_text(),
                                        'freestanding_gc_backend0_collector', 3)
     bodies(text, {'_collect'}, ns)
-    assert ns['_collect'](0, 0) == 0
+    pairs, candidate_count = (9000, 1) if subset else (0, 0)
+    assert ns['_collect'](pairs, candidate_count) == 0
     assert p.counter(2) == expected
     assert p.cells['py_gc_tracked_count'] == tracked
     assert p.cells['py_gc_collecting'] == int(already)
@@ -515,15 +552,30 @@ def test_gc0_completion_hook_distinguishes_empty_success_from_failure(
         assert events == releases == windows == []
         return
     assert len(windows) == len(releases) == 1
-    assert events[:4] == ['stop', 'reclaim', 'lock', 'materialize']
-    assert events[-5:] == ['finish', 'dematerialize', 'unlock', 'record', 'resume']
+    assert events[:4] == ['stop', 'reclaim', 'lock', 'prepare_subset' if subset else 'materialize']
     assert events.count('complete') == expected
+    tail = ['finish', 'dematerialize', 'unlock', 'record', 'resume']
     if materialized < 0 or tracked == 0:
         assert 'allocate' not in events and 'mark' not in events
+        assert events[4:] == (['complete'] if expected else []) + tail
     elif oom:
         assert 'allocate' in events and 'mark' not in events and 'complete' not in events
+        assert events[4:] == ['allocate'] + tail
     else:
-        assert events[4:10] == ['allocate', 'mark', 'weak', 'finalize', 'free', 'complete']
+        assert events[4:] == (['allocate', 'mark', 'weak', 'weak_clear', 'allocate_survivors']
+                              + (['complete'] if expected else []) + tail + ['free', 'free'])
+    assert allocations == []
+
+
+@pytest.mark.parametrize('copies', [0, 2])
+def test_gc0_pressure_transform_rejects_changed_or_duplicate_verdict_tail(copies):
+    original = (RUNTIME / 'freestanding_gc_backend0_collector.py').read_text()
+    tail = ('            survivor_count = survivor_count + 1\n'
+            '        i = i + 1\n\n    _finish_subset()')
+    assert original.count(tail) == 1
+    changed = original.replace(tail, (tail + '\n') * copies)
+    with pytest.raises(ValueError, match='GC pressure source shape changed: _collect'):
+        transform.instrument_source(changed, 'freestanding_gc_backend0_collector', 3)
 
 
 @pytest.mark.parametrize('bit', [1, 1 << 24, 1 << 48, 1 << 53])

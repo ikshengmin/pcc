@@ -97,9 +97,12 @@ pcc_gc_pressure_collection_completed = extern("pcc_gc_pressure_collection_comple
         source = _function(source, "_collect",
             "    if materialized < 0 or tracked <= 0:\n        _finish_subset()",
             "    if materialized < 0 or tracked <= 0:\n        if materialized >= 0 and tracked == 0 and ptr_is_null(pairs) != 0:\n            pcc_gc_pressure_collection_completed()\n        _finish_subset()")
+        # The verdict is complete before the subset is finished and the
+        # world resumes; the collector now drains private metadata afterward.
+        # Match the successful verdict tail, not any early cleanup branch.
         source = _function(source, "_collect",
-            "    free(unreachable)\n    _finish_subset()",
-            "    free(unreachable)\n    if ptr_is_null(pairs) != 0:\n        pcc_gc_pressure_collection_completed()\n    _finish_subset()")
+            "            survivor_count = survivor_count + 1\n        i = i + 1\n\n    _finish_subset()",
+            "            survivor_count = survivor_count + 1\n        i = i + 1\n\n    if ptr_is_null(pairs) != 0:\n        pcc_gc_pressure_collection_completed()\n    _finish_subset()")
     elif module == "freestanding_thread_kernel_pthread":
         source += '''
 
