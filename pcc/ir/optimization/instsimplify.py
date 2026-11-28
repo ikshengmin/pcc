@@ -25,9 +25,11 @@ full recursive simplifier:
     Selects:    select true,x,y → x; select false,x,y → y;
                 select c,x,x → x.
     Addresses:  getelementptr T, ptr X, 0... → X (``SimplifyGEPInst``) for
-                a local X at every use, and for a global X when the GEP's
-                one use is a load or store address; a thread-local X keeps
-                its GEP, whose one TLV call each direct use would repeat.
+                a local X except a conditionally used dynamic memory address,
+                and for a global X when the GEP's one use is a load or store
+                address; a thread-local X keeps its GEP, whose one TLV call
+                each direct use would repeat. Preserve explicit address SSA
+                across later inlining of a nullable argument.
 
 Unsupported transformations leave their input unchanged. Upstream
 ``opt -passes=instsimplify`` is an external reference only, never an
@@ -115,6 +117,10 @@ _STORE_ADDRESS_RE = re.compile(
     r"^\s*store\s+(?:atomic\s+)?(?:volatile\s+)?\S+\s+(?P<value>[^,]+),"
     r"\s*ptr\s+%(?P<address>[\w.$-]+)(?:\s|,|$)"
 )
+_ATOMIC_ADDRESS_RE = re.compile(
+    r"^\s*%[\w.$-]+\s*=\s*(?:atomicrmw\s+(?:volatile\s+)?\w+|"
+    r"cmpxchg\s+(?:weak\s+)?(?:volatile\s+)?)\s*ptr\s+%(?P<address>[\w.$-]+)(?:\s|,|$)"
+)
 _LOCAL_NAME_RE = re.compile(r"%([\w.$-]+)")
 _THREAD_LOCAL_RE = re.compile(r"^@(?P<name>[\w.$-]+)\s*=\s*[^=]*\bthread_local\b", re.M)
 
@@ -143,6 +149,64 @@ def _single_address_uses(fn_text: str, candidates: set[str]) -> set[str]:
                     and store.group("value").strip() != "%" + name)
             )
     return {name for name in candidates if counts.get(name) == 1 and address.get(name)}
+
+
+def _local_address_fold_constraints(lines: list[str], aliases: dict[str, str]) -> tuple[set[str], set[str]]:
+    """Conditional memory uses and local address-producing SSA definitions.
+
+    A nullable parameter may become a literal only after a later inline, not
+    during this pass. Keep its GEP when dereference is conditional. A direct
+    entry access before a call/branch is required by any defined invocation;
+    an alloca or a distinct GEP also retains an explicit local address owner.
+    """
+    used: set[str] = set()
+    unconditional: set[str] = set()
+    addresses: set[str] = set()
+    in_entry = True
+    seen_label = False
+    seen_instruction = False
+    for line in lines:
+        text = line.strip()
+        if not text or text.startswith(("define ", ";")):
+            continue
+        if text.endswith(":"):
+            if seen_label or seen_instruction:
+                in_entry = False
+            seen_label = True
+            continue
+        seen_instruction = True
+        opcode = text
+        if text.startswith("%") and "=" in text:
+            parts = text.split("=", 1)
+            name = parts[0][1:].strip()
+            opcode = parts[1].strip()
+            if opcode.startswith("alloca ") or (opcode.startswith("getelementptr ") and _ZERO_GEP_RE.match(line) is None):
+                addresses.add(name)
+        if opcode.startswith(("load ", "store ", "atomicrmw ", "cmpxchg ")):
+            match = _LOAD_ADDRESS_RE.match(line)
+            if match is None:
+                match = _STORE_ADDRESS_RE.match(line)
+            if match is None:
+                match = _ATOMIC_ADDRESS_RE.match(line)
+            if match is not None:
+                address = match.group("address")
+                value = aliases.get(address, "%" + address)
+                if value.startswith("%"):
+                    used.add(value[1:])
+                    if in_entry:
+                        unconditional.add(value[1:])
+            else:
+                # An unrecognized memory form is not evidence for an
+                # unconditional access; keep any potential address aliases.
+                for address in _LOCAL_NAME_RE.findall(opcode):
+                    value = aliases.get(address, "%" + address)
+                    if value.startswith("%"):
+                        used.add(value[1:])
+        if opcode.startswith(("call ", "tail call ", "musttail call ", "notail call ",
+                              "invoke ", "callbr ", "br ", "switch ", "indirectbr ",
+                              "ret ", "resume ", "unreachable", "catch", "cleanup")):
+            in_entry = False
+    return used - unconditional, addresses
 
 
 _INVERSE_INTEGER_PREDICATES = {
@@ -503,6 +567,10 @@ def _rewrite_function_text(fn_text: str, thread_locals: frozenset = frozenset())
     resolved = _resolve_aliases(replacements)
     if resolved is None:
         return fn_text, False
+    guarded_addresses: set[str] = set()
+    stable_addresses: set[str] = set()
+    if gep_candidates:
+        guarded_addresses, stable_addresses = _local_address_fold_constraints(kept, resolved)
     folded_geps = True
     while folded_geps:
         folded_geps = False
@@ -514,6 +582,12 @@ def _rewrite_function_text(fn_text: str, thread_locals: frozenset = frozenset())
                 final = resolved[base[1:]]
             elif base.startswith("%") and base[1:] in replacements:
                 final = replacements[base[1:]]
+            if final.startswith("%") and name in guarded_addresses and final[1:] not in stable_addresses:
+                # Don't delete the address-producing SSA before a later
+                # inliner substitutes a nullable argument (e.g. a key-only
+                # sort call). A direct literal address is not the original
+                # operand representation the owned backends support.
+                continue
             if final.startswith("%") or (final == base and base.startswith("@")):
                 replacements[name] = final
                 resolved[name] = final

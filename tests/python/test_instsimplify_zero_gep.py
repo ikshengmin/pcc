@@ -150,3 +150,94 @@ entry:
     simplified, _changed = simplify_module_text(text)
     assert "load atomic i64, ptr null" not in simplified, simplified
     emit_aarch64_darwin_asm(simplified, optimize=True)
+
+
+def _optional_key_program(target, chained=False):
+    # A key-only sort call supplies no optional second key. The callee reads
+    # the second key only on the branch where it is supplied. Inlining a
+    # defined call must preserve a legal address representation until the
+    # optimizer proves that branch dead, rather than require null-memory
+    # operands from the backend.
+    source = 'target triple = "' + target + '"\n' + '''define internal i64 @choose_key(ptr %first, ptr %second) {
+entry:
+  %present = icmp ne ptr %second, null
+  br i1 %present, label %pair, label %single
+pair:
+  %slot = getelementptr i8, ptr %second, i64 0
+  %other = load i64, ptr %slot, align 8
+  ret i64 %other
+single:
+  %first_slot = getelementptr i8, ptr %first, i64 0
+  %key = load i64, ptr %first_slot, align 8
+  ret i64 %key
+}
+define i64 @key_only(ptr %first) {
+entry:
+  %key = call i64 @choose_key(ptr %first, ptr null)
+  ret i64 %key
+}
+'''
+    if chained:
+        source = source.replace("%slot = getelementptr i8, ptr %second, i64 0",
+                                "%base = getelementptr i8, ptr %second, i64 0\n  "
+                                "%slot = getelementptr i8, ptr %base, i64 0")
+    return source
+
+
+def _inline_optional_key(target, chained):
+    from pcc.ir.optimization.inline import inline_module
+
+    simplified, _ = simplify_module_text(_optional_key_program(target, chained))
+    inlined, changed = inline_module(simplified, include_definitions=True, definition_limit=96)
+    assert changed
+    assert not re.search(r"\bload[^\n]*, ptr null(?:[,\s]|$)", inlined)
+    return inlined
+
+
+@pytest.mark.parametrize("target", ("x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"))
+@pytest.mark.parametrize("chained", (False, True))
+def test_optional_key_address_keeps_legal_form_after_inlining(target, chained):
+    assert emit_owned_object(_inline_optional_key(target, chained), target)
+
+
+def test_unclassified_memory_address_is_not_an_unconditional_access():
+    # An aggregate store does not fit the scalar address matcher. It is not
+    # permission to erase the explicit dynamic address in the first block.
+    source = HEADER + '''define void @probe(ptr %p) {
+entry:
+  %slot = getelementptr i8, ptr %p, i64 0
+  store { i64, i64 } { i64 1, i64 2 }, ptr %slot, align 8
+  ret void
+}
+'''
+    text, _ = simplify_module_text(source)
+    assert "%slot = getelementptr i8, ptr %p, i64 0" in text
+
+
+@pytest.mark.pcc_gate(platforms=("linux",), machines=("x86_64", "amd64"))
+def test_defined_key_only_program_returns_the_supplied_key(tmp_path):
+    from pcc.backend.elf_x86_64 import link_static_executable, parse_relocatable
+    from pcc.backend.x86_64_asm_driver import assemble_file
+
+    target = "x86_64-unknown-linux-gnu"
+    entry = assemble_file(""".intel_syntax noprefix
+.text
+.globl _start
+_start:
+  sub rsp, 16
+  mov qword ptr [rsp], 42
+  mov rdi, rsp
+  call key_only
+  mov edi, eax
+  mov eax, 60
+  syscall
+""")
+    # Execute only the defined key-only branch, with a real supplied key.
+    # No invalid memory operation is executed as part of the witness.
+    for name, text in (("original", _optional_key_program(target)),
+                       ("folded", _inline_optional_key(target, True))):
+        output = tmp_path / name
+        payload = emit_owned_object(text, target)
+        output.write_bytes(link_static_executable([entry, parse_relocatable(payload)]))
+        output.chmod(0o755)
+        assert subprocess.run([str(output)], capture_output=True, timeout=10).returncode == 42
