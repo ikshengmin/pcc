@@ -1486,13 +1486,17 @@ def _generation_plain_annotation(annotation) -> bool:
 
 
 def _generation_exact_residual_node(kind) -> bool:
+    # Keep this exact list inside the owned runtime's value-position class
+    # identities. frozenset has no such native identity yet: referring to it
+    # here makes strict lowering replace this reachable helper with a stub.
+    # Unlisted types remain in every scanner view and disable shared rows.
     return (
         kind is Lambda or kind is Arg or kind is Break or kind is BytesLit
         or kind is ComplexLit or kind is Continue or kind is DictExpr
         or kind is FloatLit or kind is Pass or kind is Raise
         or kind is SourceSpan or kind is Stmt or kind is Expr
         or kind is float or kind is complex or kind is bytes
-        or kind is list or kind is dict or kind is set or kind is frozenset
+        or kind is list or kind is dict or kind is set
     )
 
 

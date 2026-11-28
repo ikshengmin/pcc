@@ -709,3 +709,128 @@ def test_generation_shared_context_keeps_custom_tuple_iteration():
     assert actual == expected
     assert rejected == expected_rejected
     assert trace == expected_trace
+
+
+def test_generation_residual_frozenset_keeps_conservative_scanner_view():
+    # A builtin type without a native value-position class identity must not
+    # be used to admit shared analysis. The original scanner still sees it.
+    node = frozenset(("custom",))
+    guard = [True]
+    binding, calls, assignments = analysis._project_effect_scope_nodes(
+        (node,), guard,
+    )
+    assert guard == [False]
+    assert binding == [node] and calls == [node] and assignments == [node]
+
+
+def test_generation_residual_reachable_helpers_have_real_strict_bodies(tmp_path):
+    """Fallback count alone cannot see a discarded body's strict stub."""
+    import ast
+    import re
+    from pcc.frontends.python import pipeline_context as ctx, py_ast
+    from pcc.frontends.python.codegen.layer1 import L1CodeGen
+    from pcc.frontends.python.type_infer import infer_module
+
+    owner = Path(analysis.__file__)
+    full_source = owner.read_text(encoding="utf-8")
+    imports = [
+        ast.get_source_segment(full_source, node)
+        for node in ast.parse(full_source).body
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "pcc.frontends.python.py_ast"
+    ]
+    assert imports
+    helpers = (
+        analysis._generation_plain_annotation,
+        analysis._generation_exact_residual_node,
+        analysis._project_effect_scope_nodes,
+    )
+    fragment = tmp_path / "vthread_effect_analysis.py"
+    fragment.write_text(
+        "\n".join(imports) + "\n\n" + "\n\n".join(getsource(fn) for fn in helpers),
+        encoding="utf-8",
+    )
+    target = analysis.__name__
+    provider = py_ast.__name__
+    parsed, exports, derived = ctx.build_closed_world_context(
+        [str(Path(py_ast.__file__)), str(fragment)], [provider, target],
+        profile=None,
+    )
+    external = {name: values for name, values in exports.items() if name != target}
+    module = parsed[1]
+    typed = infer_module(
+        module, external_exports=external, derived_class_map=derived,
+        contextual_host_params=ctx._contextual_host_params_for_module(module, target),
+    )
+    codegen = L1CodeGen(typed, emit_cpy_main_exitcode=False, ir_scaffold_mode="on")
+    codegen._strict_no_libpython = True
+    codegen._prefer_native_callable_values = True
+    codegen._module_source_path = str(fragment)
+    codegen._skip_program_main = True
+    codegen._sibling_module_inits = (provider,)
+    codegen._target_triple = "x86_64-unknown-linux-gnu"
+    codegen.module.triple = codegen._target_triple
+    owner_exports = (
+        ctx._copy_native_module_exports(codegen._native_module_exports)
+        if ctx._module_uses_default_native_exports(target) else {}
+    )
+    owner_exports.update(external)
+    codegen._native_module_exports = owner_exports
+    codegen._native_function_object_exports = ctx._closed_world_function_object_exports(exports, target)
+    codegen._native_boxed_int_functions = ctx._closed_world_boxed_int_functions(exports, target)
+    text = str(codegen.generate(typed))
+    bodies = {}
+    for fn in helpers:
+        symbol = "user_" + target.replace(".", "_") + "_" + fn.__name__
+        body = re.search(r"^define [^\n]*@" + re.escape(symbol)
+                         + r"\([^\n]*\).*?^}", text, re.M | re.S)
+        assert body is not None, symbol
+        bodies[fn.__name__] = body.group(0)
+        assert "strict.nolib.stub:" not in body.group(0), symbol
+        assert not re.search(r"\bcall [^\n]*@py_cpy_", body.group(0)), symbol
+    # The failing helper is not dead: the shared projection invokes it.
+    assert ("@" + "user_" + target.replace(".", "_")
+            + "__generation_exact_residual_node(") in bodies["_project_effect_scope_nodes"]
+    assert ctx.count_py_cpy_fallback_calls(text) == 0
+
+
+def test_platform_canary_effect_generation_emits_real_strict_body():
+    import ast
+    from pcc.frontends.python.codegen.layer1 import L1CodeGen
+    from pcc.frontends.python.type_infer import infer_module
+    from pcc.frontends.python.pipeline_context import count_py_cpy_fallback_calls
+
+    # Use the actual checked-in platform canary, not a second near-copy.
+    script = Path(__file__).resolve().parents[2] / "scripts/bootstrap_platform.py"
+    tree = ast.parse(script.read_text(encoding="utf-8"))
+    call = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "write_text" and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "canary"
+    )
+    source = call.args[0].value
+    module = parse_and_lift(source, "canary.py", "canary")
+    expected = analysis.compute_vthread_may_park_callables(module)
+    expected_rejected = analysis.classify_vthread_park_boundaries(
+        module, expected[1], None, expected[3],
+    )
+    context, share = analysis._generation_local_vthread_context(
+        module, None, analysis.compute_vthread_may_park_callables,
+        analysis.classify_vthread_park_boundaries,
+    )
+    actual = analysis._compute_local_vthread_effects(
+        module, None, local_context=context, _shared_owned_context=True,
+    )
+    assert actual == expected
+    assert analysis.classify_vthread_park_boundaries(
+        module, actual[1], None, actual[3],
+        _owned_local_context=context if share else None,
+    ) == expected_rejected
+    typed = infer_module(module)
+    codegen = L1CodeGen(typed, emit_cpy_main_exitcode=False, ir_scaffold_mode="on")
+    codegen._strict_no_libpython = True
+    codegen._prefer_native_callable_values = True
+    text = str(codegen.generate(typed))
+    assert "strict.nolib.stub:" not in text
+    assert count_py_cpy_fallback_calls(text) == 0
