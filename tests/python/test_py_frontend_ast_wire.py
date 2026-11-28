@@ -553,3 +553,66 @@ def test_compact_native_generic_row_uses_shared_positional_constructor(monkeypat
     monkeypatch.setattr(wire, "_py_ast_node_from_wire", observed)
     assert wire._decode_py_ast_wire(text) == py_ast.Name(None, None, "ident")
     assert calls == [("Name", ["Name", None, None, "ident"], True)]
+
+
+def test_v2_canonical_layout_is_static_exact_signature():
+    from pcc.frontends.python import pipeline_ast_wire as wire
+    import ast
+    import inspect
+
+    # The version-pinned layout has no new dynamic startup owner. Its exact
+    # encoding is length-prefixed, so delimiter-like field spellings cannot
+    # accidentally match a different canonical row boundary.
+    parts = []
+    for kind, fields in wire._PY_AST_FIELD_NAME_OVERRIDES.items():
+        parts.append(str(len(kind)) + ":" + kind + str(len(fields)) + ":")
+        for field in fields:
+            parts.append(str(len(field)) + ":" + field)
+    assert wire._PY_AST_V2_CANONICAL_LAYOUT == "".join(parts)
+    assert type(wire._PY_AST_V2_CANONICAL_LAYOUT) is str
+    assert not hasattr(wire, "_PY_AST_V2_CANONICAL_FIELDS")
+    tree = ast.parse(inspect.getsource(wire))
+    definitions = [
+        statement.value
+        for statement in tree.body
+        if isinstance(statement, ast.Assign)
+        and any(isinstance(target, ast.Name)
+                and target.id == "_PY_AST_V2_CANONICAL_LAYOUT"
+                for target in statement.targets)
+    ]
+    assert len(definitions) == 1
+    assert isinstance(definitions[0], ast.Constant)
+    assert wire._py_ast_v2_layout_is_canonical()
+
+
+@pytest.mark.parametrize("shape", ["reordered", "shifted_boundary", "changed_arity",
+                                  "tuple_subclass", "field_subclass", "mapping_subclass"])
+def test_static_v2_layout_fails_closed_for_noncanonical_rows(monkeypatch, shape):
+    from pcc.frontends.python import pipeline_ast_wire as wire
+
+    class UnexpectedTuple(tuple):
+        def __iter__(self):
+            raise AssertionError("custom row iteration must not be invoked")
+
+    class UnexpectedString(str):
+        def __str__(self):
+            raise AssertionError("custom field rendering must not be invoked")
+
+    class UnexpectedMapping(dict):
+        def items(self):
+            raise AssertionError("custom mapping iteration must not be invoked")
+
+    schema = wire._PY_AST_FIELD_NAME_OVERRIDES
+    assert wire._py_ast_v2_layout_is_canonical()
+    if shape == "mapping_subclass":
+        monkeypatch.setattr(wire, "_PY_AST_FIELD_NAME_OVERRIDES", UnexpectedMapping(schema))
+    else:
+        replacements = {
+            "reordered": ("span", "ident", "ty"),
+            "shifted_boundary": ("span", "tyi", "dent"),
+            "changed_arity": ("span", "ty", "ident", "extra"),
+            "tuple_subclass": UnexpectedTuple(("span", "ty", "ident")),
+            "field_subclass": ("span", "ty", UnexpectedString("ident")),
+        }
+        monkeypatch.setitem(schema, "Name", replacements[shape])
+    assert not wire._py_ast_v2_layout_is_canonical()

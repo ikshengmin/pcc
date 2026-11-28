@@ -1034,21 +1034,96 @@ def _py_ast_to_wire_v2(value, files: list, file_ids: dict):
     return {"n": row}
 
 
-# Preserve the version-pinned immutable field tuples independently of the
-# mutable schema mapping. A changed layout retains named constructor access.
-_PY_AST_V2_CANONICAL_FIELDS = {
-    kind: fields for kind, fields in _PY_AST_FIELD_NAME_OVERRIDES.items()
-}
+# Exact version-pinned row layout, encoded as one static string literal.
+# Each name is length-prefixed and each row carries its field count. Unlike a
+# module-scope dictionary copy, this adds no dynamic startup traversal or
+# container initialization. A schema change must use the named/default reader
+# until the wire version and this positional constructor contract agree.
+_PY_AST_V2_CANONICAL_LAYOUT = (
+    "10:SourceSpan5:4:file4:line3:col8:end_line7:end_col"
+    "4:Type1:4:name"
+    "14:RawPointerType1:4:name"
+    "7:IntType3:4:name5:width6:signed"
+    "9:FloatType2:4:name5:width"
+    "11:ComplexType1:4:name"
+    "8:BoolType1:4:name"
+    "8:NoneType1:4:name"
+    "7:StrType1:4:name"
+    "9:BytesType1:4:name"
+    "13:ByteArrayType1:4:name"
+    "14:MemoryViewType1:4:name"
+    "8:ListType2:4:name4:elem"
+    "7:SetType2:4:name4:elem"
+    "14:ValueArrayType3:4:name4:elem6:length"
+    "8:DictType3:4:name3:key5:value"
+    "9:TupleType2:4:name5:elems"
+    "8:FuncType3:4:name6:params3:ret"
+    "9:ClassType6:4:name6:module6:fields5:bases10:properties10:valueclass"
+    "14:ValueClassType8:4:name6:module6:fields5:bases10:properties10:valueclass9:flattened15:nullable_fields"
+    "7:DynType1:4:name"
+    "4:Expr2:4:span2:ty"
+    "6:IntLit3:4:span2:ty5:value"
+    "8:FloatLit3:4:span2:ty5:value"
+    "10:ComplexLit4:4:span2:ty4:real4:imag"
+    "7:BoolLit3:4:span2:ty5:value"
+    "7:NoneLit2:4:span2:ty"
+    "6:StrLit3:4:span2:ty5:value"
+    "8:BytesLit3:4:span2:ty5:value"
+    "4:Name3:4:span2:ty5:ident"
+    "5:BinOp5:4:span2:ty2:op3:lhs3:rhs"
+    "7:UnaryOp4:4:span2:ty2:op7:operand"
+    "7:Compare5:4:span2:ty2:op3:lhs3:rhs"
+    "8:BoolExpr5:4:span2:ty2:op4:left5:right"
+    "4:Call7:4:span2:ty4:func4:args6:kwargs13:operand_order14:is_set_literal"
+    "4:Attr4:4:span2:ty3:obj4:name"
+    "9:Subscript4:4:span2:ty3:obj3:idx"
+    "5:Slice5:4:span2:ty2:lo2:hi4:step"
+    "8:ListExpr3:4:span2:ty5:elems"
+    "8:DictExpr3:4:span2:ty5:pairs"
+    "9:TupleExpr3:4:span2:ty5:elems"
+    "6:IfExpr5:4:span2:ty4:cond6:then_e6:else_e"
+    "6:Lambda4:4:span2:ty6:params4:body"
+    "4:Stmt1:4:span"
+    "6:Assign5:4:span7:targets5:value10:annotation9:has_value"
+    "9:AugAssign4:4:span6:target2:op5:value"
+    "8:ExprStmt2:4:span4:expr"
+    "2:If4:4:span4:cond4:body9:else_body"
+    "5:While4:4:span4:cond4:body9:else_body"
+    "3:For6:4:span6:target4:iter4:body9:else_body8:is_async"
+    "6:Return2:4:span5:value"
+    "4:Pass1:4:span"
+    "5:Break1:4:span"
+    "8:Continue1:4:span"
+    "5:Raise3:4:span3:exc5:cause"
+    "3:Try5:4:span4:body8:handlers9:else_body12:finally_body"
+    "13:ExceptHandler4:8:exc_type4:name4:body4:span"
+    "4:With4:4:span5:items4:body8:is_async"
+    "6:Import2:4:span5:names"
+    "10:ImportFrom4:4:span6:module5:names5:level"
+    "6:Global2:4:span5:names"
+    "8:Nonlocal2:4:span5:names"
+    "6:Delete2:4:span7:targets"
+    "3:Arg5:4:name10:annotation7:default4:kind11:has_default"
+    "7:FuncDef10:4:span4:name4:args9:return_ty4:body10:decorators9:is_method8:is_async21:has_return_annotation18:manual_pointer_abi"
+    "8:ClassDef6:4:span4:name5:bases8:keywords4:body10:decorators"
+    "6:Module3:4:name4:body9:docstring"
+)
 
 
 def _py_ast_v2_layout_is_canonical() -> bool:
-    if len(_PY_AST_FIELD_NAME_OVERRIDES) != len(_PY_AST_V2_CANONICAL_FIELDS):
+    schema = _PY_AST_FIELD_NAME_OVERRIDES
+    if type(schema) is not dict or len(schema) != 67:
         return False
-    for kind, fields in _PY_AST_V2_CANONICAL_FIELDS.items():
-        if (kind not in _PY_AST_FIELD_NAME_OVERRIDES
-                or _PY_AST_FIELD_NAME_OVERRIDES[kind] is not fields):
+    parts = []
+    for kind, fields in schema.items():
+        if type(kind) is not str or type(fields) is not tuple:
             return False
-    return True
+        parts.append(str(len(kind)) + ":" + kind + str(len(fields)) + ":")
+        for field in fields:
+            if type(field) is not str:
+                return False
+            parts.append(str(len(field)) + ":" + field)
+    return "".join(parts) == _PY_AST_V2_CANONICAL_LAYOUT
 
 
 def _py_ast_v2_field_positions() -> dict:
