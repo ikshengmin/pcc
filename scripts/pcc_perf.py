@@ -1973,6 +1973,71 @@ def step_callees(symbols: list[tuple[int, str]], pcs: list[int], slide: int,
             if caller == function}
 
 
+_SAVED_REGISTERS = frozenset("x%d" % number for number in range(19, 31)) | {"fp", "lr"}
+_ATOMIC_PREFIXES = ("ldar", "stlr", "ldaxr", "stlxr", "ldxr", "stxr", "cas", "ldadd", "ldset",
+                    "ldclr", "ldeor", "swp", "dmb", "dsb", "isb")
+
+
+def instruction_class(text: str) -> str:
+    """The class of one ``otool -tv`` instruction (mnemonic TAB operands):
+    callee-saved save/restore, frame, register copy, immediate, stack slot,
+    load, store, atomic, address, compare, conditional select, branch, ALU."""
+    mnemonic, _tab, operands = text.partition("\t")
+    mnemonic = mnemonic.strip()
+    operands = operands.split(";", 1)[0].strip()
+    registers = [part.strip() for part in operands.split(",")]
+    if mnemonic.startswith(_ATOMIC_PREFIXES):
+        return "atomic"
+    if mnemonic in ("stp", "ldp") and "[sp" in operands and registers[0] in _SAVED_REGISTERS:
+        return "save/restore"
+    if (mnemonic == "mov" and operands in ("x29, sp", "fp, sp")) or (
+            mnemonic in ("add", "sub") and registers[0] == "sp"):
+        return "frame"
+    if mnemonic in ("mov", "fmov") and len(registers) == 2:
+        if registers[1].startswith("#") or registers[1].startswith("-"):
+            return "immediate"
+        return "copy"
+    if mnemonic in ("movz", "movk", "movn"):
+        return "immediate"
+    if mnemonic.startswith(("ld", "st")) and "[" in operands:
+        if "[x29" in operands or "[sp" in operands or "[fp" in operands:
+            return "stack slot"
+        return "load" if mnemonic.startswith("ld") else "store"
+    if mnemonic in ("adrp", "adr"):
+        return "address"
+    if mnemonic in ("cmp", "cmn", "tst", "ccmp", "ccmn", "fcmp", "fcmpe"):
+        return "compare"
+    if mnemonic.startswith(("csel", "cset", "csinc", "csinv", "csneg", "cinc", "cneg", "fcsel")):
+        return "conditional select"
+    if mnemonic in ("b", "bl", "blr", "br", "ret", "cbz", "cbnz", "tbz", "tbnz") or mnemonic.startswith("b."):
+        return "branch"
+    if mnemonic in ("nop",):
+        return "nop"
+    return "alu"
+
+
+def step_instruction_classes(binary: Path, pcs: list[int], slide: int) -> dict:
+    """Executed instructions by ``instruction_class``; a PC outside the
+    binary's disassembly (a system library) is ``<outside>``."""
+    wanted = {pc - slide for pc in pcs}
+    text = subprocess.run(["xcrun", "otool", "-tv", str(binary)], capture_output=True,
+                          text=True, check=True).stdout
+    found: dict[int, str] = {}
+    for line in text.splitlines():
+        if len(line) > 17 and line[16] == "\t":
+            try:
+                address = int(line[:16], 16)
+            except ValueError:
+                continue
+            if address in wanted:
+                found[address] = line[17:]
+    kinds = collections.Counter()
+    for pc in pcs:
+        text_line = found.get(pc - slide)
+        kinds[instruction_class(text_line) if text_line is not None else "<outside>"] += 1
+    return dict(kinds)
+
+
 def parse_step_sections(otool_text: str) -> list[tuple[int, int, str]]:
     """(start, end, name) of each __TEXT section in ``otool -l`` output."""
     sections = []
@@ -2060,7 +2125,8 @@ def step_rows(first: dict, first_requests: int, second: dict | None, *,
 
 
 def run_steps(name: str, count: int, warm: int, marker: str, rounds: int,
-              reuse: bool = False, callers: str = "", callees: str = "") -> tuple:
+              reuse: bool = False, callers: str = "", callees: str = "",
+              classes: bool = False) -> tuple:
     """(instructions by function, marker hits, steps, exact request lengths,
     step_callers of ``callers`` or None, step_callees of ``callees`` or None)
     for one arm. ``reuse`` reads the arm's kept record of the same count and
@@ -2069,7 +2135,7 @@ def run_steps(name: str, count: int, warm: int, marker: str, rounds: int,
     kept = arm_dir(name) / f"steps-{count}-{marker}.txt"
     if reuse and kept.is_file():
         markers, slide, pcs = parse_step_output(kept.read_text())
-        return _step_attribution(binary, markers, slide, pcs, marker, callers, callees)
+        return _step_attribution(binary, markers, slide, pcs, marker, callers, callees, classes)
     with tempfile.TemporaryDirectory(prefix="pcc-steps-") as scratch:
         script = Path(scratch) / "pcc_step.py"
         script.write_text(_STEP_SCRIPT)
@@ -2088,11 +2154,11 @@ def run_steps(name: str, count: int, warm: int, marker: str, rounds: int,
         markers, slide, pcs = parse_step_output(record)
     # Keep the raw record: a new attribution needs no new half-hour of stepping.
     kept.write_text(record)
-    return _step_attribution(binary, markers, slide, pcs, marker, callers, callees)
+    return _step_attribution(binary, markers, slide, pcs, marker, callers, callees, classes)
 
 
 def _step_attribution(binary: Path, markers: int, slide: int, pcs: list[int], marker: str,
-                      callers: str, callees: str) -> tuple:
+                      callers: str, callees: str, classes: bool = False) -> tuple:
     nm = subprocess.run(["xcrun", "nm", "-n", str(binary)], capture_output=True, text=True,
                         check=True).stdout
     otool = subprocess.run(["xcrun", "otool", "-l", str(binary)], capture_output=True, text=True,
@@ -2102,7 +2168,8 @@ def _step_attribution(binary: Path, markers: int, slide: int, pcs: list[int], ma
     lengths = step_request_lengths(pcs, slide, step_marker_address(symbols, marker))
     called = step_callers(symbols, pcs, slide, callers) if callers else None
     calling = step_callees(symbols, pcs, slide, callees) if callees else None
-    return counts, markers, len(pcs), lengths, called, calling
+    kinds = step_instruction_classes(binary, pcs, slide) if classes else None
+    return counts, markers, len(pcs), lengths, called, calling, kinds
 
 
 def runtime_function_names(name: str) -> set:
@@ -2116,6 +2183,26 @@ def runtime_function_names(name: str) -> set:
                         text=True, check=True).stdout
     return {line[1:] if line.startswith("_") else line
             for line in nm.splitlines() if line and not line.endswith(":")}
+
+
+def print_step_classes(names: list[str], measured: list) -> None:
+    """Instructions per request by class; with two arms, the second scaled
+    to the first's program work (step_program_scale)."""
+    first = measured[0][6]
+    requests = measured[0][1]
+    if len(measured) == 1:
+        print(f"{names[0]}: executed instructions per request by class")
+        for kind, count in sorted(first.items(), key=lambda item: -item[1]):
+            print(f"{count / requests:10.1f}  {kind}")
+        return
+    scale = step_program_scale(measured[0][0], measured[1][0], runtime_function_names(names[0]))
+    second = {kind: count * (scale or 1.0) for kind, count in measured[1][6].items()}
+    print(f"executed instructions per request by class: {names[0]} -> {names[1]} "
+          f"(scaled x{scale or 1.0:.3f})")
+    for kind in sorted(set(first) | set(second), key=lambda k: -abs(second.get(k, 0) - first.get(k, 0))):
+        before = first.get(kind, 0) / requests
+        after = second.get(kind, 0) / requests
+        print(f"{before:10.1f} {after:10.1f} {after - before:+10.1f}  {kind}")
 
 
 def print_step_callers(name: str, title: str, called: dict, requests: int) -> None:
@@ -2133,15 +2220,15 @@ def print_step_callers(name: str, title: str, called: dict, requests: int) -> No
 
 def print_steps(names: list[str], count: int, warm: int, marker: str, rounds: int,
                 limit: int, reuse: bool = False, callers: str = "",
-                callees: str = "") -> None:
+                callees: str = "", classes: bool = False) -> None:
     if sys.platform != "darwin":
         raise SystemExit("steps single-steps under lldb and needs Darwin")
     if not 1 <= len(names) <= 2:
         raise SystemExit("steps takes one arm or two")
-    measured = [run_steps(name, count, warm, marker, rounds, reuse, callers, callees)
+    measured = [run_steps(name, count, warm, marker, rounds, reuse, callers, callees, classes)
                 for name in names]
     exact = []
-    for name, (counts, markers, steps, lengths, called, calling) in zip(names, measured):
+    for name, (counts, markers, steps, lengths, called, calling, _kinds) in zip(names, measured):
         print(f"{name}: {steps} steps, {markers} requests (hits of {marker}), "
               f"{steps / markers:.0f} instructions per request on the stepped thread")
         if lengths:
@@ -2158,6 +2245,8 @@ def print_steps(names: list[str], count: int, warm: int, marker: str, rounds: in
     if len(exact) == 2:
         print(f"exact per request {names[0]} -> {names[1]}: {exact[0]} -> {exact[1]} "
               f"({100.0 * (exact[1] - exact[0]) / exact[0]:+.2f}%)")
+    if classes:
+        print_step_classes(names, measured)
     if len(measured) == 1:
         for function, value, _after, _change in step_rows(measured[0][0], measured[0][1], None,
                                                           limit=limit):
@@ -2883,6 +2972,8 @@ def main(argv: list[str] | None = None) -> int:
                        help="attribute the arm's kept record of this count and marker")
     steps.add_argument("--callers", default="",
                        help="a function: its calls per request by caller")
+    steps.add_argument("--classes", action="store_true",
+                       help="executed instructions per request by class; with B, the change")
     steps.add_argument("--callees", default="",
                        help="a function: the calls it makes per request by callee")
 
@@ -3009,7 +3100,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "steps":
         print_steps(args.names, args.count, args.warm, args.marker, args.rounds, args.limit,
-                    args.reuse, args.callers, args.callees)
+                    args.reuse, args.callers, args.callees, args.classes)
         return
     if args.command == "instr":
         if args.short_rounds < 0 or args.long_rounds <= args.short_rounds:

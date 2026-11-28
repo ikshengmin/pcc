@@ -1408,6 +1408,46 @@ def test_steps_reuse_a_kept_record_and_print_callers(monkeypatch, tmp_path, caps
     assert "     1.0      2.0        2.0  alpha" in out
 
 
+@pytest.mark.parametrize("text,kind", (
+    ("stp\tx29, x30, [sp, #-0x10]!", "save/restore"),
+    ("ldp\tx19, x20, [sp], #0x20", "save/restore"),
+    ("mov\tx29, sp", "frame"),
+    ("sub\tsp, sp, #0x20", "frame"),
+    ("mov\tx19, x0", "copy"),
+    ("mov\tw9, w1", "copy"),
+    ("mov\tx10, #0xffff", "immediate"),
+    ("movk\tx10, #0xff, lsl #16", "immediate"),
+    ("stur\txzr, [x29, #-0x10]", "stack slot"),
+    ("ldp\tx1, x2, [x19, #0x10]", "load"),
+    ("str\tx1, [x0]", "store"),
+    ("casa\tw3, w11, [x2]", "atomic"),
+    ("ldar\tx1, [x1]", "atomic"),
+    ("adrp\tx9, 2382 ; 0x101a8a000", "address"),
+    ("cmp\tx0, #0x0", "compare"),
+    ("csel\tx0, x10, x0, eq", "conditional select"),
+    ("cbz\tw1, 0x10113c298", "branch"),
+    ("b.ne\t0x10113c1e4", "branch"),
+    ("eor\tx2, x2, x22, asr #13", "alu"),
+))
+def test_instructions_are_classified(text, kind):
+    assert PERF.instruction_class(text) == kind
+
+
+def test_step_classes_count_executed_instructions(monkeypatch, tmp_path):
+    listing = ("bin:\n(__TEXT,__text) section\n_alpha:\n"
+               "0000000100001000\tstp\tx29, x30, [sp, #-0x10]!\n"
+               "0000000100001004\tmov\tx19, x0\n"
+               "0000000100001008\tret\n")
+
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(command, 0, stdout=listing, stderr="")
+    monkeypatch.setattr(PERF.subprocess, "run", fake_run)
+    slide = 0x4000
+    pcs = [0x100005000, 0x100005004, 0x100005004, 0x100005008, 0x180000000]
+    kinds = PERF.step_instruction_classes(tmp_path / "bin", pcs, slide)
+    assert kinds == {"save/restore": 1, "copy": 2, "branch": 1, "<outside>": 1}
+
+
 def test_steps_refuse_hosts_without_lldb(monkeypatch):
     monkeypatch.setattr(PERF.sys, "platform", "linux")
     with pytest.raises(SystemExit, match="Darwin"):
