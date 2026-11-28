@@ -51,8 +51,7 @@ def no_external_processes(monkeypatch):
             monkeypatch.setattr(os, name, forbidden)
 
 
-@pytest.fixture
-def errno_translation_unit_api_owner(request, monkeypatch):
+def _errno_native_route_owner():
     from pcc.frontends.c.evaluator import c_evaluator
     from tests import pcc1_route
 
@@ -61,9 +60,7 @@ def errno_translation_unit_api_owner(request, monkeypatch):
         assert not (os.environ.get("PCC_TEST_COMPILER")
                     and os.environ.get(pcc1_route.STRICT_ENV) == "1"), (
             "strict native C artifact route is not installed")
-        request.getfixturevalue("no_external_processes")
-        yield
-        return
+        return None
     # Only the installed strict native route may create a process. Environment
     # variables alone are not evidence that the evaluator has been redirected.
     assert os.environ.get(pcc1_route.STRICT_ENV) == "1"
@@ -72,6 +69,17 @@ def errno_translation_unit_api_owner(request, monkeypatch):
     runtime = job.keywords["_runtime_archive"]
     assert compiler == os.environ.get("PCC_TEST_COMPILER") and Path(compiler).is_file()
     assert runtime == os.environ.get("PCC_RUNTIME_ARCHIVE") and Path(runtime).is_file()
+    return compiler, runtime
+
+
+@pytest.fixture
+def errno_translation_unit_api_owner(request, monkeypatch):
+    owner = _errno_native_route_owner()
+    if owner is None:
+        request.getfixturevalue("no_external_processes")
+        yield
+        return
+    compiler, runtime = owner
     popen = subprocess.Popen
     launches = 0
 
@@ -231,8 +239,177 @@ def test_standard_errno_provider_is_linux_only(target, included):
     assert ("freestanding_linux_libc" in modules) is included
 
 
+def _compile_errno_runtime_ir(request, source, output, target):
+    from tests import pcc1_route
+
+    owner = _errno_native_route_owner()
+    routed = pipeline.compile_python.__module__ == pcc1_route.__name__
+    if owner is None:
+        assert not routed, "Python route installed without the admitted native owner"
+        request.getfixturevalue("no_external_processes")
+        owned_runtime_build._compile_runtime_module(source.stem, str(source), str(output), target)
+        return
+    # install() binds both C and Python routes to the exact same compiler.
+    # Admit only its single, source-specific IR command, never a host build.
+    assert routed, "strict native Python route is not installed"
+    compiler, runtime = owner
+    expected = [compiler, "--backend", "self", "--ir-scaffold", "on", "--target", target,
+                "--python-library", "--emit-llvm", str(output), str(source)]
+    popen = subprocess.Popen
+    launches = 0
+
+    def native_only(argv, *args, **kwargs):
+        nonlocal launches
+        assert isinstance(argv, (tuple, list)) and list(argv) == expected
+        assert not args and not kwargs.get("shell") and kwargs.get("executable") is None
+        env = kwargs["env"]
+        assert env["PCC_TEST_COMPILER"] == compiler and env["PCC_RUNTIME_ARCHIVE"] == runtime
+        assert env[pcc1_route.STRICT_ENV] == "1"
+        assert env["PCC_HOST_PYTHON"] == env["PCC_RUNTIME_CC"] == "/usr/bin/false"
+        assert env["PCC_NO_AUTO_PCC1"] == env["PCC_TEST_COMPILER_ROUTED"] == "1"
+        launches += 1
+        assert launches == 1, "errno runtime IR must launch exactly one native compiler"
+        return popen(argv, **kwargs)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("errno runtime IR attempted an unadmitted external process")
+
+    monkeypatch = request.getfixturevalue("monkeypatch")
+    with monkeypatch.context() as native:
+        native.setattr(subprocess, "Popen", native_only)
+        for name in ("system", "fork", "posix_spawn", "posix_spawnp"):
+            if hasattr(os, name):
+                native.setattr(os, name, forbidden)
+        owned_runtime_build._compile_runtime_module(source.stem, str(source), str(output), target)
+    assert launches == 1, "errno runtime IR must launch exactly one native compiler"
+
+
+@pytest.mark.parametrize("mutation", (
+    "none", "none-arm", "wrong-target", "wrong-output", "wrong-source", "wrong-compiler",
+    "wrong-compiler-env", "wrong-runtime", "host-python", "host-cc", "unrouted", "no-auto",
+    "nonstrict", "shell", "executable", "os-system", "two-launches", "no-launch",
+    "missing-python-route",
+))
+def test_errno_runtime_ir_strict_route_launch_boundary_model(tmp_path, request, monkeypatch, mutation):
+    # Exercise the REAL installed pcc1 route and its argv/env construction.
+    # Only Popen is modeled; the sentinel file/result is not native IR or
+    # a native compiler qualification. The complete provider test below
+    # separately validates all actual emitted definitions on its real owner.
+    from pcc.frontends.c.evaluator import c_evaluator
+    from tests import pcc1_route
+
+    compiler = sys.executable
+    runtime = tmp_path / "modeled-runtime.a"
+    runtime.touch()
+    log = tmp_path / "modeled-routing.jsonl"
+    output = tmp_path / "provider.ll"
+    target = LINUX_TARGETS[1] if mutation == "none-arm" else LINUX_TARGETS[0]
+    expected = [compiler, "--backend", "self", "--ir-scaffold", "on", "--target", target,
+                "--python-library", "--emit-llvm", str(output), str(SOURCE)]
+    # install() assigns these three APIs itself. Record their original
+    # bindings first so even a strict outer suite gets its own route back.
+    monkeypatch.setattr(pipeline, "compile_python", pipeline.compile_python)
+    monkeypatch.setattr(pipeline, "compile_python_multi", pipeline.compile_python_multi)
+    monkeypatch.setattr(c_evaluator, "_compile_translation_unit_artifact_job",
+                        c_evaluator._compile_translation_unit_artifact_job)
+    monkeypatch.setattr(pcc1_route, "_HOST_C_ARTIFACT", pcc1_route._HOST_C_ARTIFACT)
+    monkeypatch.setenv("PCC_TEST_COMPILER", compiler)
+    monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(runtime))
+    monkeypatch.setenv(pcc1_route.LOG_ENV, str(log))
+    monkeypatch.setenv(pcc1_route.STRICT_ENV, "1")
+    monkeypatch.delenv("PCC_TEST_COMPILER_HASH_INPUTS", raising=False)
+    pcc1_route.install()
+    launches = []
+
+    class ModelProcess:
+        def __init__(self, argv, *args, **kwargs):
+            launches.append(tuple(argv))
+            assert argv == expected and not args
+            self.args = argv
+            output.write_text("modeled launch only")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def communicate(self, input=None, timeout=None):
+            assert input is None and timeout == 900
+            return "", ""
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(subprocess, "Popen", ModelProcess)
+    run = subprocess.run
+
+    def mutated_run(argv, **kwargs):
+        args = list(argv)
+        if mutation == "wrong-target":
+            args[6] = LINUX_TARGETS[1]
+        elif mutation == "wrong-output":
+            args[-2] = str(tmp_path / "other.ll")
+        elif mutation == "wrong-source":
+            args[-1] = str(tmp_path / "other.py")
+        elif mutation == "wrong-compiler":
+            args[0] = str(tmp_path / "other-compiler")
+        elif mutation in ("wrong-compiler-env", "wrong-runtime", "host-python", "host-cc",
+                          "unrouted", "no-auto", "nonstrict"):
+            key = {"wrong-compiler-env": "PCC_TEST_COMPILER", "wrong-runtime": "PCC_RUNTIME_ARCHIVE",
+                   "host-python": "PCC_HOST_PYTHON", "host-cc": "PCC_RUNTIME_CC",
+                   "unrouted": "PCC_TEST_COMPILER_ROUTED", "no-auto": "PCC_NO_AUTO_PCC1",
+                   "nonstrict": pcc1_route.STRICT_ENV}[mutation]
+            kwargs["env"] = dict(kwargs["env"], **{key: "wrong"})
+        elif mutation == "shell":
+            kwargs["shell"] = True
+        elif mutation == "executable":
+            kwargs["executable"] = str(tmp_path / "other-compiler")
+        elif mutation == "os-system":
+            return os.system("exit 0")
+        elif mutation == "no-launch":
+            return subprocess.CompletedProcess(args, 0, "", "")
+        result = run(args, **kwargs)
+        if mutation == "two-launches":
+            run(args, **kwargs)
+        return result
+
+    monkeypatch.setattr(subprocess, "run", mutated_run)
+    if mutation == "missing-python-route":
+        monkeypatch.setattr(pipeline, "compile_python", lambda *args, **kwargs: None)
+    if mutation in ("none", "none-arm"):
+        _compile_errno_runtime_ir(request, SOURCE, output, target)
+        assert launches == [tuple(expected)]
+        assert output.read_text() == "modeled launch only"
+        summary = pcc1_route.summarize(str(log))["counts"]
+        assert summary["native_attempted"] == summary["native_completed"] == summary["native"] == 1
+        assert summary["host"] == summary["unsupported"] == summary["native_incomplete"] == 0
+    else:
+        message = ("exactly one native compiler" if mutation in ("two-launches", "no-launch") else
+                   "strict native Python route is not installed" if mutation == "missing-python-route" else
+                   "unadmitted external process" if mutation == "os-system" else None)
+        with pytest.raises(AssertionError, match=message):
+            _compile_errno_runtime_ir(request, SOURCE, output, target)
+        assert launches == ([tuple(expected)] if mutation == "two-launches" else [])
+
+
+@pytest.mark.parametrize("api", ("run", "Popen", "system"))
+def test_host_errno_runtime_ir_cannot_start_external_processes(tmp_path, request, monkeypatch, api):
+    def unexpected_process(*args, **kwargs):
+        if api == "system":
+            return os.system("exit 0")
+        return getattr(subprocess, api)([sys.executable, "-c", "pass"])
+
+    monkeypatch.setattr(pipeline, "compile_python", unexpected_process)
+    message = ("strict native Python route is not installed" if os.environ.get("PCC_TEST_COMPILER")
+               and os.environ.get("PCC_TEST_COMPILER_STRICT") == "1" else
+               "host errno control attempted an external process")
+    with pytest.raises(AssertionError, match=message):
+        _compile_errno_runtime_ir(request, SOURCE, tmp_path / "provider.ll", LINUX_TARGETS[0])
+
+
 @pytest.mark.parametrize("target", LINUX_TARGETS)
-def test_complete_linux_libc_ir_exports_errno_pointer(tmp_path, target, no_external_processes):
+def test_complete_linux_libc_ir_exports_errno_pointer(tmp_path, target, request):
     # Complete production provider, not a declaration-only or extracted stub.
     output = tmp_path / "freestanding_linux_libc.ll"
     source = SOURCE
@@ -242,7 +419,7 @@ def test_complete_linux_libc_ir_exports_errno_pointer(tmp_path, target, no_exter
         source = directory / SOURCE.name
         source.write_bytes(SOURCE.read_bytes())
     assert pipeline._is_py_runtime_library_source(str(source))
-    owned_runtime_build._compile_runtime_module(source.stem, str(source), str(output), target)
+    _compile_errno_runtime_ir(request, source, output, target)
     text = output.read_text()
     module = MutableModule.parse(text)
     definitions = [node for node in ast.parse(SOURCE.read_text()).body
