@@ -5,6 +5,8 @@ reference chain; current ELF behavior is still compared by the live owner.
 """
 import hashlib
 
+from tests.elf_function_map_preimage import OWNER_SHA256 as FUNCTION_MAP_OWNER_SHA256, without_function_map
+
 OWNER_SHA256 = "da5749873cfb59d6ee69212f8b433df0359bedc391f96cbc6baf6fcda6ed1f86"
 BASE_OWNER_SHA256 = "a99b05a0a491a2c48ab9dedb53d01544aec6fa8cb752bbd3e0afd77e88b4d3a6"
 OWNER_REVERSE_EDITS = (
@@ -74,6 +76,9 @@ FILE_REVERSE_EDITS = (
 
 def without_file_symbols(source):
     digest = hashlib.sha256(source.encode()).hexdigest()
+    if digest == FUNCTION_MAP_OWNER_SHA256:
+        source = without_function_map(source)
+        digest = hashlib.sha256(source.encode()).hexdigest()
     if digest == OWNER_SHA256:
         return source
     assert digest == FILE_OWNER_SHA256
@@ -85,7 +90,7 @@ def without_file_symbols(source):
 
 def without_unwind_section(source):
     digest = hashlib.sha256(source.encode()).hexdigest()
-    if digest == FILE_OWNER_SHA256:
+    if digest in (FILE_OWNER_SHA256, FUNCTION_MAP_OWNER_SHA256):
         source = without_file_symbols(source)
         digest = hashlib.sha256(source.encode()).hexdigest()
     if digest == BASE_OWNER_SHA256:

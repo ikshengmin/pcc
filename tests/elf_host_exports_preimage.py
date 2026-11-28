@@ -9,6 +9,8 @@ This module imports no production code and performs no link or compiler run.
 
 import hashlib
 
+from tests.elf_function_map_preimage import OWNER_SHA256 as FUNCTION_MAP_OWNER_SHA256
+
 from tests.elf_unwind_section_preimage import OWNER_SHA256 as UNWIND_OWNER_SHA256, FILE_OWNER_SHA256
 from tests.elf_external_odr_preimage import (
     OWNER_SHA256 as EXTERNAL_ODR_OWNER_SHA256,
@@ -150,7 +152,7 @@ OWNER_REVERSE_EDITS = (
 
 def without_host_exports(source):
     digest = hashlib.sha256(source.encode()).hexdigest()
-    if digest in (EXTERNAL_ODR_OWNER_SHA256, UNWIND_OWNER_SHA256, FILE_OWNER_SHA256):
+    if digest in (EXTERNAL_ODR_OWNER_SHA256, UNWIND_OWNER_SHA256, FILE_OWNER_SHA256, FUNCTION_MAP_OWNER_SHA256):
         source = without_external_odr(source)
         digest = hashlib.sha256(source.encode()).hexdigest()
     if digest == BASE_OWNER_SHA256:
