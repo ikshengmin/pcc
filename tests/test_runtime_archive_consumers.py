@@ -638,6 +638,136 @@ def test_pcc_runtime_cache_does_not_copy_an_old_archive_sidecar(
     runtime_build_cache.cached_pcc_python_runtime()
 
 
+@pytest.mark.parametrize("explicit", (False, True))
+def test_hatch_owned_runtime_selection_passes_only_dedicated_override(
+    tmp_path, monkeypatch, explicit,
+):
+    hatch_module = _load_hatch_build(monkeypatch)
+    root = tmp_path / "source"
+    runtime = root / "pcc" / "runtime"
+    runtime.mkdir(parents=True)
+    archive = runtime / "libpy_runtime_pcc_py.a"
+    admitted = tmp_path / "admitted" / archive.name
+    admitted.parent.mkdir()
+    for suffix in ("", ".provenance.json", ".capi_syms"):
+        Path(str(admitted) + suffix).write_text("admitted" + suffix)
+    hook = _new_build_hook(hatch_module, root)
+    monkeypatch.setenv("PCC_RUNTIME_BUILD", "owned")
+    monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(tmp_path / "unrelated"))
+    monkeypatch.delenv("PCC_BUILD_RUNTIME_ARCHIVE", raising=False)
+    if explicit:
+        monkeypatch.setenv("PCC_BUILD_RUNTIME_ARCHIVE", str(admitted))
+    calls = []
+
+    def run(command, **kwargs):
+        # Exercise the actual child selector/copy script with an observed
+        # selector boundary, leaving canonical admission correctness to its
+        # existing tests.
+        assert "PCC_RUNTIME_ARCHIVE" not in kwargs["env"]
+        assert kwargs["timeout"] == 2400
+        assert kwargs["check"] is True
+        from pcc.frontends.python import owned_runtime_build
+        def select(runtime_dir, target, **selector_kwargs):
+            calls.append((runtime_dir, target, selector_kwargs))
+            return str(admitted) if explicit else str(archive)
+        monkeypatch.setattr(owned_runtime_build, "ensure_target_runtime", select)
+        monkeypatch.setattr(sys, "argv", ["-c", *command[3:]])
+        exec(command[2], {})
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+    monkeypatch.setattr(hatch_module.subprocess, "run", run)
+
+    assert hook._run_make(runtime, archive.name, "self")
+    assert len(calls) == 1
+    assert calls[0][0] == str(runtime.resolve())
+    assert calls[0][2] == {
+        "packaged_archive": str(archive.resolve()),
+        "explicit_archive": str(admitted.resolve()) if explicit else None,
+    }
+    if explicit:
+        for suffix in ("", ".provenance.json", ".capi_syms"):
+            assert Path(str(archive) + suffix).read_bytes() == Path(str(admitted) + suffix).read_bytes()
+
+
+def test_hatch_explicit_runtime_never_retries_after_selector_failure(
+    tmp_path, monkeypatch,
+):
+    hatch_module = _load_hatch_build(monkeypatch)
+    root = tmp_path / "source"
+    runtime = root / "pcc" / "runtime"
+    runtime.mkdir(parents=True)
+    hook = _new_build_hook(hatch_module, root)
+    monkeypatch.setenv("PCC_RUNTIME_BUILD", "owned")
+    monkeypatch.setenv("PCC_BUILD_RUNTIME_ARCHIVE", str(tmp_path / "missing.a"))
+    calls = []
+    def reject(command, **kwargs):
+        calls.append(command)
+        raise subprocess.CalledProcessError(1, command, stderr="explicit runtime archive is missing")
+    monkeypatch.setattr(hatch_module.subprocess, "run", reject)
+
+    assert not hook._run_make(runtime, "libpy_runtime_pcc_py.a", "self")
+    assert len(calls) == 1
+    assert calls[0][-1] == str((tmp_path / "missing.a").resolve())
+    assert not (runtime / "libpy_runtime_pcc_py.a").exists()
+    monkeypatch.setenv("PCC_RUNTIME_BUILD", "make")
+    with pytest.raises(RuntimeError, match="PCC_BUILD_RUNTIME_ARCHIVE"):
+        hook._run_make(runtime, "libpy_runtime_pcc_py.a", "self")
+    monkeypatch.setenv("PCC_RUNTIME_BUILD", "owned")
+    for invalid in ("relative.a", "", "   "):
+        monkeypatch.setenv("PCC_BUILD_RUNTIME_ARCHIVE", invalid)
+        with pytest.raises(RuntimeError, match="absolute path"):
+            hook._run_make(runtime, "libpy_runtime_pcc_py.a", "self")
+    assert len(calls) == 1
+
+
+def test_hatch_explicit_runtime_copy_keeps_verified_wheel_stamps(
+    tmp_path, monkeypatch,
+):
+    hatch_module = _load_hatch_build(monkeypatch)
+    root = tmp_path / "source"
+    runtime = root / "pcc" / "runtime"
+    archive = _write_valid_runtime_archive(runtime)
+    admitted = tmp_path / "admitted" / archive.name
+    admitted.parent.mkdir()
+    for suffix in ("", ".provenance.json", ".capi_syms"):
+        Path(str(archive) + suffix).rename(Path(str(admitted) + suffix))
+    prebuilt = tmp_path / "pcc1"
+    prebuilt.write_bytes(b"host-only test fixture")
+    hook = _new_build_hook(hatch_module, root)
+    monkeypatch.setenv("PCC_RUNTIME_BUILD", "owned")
+    monkeypatch.setenv("PCC_BUILD_RUNTIME_ARCHIVE", str(admitted))
+    monkeypatch.setenv("PCC_BUILD_PCC1", str(prebuilt))
+    monkeypatch.delenv("PCC_BUILD_SKIP", raising=False)
+    monkeypatch.delenv("PCC_BUILD_TARGET", raising=False)
+    monkeypatch.setattr(hook, "_validate_prebuilt_pcc1", lambda _path: True)
+
+    def run(command, **kwargs):
+        from pcc.frontends.python import owned_runtime_build
+        def select(runtime_dir, target, *, packaged_archive, explicit_archive):
+            assert explicit_archive == str(admitted.resolve())
+            # The fixture has one member rather than the full production
+            # inventory. Preserve real archive/source integrity verification.
+            verify_runtime_archive_manifest(admitted, runtime_root=runtime)
+            return explicit_archive
+        monkeypatch.setattr(owned_runtime_build, "ensure_target_runtime", select)
+        monkeypatch.setattr(sys, "argv", ["-c", *command[3:]])
+        exec(command[2], {})
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+    monkeypatch.setattr(hatch_module.subprocess, "run", run)
+    build_data = {}
+    hook.initialize("standard", build_data)
+    for suffix in ("", ".provenance.json", ".capi_syms"):
+        copied = Path(str(archive) + suffix)
+        assert copied.read_bytes() == Path(str(admitted) + suffix).read_bytes()
+        assert build_data["force_include"][str(copied)] == "pcc/runtime/" + copied.name
+    verify_runtime_archive_manifest(archive, runtime_root=runtime)
+    marker, = (Path(path) for path, name in build_data["force_include"].items()
+               if name == "pcc/runtime/" + archive.name + ".wheel")
+    installed_marker = Path(str(archive) + ".wheel")
+    installed_marker.write_bytes(marker.read_bytes())
+    from pcc.frontends.python.pipeline_runtime_archive import wheel_stamp_matches
+    assert wheel_stamp_matches(str(archive), hook._archive_target_id())
+
+
 def test_hatch_freshness_requires_an_adjacent_manifest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

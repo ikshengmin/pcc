@@ -1950,6 +1950,10 @@ jobs:
       - name: Build, install, and execute the native wheel
         if: ${{ !cancelled() && steps.native_prior.outcome == 'success' && steps.bound_find.outcome == 'success' && steps.qualification_evidence.outcome == 'success' }}
         id: native_wheel
+        env:
+          # Reuse only the same archive already qualified by Stage1 and the
+          # native prior/find gates; the wheel validates it again.
+          PCC_BUILD_RUNTIME_ARCHIVE: "${{ github.workspace }}/build/worker-prior-gate/runtime/libpy_runtime_pcc_py.a"
         run: |
           env -u LC_ALL uv run pytest -x -n0 -vv --tb=short -m integration \
             tests/integration/test_uv_pcc_project_environment.py::test_uv_installed_pcc_and_pcc1_share_private_overlay

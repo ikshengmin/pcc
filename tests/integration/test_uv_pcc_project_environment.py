@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -69,17 +70,49 @@ def _build_wheel(tmp_path: Path, env: dict[str, str]) -> Path:
     dist = tmp_path / "dist"
     build_env = env.copy()
     build_env["PCC_BUILD_PCC1"] = str(pcc1)
-    process = _run(
-        ["uv", "build", "--wheel", "--out-dir", str(dist), str(REPO)],
-        cwd=REPO,
-        env=build_env,
-        timeout=300,
-    )
+    explicit_archive = build_env.get("PCC_BUILD_RUNTIME_ARCHIVE", "").strip()
+    expected_hashes = None
+    if explicit_archive:
+        # This CI opt-in must be the exact passing Stage1 runtime, not a
+        # replacement archive.  The wheel hook separately verifies it with
+        # the canonical owned source/target/configuration selector.
+        from scripts.bootstrap_platform import source_identity
+        from scripts.ci_stage1_compiler import stage1_compiler
+        receipt_path = REPO / "build" / "worker-prior-gate" / "stage1.json"
+        assert stage1_compiler(receipt_path, source_identity()) == pcc1.resolve()
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        runtime = receipt["runtime"]
+        admitted = Path(explicit_archive)
+        assert admitted.is_absolute() and admitted.resolve(strict=True) == Path(runtime["path"])
+        assert runtime["config"] == {"threads": True, "refcount": "atomic"}
+        expected_hashes = runtime["hashes"]
+        assert set(expected_hashes) == {"", ".provenance.json", ".capi_syms"}
+        for suffix, expected in expected_hashes.items():
+            with Path(str(admitted) + suffix).open("rb") as stream:
+                assert hashlib.file_digest(stream, "sha256").hexdigest() == expected
+    try:
+        process = _run(
+            ["uv", "build", "--wheel", "--out-dir", str(dist), str(REPO)],
+            cwd=REPO,
+            env=build_env,
+            timeout=300,
+        )
+    except subprocess.TimeoutExpired as error:
+        # The outer deadline is unchanged. Retain the child output on timeout
+        # to distinguish build isolation, archive admission and packaging.
+        for output in (error.stdout, error.stderr):
+            if output:
+                print(output.decode(errors="replace") if isinstance(output, bytes) else output, flush=True)
+        raise
     assert process.returncode == 0, process.stdout + process.stderr
     wheels = list(dist.glob("python_cc-*.whl"))
     assert len(wheels) == 1, process.stdout + process.stderr
     with zipfile.ZipFile(wheels[0]) as archive:
         names = archive.namelist()
+        if expected_hashes is not None:
+            for suffix, expected in expected_hashes.items():
+                with archive.open("pcc/runtime/libpy_runtime_pcc_py.a" + suffix) as stream:
+                    assert hashlib.file_digest(stream, "sha256").hexdigest() == expected
     assert any(name.endswith(".data/scripts/pcc1") for name in names)
     assert any(name == "pcc/package/environment.py" for name in names)
     assert "pcc/runtime/libpy_runtime_pcc_py.a" in names
@@ -122,6 +155,8 @@ def _create_project_environment(
 def test_uv_installed_pcc_and_pcc1_share_private_overlay(tmp_path):
     env = _base_env(tmp_path)
     wheel = _build_wheel(tmp_path, env)
+    # The dedicated build option has no role in installed-wheel execution.
+    env.pop("PCC_BUILD_RUNTIME_ARCHIVE", None)
     project = tmp_path / "project"
     project.mkdir()
     (project / "pyproject.toml").write_text(

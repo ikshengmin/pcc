@@ -20,6 +20,8 @@ Honours environment overrides:
 - PCC_BUILD_BACKEND=self          select the owned backend (default: self)
 - PCC_BUILD_TARGET=<archive>      override the output archive name
 - PCC_RUNTIME_BUILD=make          explicit CPython-host reference oracle only
+- PCC_BUILD_RUNTIME_ARCHIVE=<absolute path>  admit and reuse an existing owned
+                                  runtime archive instead of rebuilding it
 - PCC_BUILD_PCC1=<path>           bundle an already verified platform pcc1
                                   instead of rebuilding it (release/CI reuse)
 - PCC_BUILD_SKIP=1                skip both runtime + binary build
@@ -478,6 +480,17 @@ class CustomBuildHook(BuildHookInterface):
         build_mode = str(os.environ.get("PCC_RUNTIME_BUILD", "") or "").strip().lower() or "owned"
         if build_mode not in ("owned", "make"):
             raise RuntimeError("invalid PCC_RUNTIME_BUILD; expected 'owned' or 'make'")
+        explicit_archive = ""
+        if "PCC_BUILD_RUNTIME_ARCHIVE" in os.environ:
+            explicit_archive = os.environ["PCC_BUILD_RUNTIME_ARCHIVE"].strip()
+            if not explicit_archive:
+                raise RuntimeError("PCC_BUILD_RUNTIME_ARCHIVE requires an absolute path")
+            path = Path(explicit_archive).expanduser()
+            if not path.is_absolute():
+                raise RuntimeError("PCC_BUILD_RUNTIME_ARCHIVE requires an absolute path")
+            explicit_archive = str(path.resolve())
+            if build_mode != "owned":
+                raise RuntimeError("PCC_BUILD_RUNTIME_ARCHIVE requires owned runtime selection")
         if build_mode == "make":
             if sys.implementation.name != "cpython":
                 raise RuntimeError("PCC_RUNTIME_BUILD=make is a CPython-host reference oracle; native pcc1 requires owned runtime construction")
@@ -491,8 +504,8 @@ class CustomBuildHook(BuildHookInterface):
             script = (
                 "import os, shutil, sys\n"
                 "from pcc.frontends.python.owned_runtime_build import ensure_target_runtime\n"
-                "runtime_dir, archive, target = sys.argv[1:]\n"
-                "selected = ensure_target_runtime(runtime_dir, target, packaged_archive=archive)\n"
+                "runtime_dir, archive, target, explicit = sys.argv[1:]\n"
+                "selected = ensure_target_runtime(runtime_dir, target, packaged_archive=archive, explicit_archive=explicit or None)\n"
                 "if os.path.abspath(selected) != os.path.abspath(archive):\n"
                 "    for suffix in ('.capi_syms', '', '.provenance.json'):\n"
                 "        shutil.copyfile(selected + suffix, archive + suffix + '.wheel-tmp')\n"
@@ -502,13 +515,18 @@ class CustomBuildHook(BuildHookInterface):
             environment["PCC_RUNTIME_DIR"] = str(runtime_dir.resolve())
             environment.pop("PCC_RUNTIME_ARCHIVE", None)
             command = [sys.executable, "-c", script, str(runtime_dir.resolve()),
-                       str((runtime_dir / target).resolve()), _build_targets.host_target_triple()]
+                       str((runtime_dir / target).resolve()), _build_targets.host_target_triple(),
+                       explicit_archive]
             try:
                 subprocess.run(command, cwd=self.root, check=True, capture_output=True,
                                text=True, timeout=2400, env=environment)
+                if explicit_archive:
+                    self.app.display_info("reusing verified owned runtime archive: " + explicit_archive)
                 return True
             except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
                 self.app.display_warning("owned runtime build failed: " + str(exc))
+                if isinstance(exc, subprocess.CalledProcessError) and exc.stderr:
+                    self.app.display_warning(str(exc.stderr)[-2000:])
                 return False
         env = dict(os.environ)
         # Inject the backend flag directly into the PCC command so
