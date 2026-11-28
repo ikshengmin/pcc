@@ -456,3 +456,100 @@ def _legacy_compute(
         method_effect_ids,
         method_effect_keys,
     )
+
+
+def _assert_node_identity_order(actual, expected):
+    assert len(actual) == len(expected)
+    assert all(a is b for a, b in zip(actual, expected))
+
+
+def test_owned_scope_projection_preserves_unknown_and_subclass_observations():
+    from pcc.frontends.python.py_ast import (
+        Assign, Attr, Call, DynType, Global, Name, StrLit,
+    )
+    class NameSubclass(Name):
+        pass
+    class Unknown:
+        @property
+        def __class__(self):
+            raise AssertionError("projection must not ask custom __class__")
+
+    ty = DynType("dyn")
+    ordinary = Name(None, ty, "ordinary")
+    subclass = NameSubclass(None, ty, "custom")
+    opaque = Unknown()
+    assign = Assign(None, (ordinary,), StrLit(None, ty, "x"), None)
+    call = Call(None, ty, Attr(None, ty, ordinary, "run"), (), ())
+    directive = Global(None, ("ordinary",))
+    nodes = [ordinary, subclass, assign, opaque, call, directive, 17,
+             ordinary, call, subclass]
+    binding, calls, assignments = analysis._project_effect_scope_nodes(nodes)
+    _assert_node_identity_order(binding, [subclass, assign, opaque, call,
+                                         directive, call, subclass])
+    _assert_node_identity_order(calls, [subclass, opaque, call, call, subclass])
+    _assert_node_identity_order(assignments, [subclass, assign, opaque, subclass])
+    # All original rows remain present and unmodified; the projections retain
+    # the identical objects (including duplicate and unknown occurrences).
+    _assert_node_identity_order(nodes, [ordinary, subclass, assign, opaque,
+                                       call, directive, nodes[6], ordinary, call, subclass])
+
+
+@pytest.mark.parametrize("name, source", CORPUS)
+def test_owned_context_projection_preserves_ordered_effect_inputs(name, source):
+    from pcc.frontends.python.py_ast import Call
+    module = parse_and_lift(source, name + ".py", "unit")
+    ordinary = analysis._local_vthread_context(module)
+    owned = analysis._local_vthread_context(module, owned_projection=True)
+    assert ordinary[:6] == owned[:6]
+    assert ordinary[7] == owned[7]
+    for fd in ordinary[2] + [fd for _, fd in ordinary[5]]:
+        original_row = ordinary[6][id(fd)]
+        owned_row = owned[6][id(fd)]
+        _assert_node_identity_order(original_row[0], analysis._function_scope_nodes(fd))
+        _assert_node_identity_order(
+            [node for node in owned_row[0] if isinstance(node, Call)],
+            [node for node in original_row[0] if isinstance(node, Call)],
+        )
+        assert original_row[1] == owned_row[1]
+        _assert_node_identity_order(original_row[2], owned_row[2])
+        assert original_row[3] == owned_row[3]
+
+    expected_summary, actual_summary = _summary(), _summary()
+    expected = analysis._compute_local_vthread_effects(
+        module, deepcopy(EXPORTS), local_context=ordinary,
+        effect_summary=expected_summary, summary_module_name="unit")
+    actual = analysis._compute_local_vthread_effects(
+        module, deepcopy(EXPORTS), effect_summary=actual_summary,
+        summary_module_name="unit")
+    assert actual == expected
+    assert actual_summary == expected_summary
+    # Supplied contexts still own the complete scopes and remain reusable.
+    assert analysis._compute_local_vthread_effects(
+        module, deepcopy(EXPORTS), local_context=ordinary) == expected
+
+
+@pytest.mark.parametrize("name, source", CORPUS)
+def test_owned_annotation_preserves_mutated_exports(name, source, monkeypatch):
+    module = parse_and_lift(source, name + ".py", "unit")
+    module_exports = {fd.name: {"kind": "function"} for fd in analysis._module_function_defs(module)}
+    for class_name, fd in analysis._class_method_defs(module):
+        info = module_exports.setdefault(class_name, {"kind": "class", "methods": []})
+        info["methods"].append({"name": fd.name})
+    exports = deepcopy(EXPORTS)
+    exports["unit"] = module_exports
+    baseline, candidate = deepcopy(exports), deepcopy(exports)
+    original = analysis._local_vthread_context
+    with monkeypatch.context() as patch:
+        patch.setattr(analysis, "_local_vthread_context",
+                      lambda node, **options: original(node))
+        analysis.annotate_closed_world_vthread_effects([module], ["unit"], baseline)
+    calls = []
+    project = analysis._project_effect_scope_nodes
+    def observe(nodes):
+        calls.append(nodes)
+        return project(nodes)
+    monkeypatch.setattr(analysis, "_project_effect_scope_nodes", observe)
+    analysis.annotate_closed_world_vthread_effects([module], ["unit"], candidate)
+    assert candidate == baseline
+    assert len(calls) == (len(analysis._module_function_defs(module))
+                          + len(analysis._class_method_defs(module)))

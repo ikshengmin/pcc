@@ -21,6 +21,10 @@ from typing import Optional
 from pcc.backend.self_backend_value_arena import CompilerIntArena
 
 from pcc.frontends.python.py_ast import Assign, Attr, AugAssign, BoolType, BytesType, Call, ClassDef, ClassType, DictType, FloatType, IntType, ListType, NoneType, SetType, StrType, TupleType, Delete, ExceptHandler, Expr, For, FuncDef, Global, Import, ImportFrom, Lambda, ListExpr, Module, Name, Nonlocal, TupleExpr, With
+from pcc.frontends.python.py_ast import (
+    BinOp, BoolExpr, BoolLit, Compare, ExprStmt, If, IfExpr, IntLit,
+    NoneLit, Return, Slice, StrLit, Subscript, Try, UnaryOp, While,
+)
 from pcc.frontends.python.codegen.hoist_analysis import _dataclass_field_names, _dataclass_field_value
 from pcc.frontends.python.vthread_effect_summary_wire import (
     effect_module_exports as _effect_module_exports,
@@ -1439,49 +1443,103 @@ def _add_local_callable_effect(
             return
 
 
-def _local_vthread_context(module: Module):
+def _project_effect_scope_nodes(nodes):
+    """Ordered, conservative scanner views of one complete lexical scope.
+
+    The lexical walk and class-hint reader still observe every original node.
+    For the binding, call and threading-assignment scanners, only exact known
+    syntax classes can be classified here. Unknown objects and subclasses
+    remain in every view, without invoking their custom attribute readers.
+    """
+    binding_nodes = []
+    call_nodes = []
+    assignment_nodes = []
+    for node in nodes:
+        kind = type(node)
+        if (kind is str or kind is Name or kind is int or kind is bool
+                or kind is StrLit or kind is IntLit):
+            continue
+        if kind is Call:
+            call_nodes.append(node)
+            binding_nodes.append(node)
+        elif kind is Assign:
+            assignment_nodes.append(node)
+            binding_nodes.append(node)
+        elif (kind is Import or kind is ImportFrom or kind is Global
+                or kind is Nonlocal or kind is AugAssign or kind is For
+                or kind is With or kind is ExceptHandler or kind is Delete
+                or kind is FuncDef or kind is ClassDef):
+            binding_nodes.append(node)
+        elif (kind is Compare or kind is Attr or kind is If
+                or kind is ExprStmt or kind is BinOp or kind is Return
+                or kind is BoolExpr or kind is Subscript or kind is BoolLit
+                or kind is NoneLit or kind is ListExpr or kind is While
+                or kind is UnaryOp or kind is IfExpr or kind is Try
+                or kind is Slice or kind is TupleExpr):
+            continue
+        else:
+            # These may satisfy several isinstance checks or expose custom
+            # fields. Retain all original scanner observations and ordering.
+            call_nodes.append(node)
+            assignment_nodes.append(node)
+            binding_nodes.append(node)
+    return binding_nodes, call_nodes, assignment_nodes
+
+
+def _effect_callable_context_row(fd, module_aliases, value_aliases, methods,
+                                 owned_projection: bool):
+    nodes = _function_scope_nodes(fd)
+    if owned_projection:
+        binding_nodes, call_nodes, assignment_nodes = _project_effect_scope_nodes(nodes)
+    else:
+        binding_nodes = nodes
+        call_nodes = nodes
+        assignment_nodes = nodes
+    row = (
+        call_nodes,
+        _function_vthread_bindings(fd, module_aliases, value_aliases, binding_nodes),
+        _function_attr_calls(fd, call_nodes),
+        _function_local_class_hints(fd, methods, nodes),
+    )
+    return row, assignment_nodes
+
+
+def _local_vthread_context(module: Module, *, owned_projection: bool = False):
     """Per-module analysis inputs that do not depend on ``native_exports``.
 
     Each callable's lexical nodes, virtual-thread bindings, attribute calls and
-    local class hints, plus the module's threading evidence.  Computing them
+    local class hints, plus the module's threading evidence. Computing them
     once lets every pass over the module share one walk of each body.
+
+    Caller-supplied contexts retain complete lexical scopes. Fresh internally
+    owned contexts need only the call view during graph collection; threading
+    evidence consumes a temporary assignment view before the context escapes.
     """
     module_aliases, value_aliases = _vthread_import_aliases(module)
     functions = _module_function_defs(module)
     methods, bases = _class_method_tables(module)
     method_defs = _class_method_defs(module)
     callable_context = {}
+    threading_rows = {} if owned_projection else callable_context
     for fd in functions:
-        nodes = _function_scope_nodes(fd)
-        callable_context[id(fd)] = (
-            nodes,
-            _function_vthread_bindings(
-                fd,
-                module_aliases,
-                value_aliases,
-                nodes,
-            ),
-            _function_attr_calls(fd, nodes),
-            _function_local_class_hints(fd, methods, nodes),
+        row, assignment_nodes = _effect_callable_context_row(
+            fd, module_aliases, value_aliases, methods, owned_projection,
         )
+        callable_context[id(fd)] = row
+        if owned_projection:
+            threading_rows[id(fd)] = (assignment_nodes,)
     for _class_name, fd in method_defs:
-        nodes = _function_scope_nodes(fd)
-        callable_context[id(fd)] = (
-            nodes,
-            _function_vthread_bindings(
-                fd,
-                module_aliases,
-                value_aliases,
-                nodes,
-            ),
-            _function_attr_calls(fd, nodes),
-            _function_local_class_hints(fd, methods, nodes),
+        row, assignment_nodes = _effect_callable_context_row(
+            fd, module_aliases, value_aliases, methods, owned_projection,
         )
+        callable_context[id(fd)] = row
+        if owned_projection:
+            threading_rows[id(fd)] = (assignment_nodes,)
     threading_context = _threading_analysis_context(
         module,
         functions,
         method_defs,
-        callable_context,
+        threading_rows,
     )
     return (
         module_aliases,
@@ -1493,6 +1551,17 @@ def _local_vthread_context(module: Module):
         callable_context,
         threading_context,
     )
+
+
+# The projection is an internal ownership choice, not a new requirement on
+# caller-replaced builders or caller-supplied contexts.
+_OWNED_LOCAL_VTHREAD_CONTEXT = _local_vthread_context
+
+
+def _fresh_local_vthread_context(module: Module):
+    if _local_vthread_context is _OWNED_LOCAL_VTHREAD_CONTEXT:
+        return _local_vthread_context(module, owned_projection=True)
+    return _local_vthread_context(module)
 
 
 def _compute_local_vthread_effects(
@@ -1521,7 +1590,7 @@ def _compute_local_vthread_effects(
     # Supplied contexts keep their original per-callable snapshot behavior.
     borrow_methods = local_context is None
     if local_context is None:
-        local_context = _local_vthread_context(module)
+        local_context = _fresh_local_vthread_context(module)
     (
         module_aliases,
         value_aliases,
@@ -2730,7 +2799,7 @@ def annotate_closed_world_vthread_effects(
     local_contexts: list = []
 
     for module, module_name in zip(parsed_modules, module_names):
-        local_context = _local_vthread_context(module)
+        local_context = _fresh_local_vthread_context(module)
         if keep_contexts:
             local_contexts.append(local_context)
         (
