@@ -3634,6 +3634,26 @@ in the relevant section or issue and removes the entry.
    dyld's TLV thunk 3005 (376 thread-local accesses per request, 66 of
    them in list append's lock and unlock); `json.dumps` of the
    five-string payload is about 50000 of the 97275.
+   (an) Merged as simplifications (Claude, 2026-11-28): memset stores
+   unaligned word pairs with an overlapping last pair, a GC0 terminal
+   decref finishes by value instead of through a 56-byte record (h37 ->
+   h38 97275 -> 96333, -0.97%), and thread polls read only the stop
+   request: the gray-batch flush request of the removed tracers was read
+   by every loop and entry poll and every last no-park exit although
+   nothing sets it (h38 -> h39 96333 -> 94158, -2.26%). Throughput and
+   hardware cycles stay inside the control's noise (h40c -> h39 w1 -0.4%,
+   3/7 pairs, floor 7.7%; cycles -0.23%): the removed instructions were
+   off the critical path. Remaining measured ceilings on h37, none
+   implemented: dyld TLV thunk inlined at the access (~1.4%, relies on
+   dyld's TSD key layout, a maintainer call), the fused-protocol NULL-slot
+   guard of `pcc_gc_load_ptr` (238 per request, ~950 instructions; needs
+   non-wrapping GEPs and dominating non-null facts), program-to-runtime
+   import of the 372 calls per request into inline-table functions
+   (~2-2.5%), `str.isascii` from the cached code-point length (~0.7%), one
+   TLV access per container enter/exit pair (~0.7%), per-thread allocator
+   statistics instead of four sharded atomics per object (~0.8%). The
+   object lifecycle is about 800 instructions (alloc 336, free 450)
+   against CPython's ~150; list append is about 230 (lock protocol 65).
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2

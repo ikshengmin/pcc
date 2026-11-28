@@ -1238,10 +1238,7 @@ def pcc_thread_graph_lock_release(lock_word) -> int:
         if (state & 281474976710656) != 0:
             pcc_platform_abort()
             return 0
-        if (atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") != 0
-                or atomic_load_i32(
-                    global_addr("pcc_gc_gray_worklist_flush_requested"), 0, "acquire"
-                ) != 0):
+        if atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") != 0:
             pcc_thread_safepoint()
     return 0
 
@@ -1307,10 +1304,7 @@ def _container_exit() -> None:
         if (state & 281474976710656) != 0:
             pcc_platform_abort()
             return
-        if (atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") != 0
-                or atomic_load_i32(
-                    global_addr("pcc_gc_gray_worklist_flush_requested"), 0, "acquire"
-                ) != 0):
+        if atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") != 0:
             pcc_thread_safepoint()
 
 
@@ -1376,10 +1370,7 @@ def pcc_container_unlock(obj) -> None:
         if (state & 281474976710656) != 0:
             pcc_platform_abort()
             return
-        if (atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") != 0
-                or atomic_load_i32(
-                    global_addr("pcc_gc_gray_worklist_flush_requested"), 0, "acquire"
-                ) != 0):
+        if atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") != 0:
             pcc_thread_safepoint()
 
 
@@ -1433,16 +1424,12 @@ def pcc_thread_no_park_exit() -> None:
     if (state & 16777215) == 0:
         # Leaving the last no-park level is pcc_thread_safepoint's poll. This
         # thread is registered (entering no-park required it) and not marked
-        # parked (it is running). Publication requests take the existing poll
-        # only after the last lease ends; the poll flushes without parking
-        # unless a real stop is pending too.
+        # parked (it is running). A stop request is the only one a poll
+        # serves: no collector requests gray-batch publication any more.
         if (state & 281474976710656) != 0:
             pcc_platform_abort()
             return
-        if (atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") == 0
-                and atomic_load_i32(
-                    global_addr("pcc_gc_gray_worklist_flush_requested"), 0, "acquire"
-                ) == 0):
+        if atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire") == 0:
             return
         pcc_thread_safepoint()
 
@@ -1463,10 +1450,8 @@ def pcc_thread_safepoint() -> None:
     if (state & 281474976710656) != 0:
         pcc_platform_abort()
         return
-    # Only a count-free tracer records gray batches (pcc_gc_gray_worklist_note
-    # returns first while pcc_gc_backend4_no_refcounts is 0, and the backend
-    # commit sets it before any tracing allocation). Under GC0 every poll,
-    # one per allocation, would read an always-empty thread-local batch.
+    # No collector records gray batches (only the removed tracing
+    # collectors did), so a poll has no batch to publish.
     # Nothing requested and nothing to undo: this thread is registered
     # (pcc_current_thread_id admits a newcomer under the world lock), it is
     # not still marked parked from an earlier stop, and either no stop is

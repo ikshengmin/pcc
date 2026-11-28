@@ -141,7 +141,13 @@ def test_unleased_scheduler_lock_still_trips_before_suspension(stop_requested):
 
 @pytest.mark.parametrize('exit_kind', ('graph', 'no-park', 'container', 'container-inline'))
 @pytest.mark.parametrize('requested', (0, 1))
-def test_publication_request_polls_only_after_outermost_lease(exit_kind, requested):
+def test_stale_publication_flag_never_polls(exit_kind, requested):
+    """Only a stop request makes a no-park exit poll.
+
+    The removed GC1/2 tracers requested gray-batch publication through
+    pcc_gc_gray_worklist_flush_requested; nothing sets it with the one
+    collector, and the exits no longer read it. Even when it is set, the
+    outermost exit enters no safepoint."""
     model = GraphPollModel(0)
     model.state['pcc_gc_gray_worklist_flush_requested'] = requested
     container_held = 1 << 53
@@ -166,26 +172,28 @@ def test_publication_request_polls_only_after_outermost_lease(exit_kind, request
         else:
             inner = lambda: model.env['pcc_container_unlock'](4096)
         outer = model.env['pcc_thread_no_park_exit']
-    # Actual poll suppression, not just an exit-call counter.
     model.env['pcc_thread_safepoint']()
     assert not model.gray_worklist_events and not model.world_entries
+    polls = []
+    real_safepoint = model.env['pcc_thread_safepoint']
+    model.env['pcc_thread_safepoint'] = lambda: (polls.append(1), real_safepoint())[1]
     inner()
-    assert not model.gray_worklist_events and no_park_depth(model.state) == 1
+    assert not polls and no_park_depth(model.state) == 1
     outer()
-    assert model.gray_worklist_events == (['flush'] if requested else [])
+    assert not polls and not model.gray_worklist_events
     assert not model.world_entries and no_park_depth(model.state) == 0
     assert model.state['pcc_gc_gray_worklist_flush_requested'] == requested
 
 
-def test_counting_collector_poll_reads_no_gray_batch():
-    """GC0 records no gray batch (pcc_gc_gray_worklist_note returns first
-    while pcc_gc_backend4_no_refcounts is 0), so its poll -- one per
-    allocation -- skips the thread-local flush; a tracer's poll keeps it."""
-    for counting, expected in ((1, []), (0, ['flush'])):
+def test_poll_reads_no_gray_batch():
+    """No collector records gray batches (only the removed tracers did), so
+    a poll -- one per allocation -- flushes none, whatever the stale
+    count-free flag says."""
+    for count_free in (0, 1):
         model = GraphPollModel(0)
-        model.state['pcc_gc_backend4_no_refcounts'] = 0 if counting else 1
+        model.state['pcc_gc_backend4_no_refcounts'] = count_free
         model.env['pcc_thread_safepoint']()
-        assert model.gray_worklist_events == expected
+        assert model.gray_worklist_events == []
         assert not model.world_entries
 
 

@@ -1,8 +1,14 @@
-"""GC1/2 tail-publication requests use the existing safe poll boundaries.
+"""Thread polls read the stop request only.
+
+The removed GC1/2 tracers asked mutators to publish gray batches through a
+second request, pcc_gc_gray_worklist_flush_requested, which every poll read
+and or-ed in; nothing sets it with the one collector. Both production
+emitters now load only pcc_thread_stop_requested. The inliner still
+recognizes the former two-request polls (the fixtures below), so IR emitted
+before this change keeps its coverage rules.
 
 Host IR contracts exercise both production emitters and the exact inliner
 recognizer. They do not execute a collector or qualify native self-hosting.
-See docs/plans/p0-threaded-concurrent-gc-runtime.md for poll ownership.
 """
 from __future__ import annotations
 
@@ -52,46 +58,40 @@ class _PollHost(CoreHelperMixin):
         return name + "." + str(self.serial)
 
 
-def _assert_combined_poll(text, callee):
-    for name in (STOP, FLUSH):
-        assert "@" + name + " = external global i32" in text
-    loads = []
-    for name in (STOP, FLUSH):
-        match = re.search(r"%([\w.$-]+) = load atomic i32, ptr @" + name
-                          + ORDER + r", align 4", text)
-        assert match, text
-        loads.append(match[1])
-    pending = re.search(r"%([\w.$-]+) = or i32 %" + re.escape(loads[0])
-                        + r", %" + re.escape(loads[1]), text)
-    assert pending, text
-    need = re.search(r"%([\w.$-]+) = icmp ne i32 %" + re.escape(pending[1])
+def _assert_stop_poll(text, callee):
+    assert "@" + STOP + " = external global i32" in text
+    assert "@" + FLUSH not in text
+    assert " or i32 " not in text
+    match = re.search(r"%([\w.$-]+) = load atomic i32, ptr @" + STOP
+                      + ORDER + r", align 4", text)
+    assert match, text
+    need = re.search(r"%([\w.$-]+) = icmp ne i32 %" + re.escape(match[1])
                      + r", 0", text)
     assert need, text
     assert "br i1 %" + need[1] + ", label %" in text
     assert re.search(r"call void (?:\(\) )?@" + callee + r"\(\)", text)
     assert "@pcc_gc_gray_worklist_flush(" not in text
-    assert not re.search(r"store[^\n]*@" + FLUSH, text)
 
 
 @pytest.mark.parametrize("library,runtime_port,callee", [
     (False, False, GATE), (True, False, PLAIN), (False, True, PLAIN),
 ])
-def test_core_poll_combines_both_requests_without_changing_gate_owner(
+def test_core_poll_reads_only_the_stop_request_without_changing_gate_owner(
     library, runtime_port, callee,
 ):
     host = _PollHost(library=library, runtime_port=runtime_port)
     host._emit_thread_safepoint()
     host.builder.ret_void()
-    _assert_combined_poll(str(host.module), callee)
+    _assert_stop_poll(str(host.module), callee)
 
 
-def test_low_ir_poll_combines_both_requests_through_plain_safepoint():
+def test_low_ir_poll_reads_only_the_stop_request_through_plain_safepoint():
     host = _PollHost()
     _emit_thread_safepoint_poll_llvm(
         host.builder, host.module, host.current_function, host.runtime,
     )
     host.builder.ret_void()
-    _assert_combined_poll(str(host.module), PLAIN)
+    _assert_stop_poll(str(host.module), PLAIN)
 
 
 @pytest.mark.parametrize("condition", ["disabled", "leaf", "terminated"])

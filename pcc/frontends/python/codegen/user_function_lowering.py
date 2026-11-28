@@ -445,25 +445,17 @@ def _emit_thread_safepoint_poll_llvm(builder, llvm_module, fn, runtime) -> None:
     if block is not None and getattr(block, "is_terminated", False):
         return
     flag_gv = declare_runtime_global(llvm_module, "pcc_thread_stop_requested")
+    # The stop request is the only one: no collector requests a gray-batch
+    # publication any more (see CoreHelperMixin._emit_thread_safepoint).
     flag = builder.load_atomic(
         flag_gv,
         SAFEPOINT_POLL_LOAD_ORDERING,
         4,
         name="low.safepoint.flag",
     )
-    flush_gv = declare_runtime_global(
-        llvm_module, "pcc_gc_gray_worklist_flush_requested",
-    )
-    flush = builder.load_atomic(
-        flush_gv,
-        SAFEPOINT_POLL_LOAD_ORDERING,
-        4,
-        name="low.safepoint.flush",
-    )
-    pending = builder.or_(flag, flush, name="low.safepoint.pending")
     need_slow = builder.icmp_unsigned(
         "!=",
-        pending,
+        flag,
         ir.Constant(_I32, 0),
         name="low.safepoint.need",
     )

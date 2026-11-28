@@ -142,6 +142,12 @@ class CoreHelperMixin:
             return
         if self._builder_block_is_terminated():
             return
+        # The stop request is the only one. The second request a poll used
+        # to read, pcc_gc_gray_worklist_flush_requested, asked the removed
+        # tracing collectors' mutators to publish their gray batches;
+        # nothing has set it since the one collector, yet every loop
+        # back edge loaded it and or-ed it in (6 instructions instead of 3,
+        # 512 polls per handler request).
         flag_gv = declare_runtime_global(self.module, "pcc_thread_stop_requested")
         flag = self.builder.load_atomic(
             flag_gv,
@@ -149,23 +155,9 @@ class CoreHelperMixin:
             4,
             name=self._fresh("thread.safepoint.flag"),
         )
-        flush_gv = declare_runtime_global(
-            self.module, "pcc_gc_gray_worklist_flush_requested",
-        )
-        flush = self.builder.load_atomic(
-            flush_gv,
-            SAFEPOINT_POLL_LOAD_ORDERING,
-            4,
-            name=self._fresh("thread.safepoint.flush"),
-        )
-        # Publication uses the same no-park/lease checks as a stop. Never
-        # flush a local gray tail directly from an application poll.
-        pending = self.builder.or_(
-            flag, flush, name=self._fresh("thread.safepoint.pending"),
-        )
         need_slow = self.builder.icmp_unsigned(
             "!=",
-            pending,
+            flag,
             ir.Constant(_I32, 0),
             name=self._fresh("thread.safepoint.need"),
         )
