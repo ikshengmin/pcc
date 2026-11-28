@@ -1224,10 +1224,126 @@ def _decode_py_ast_v2_payload(payload):
     )
 
 
+def _defer_py_ast_wire_v2(value, chunks: list, deferred: list) -> None:
+    deferred.append((len(chunks), value))
+    chunks.append("")
+
+
+def _append_py_ast_wire_v2(value, files: list, file_ids: dict, chunks: list, kind_prefixes: dict, deferred: list) -> None:
+    """Emit private V2 JSON tokens without a second list/dict AST graph.
+
+    Keep the existing scalar JSON provider's spelling and escaping, along
+    with the original field visitation and validation order. Opaque maps
+    still use the ordinary projection, including normalized-key collisions.
+    """
+    if value is None:
+        chunks.append("null")
+        return
+    if value is True:
+        chunks.append("true")
+        return
+    if value is False:
+        chunks.append("false")
+        return
+    if isinstance(value, (str, int, float, bool)):
+        leaf_type = type(value)
+        # Small exact integers cannot hit the provider's decimal digit limit;
+        # all wider or custom numeric values retain the delayed encoder.
+        if leaf_type is int and -1000000000000000 <= value <= 1000000000000000:
+            chunks.append(str(value))
+        elif (leaf_type is str and value.isascii() and value.isprintable()
+              and '"' not in value and "\\" not in value):
+            # Exactly the no-escaping domain of the ordinary JSON provider.
+            chunks.append('"' + value + '"')
+        else:
+            _defer_py_ast_wire_v2(value, chunks, deferred)
+        return
+    if isinstance(value, bytes):
+        _defer_py_ast_wire_v2({"b": _py_ast_bytes_to_wire(value)[_PY_AST_WIRE_BYTES_KEY]}, chunks, deferred)
+        return
+    kind = _closed_world_node_kind(value)
+    if kind == "bytes":
+        _defer_py_ast_wire_v2({"b": _py_ast_bytes_to_wire(value)[_PY_AST_WIRE_BYTES_KEY]}, chunks, deferred)
+        return
+    if isinstance(value, (tuple, list)):
+        chunks.append("[")
+        first = True
+        for item in value:
+            if not first:
+                chunks.append(", ")
+            first = False
+            _append_py_ast_wire_v2(item, files, file_ids, chunks, kind_prefixes, deferred)
+        chunks.append("]")
+        return
+    if isinstance(value, dict):
+        out = {}
+        for key, item in value.items():
+            out[str(key)] = _py_ast_to_wire_v2(item, files, file_ids)
+        _defer_py_ast_wire_v2({"d": out}, chunks, deferred)
+        return
+    field_names = _PY_AST_FIELD_NAME_OVERRIDES.get(kind)
+    if field_names is None:
+        raise PyPipelineError("cannot serialize py_ast node kind " + kind)
+    if kind == "SourceSpan":
+        file = _py_ast_field_value(value, "file", None)
+        if not isinstance(file, str):
+            raise PyPipelineError("invalid positional py_ast source file")
+        if file not in file_ids:
+            file_ids[file] = len(files)
+            files.append(file)
+        row_text = '{"s": [' + str(file_ids[file])
+        for field_name in ("line", "col", "end_line", "end_col"):
+            position = _py_ast_field_value(value, field_name, None)
+            if not isinstance(position, int) or isinstance(position, bool):
+                raise PyPipelineError("invalid positional py_ast source position")
+            # An int subclass can override str(): the ordinary JSON provider
+            # and not that override owns its historical wire spelling.
+            if type(position) is int and -1000000000000000 <= position <= 1000000000000000:
+                row_text += ", " + str(position)
+            else:
+                chunks.append(row_text + ", ")
+                _defer_py_ast_wire_v2(position, chunks, deferred)
+                row_text = ""
+        chunks.append(row_text + "]}")
+        return
+    exact_kind = type(kind) is str
+    prefix = kind_prefixes.get(kind) if exact_kind else None
+    if prefix is not None:
+        chunks.append(prefix)
+    elif (exact_kind and kind.isascii() and kind.isprintable()
+            and '"' not in kind and "\\" not in kind):
+        prefix = '{"n": ["' + kind + '"'
+        # Private per-file cache: canonical schema has only 66 kinds.
+        if len(kind_prefixes) < 128:
+            kind_prefixes[kind] = prefix
+        chunks.append(prefix)
+    else:
+        chunks.append('{"n": [')
+        _defer_py_ast_wire_v2(kind, chunks, deferred)
+    for field_name in field_names:
+        chunks.append(", ")
+        _append_py_ast_wire_v2(
+            _py_ast_field_value(value, field_name, None), files, file_ids, chunks, kind_prefixes, deferred,
+        )
+    chunks.append("]}")
+
+
 def _write_py_ast_wire_v2(path: str, ast_mod) -> None:
-    payload = _py_ast_v2_payload(ast_mod)
+    files: list = []
+    file_ids: dict = {}
+    chunks: list = []
+    deferred: list = []
+    _append_py_ast_wire_v2(ast_mod, files, file_ids, chunks, {}, deferred)
+    # Preserve the original two phases: visit every field before opening
+    # the destination, then let the ordinary JSON provider encode any rare
+    # scalar or opaque subtree that can raise an encoding error. Positions
+    # in the output chunks preserve the original JSON traversal order.
     with open(path, "w", encoding="utf-8") as f:
-        f.write(json.dumps(payload))
+        header = ('{"schema": ' + json.dumps(_PY_AST_WIRE_SCHEMA_V2)
+                  + ', "files": ' + json.dumps(files) + ', "module": ')
+        for index, value in deferred:
+            chunks[index] = json.dumps(value)
+        f.write(header + "".join(chunks) + "}")
 
 
 def _write_py_ast_wire(path: str, ast_mod) -> None:

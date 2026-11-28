@@ -14,14 +14,14 @@ NATIVE_WIRE_CONTRACT_PROGRAM = '''import json
 from pcc.frontends.python.py_ast_contract import PY_AST_FIELD_NAME_OVERRIDES
 from pcc.frontends.python.pipeline_ast_wire import (
     _PY_AST_FIELD_NAME_OVERRIDES, _py_ast_to_wire, _py_ast_from_wire,
-    _decode_py_ast_wire, _py_ast_v2_payload,
+    _decode_py_ast_wire, _py_ast_v2_payload, _write_py_ast_wire_v2,
 )
 from pcc.frontends.python.py_ast import DynType, SetType, ClassType, ValueArrayType, SourceSpan
 from pcc.frontends.python.py_lift import parse_and_lift
 def main():
     assert _PY_AST_FIELD_NAME_OVERRIDES is PY_AST_FIELD_NAME_OVERRIDES
     assert PY_AST_FIELD_NAME_OVERRIDES["Name"] == ("span", "ty", "ident")
-    assert len(PY_AST_FIELD_NAME_OVERRIDES) == 66
+    assert len(PY_AST_FIELD_NAME_OVERRIDES) == 67
     set_type = SetType(name="set", elem=DynType(name="dyn"))
     assert _py_ast_from_wire(_py_ast_to_wire(set_type)) == set_type
     element = ClassType(name="Point", module="m", fields=(), bases=(),
@@ -45,6 +45,10 @@ def main():
     assert json.dumps(escaped.docstring) == __HOST_ESCAPE_TEXT__
     assert _py_ast_from_wire(_py_ast_to_wire(escaped)) == escaped
     assert _decode_py_ast_wire(json.dumps(_py_ast_v2_payload(escaped))) == escaped
+    for root in (module, spans, escaped, (None, True, False, 1469598103934665603, b"abc")):
+        _write_py_ast_wire_v2(__DIRECT_WIRE_PATH__, root)
+        with open(__DIRECT_WIRE_PATH__, "r", encoding="utf-8") as stream:
+            assert stream.read() == json.dumps(_py_ast_v2_payload(root))
     print("AST_WIRE_CONTRACT_OK")
 main()
 '''
@@ -232,6 +236,7 @@ def test_native_ast_wire_uses_shared_contract_all_gcs(
     program = NATIVE_WIRE_CONTRACT_PROGRAM.replace("__HOST_ESCAPE_WIRE__", repr(wire))
     program = program.replace("__HOST_ESCAPE_TEXT__", repr(json.dumps(value)))
     program = program.replace("__ESCAPE_POINTS__", "[8, 12, 9, 10, 13, 34, 92, 0, 31]")
+    program = program.replace("__DIRECT_WIRE_PATH__", repr(str(tmp_path / "direct-wire.json")))
     source.write_text(program)
     python_program_compiler(
         str(source), str(binary), backend="self",
@@ -616,3 +621,107 @@ def test_static_v2_layout_fails_closed_for_noncanonical_rows(monkeypatch, shape)
         }
         monkeypatch.setitem(schema, "Name", replacements[shape])
     assert not wire._py_ast_v2_layout_is_canonical()
+
+
+def test_private_v2_writer_direct_bytes_without_intermediate_payload(tmp_path, monkeypatch):
+    from pcc.frontends.python import pipeline_ast_wire as wire, py_ast as ast
+
+    class OddInt(int):
+        def __str__(self):
+            return 'not a JSON integer'
+
+    class OddStr(str):
+        def isascii(self):
+            raise AssertionError('string subclass must use JSON provider')
+
+        def isprintable(self):
+            raise AssertionError('string subclass must use JSON provider')
+
+    # Mixed source file order, exact escaping, signed/large integers, float
+    # spelling, opaque maps (including key normalization collisions) and bytes.
+    first = ast.SourceSpan('例\\file.py', OddInt(-1), 0, 1, 2)
+    second = ast.SourceSpan('other.py', 2, 3, 4, 5)
+    root = (
+        ast.Name(first, ast.DynType('dynamic'), 'é\x00\n"\\😀'),
+        ast.IntLit(second, ast.IntType('int'), 2**70),
+        first, second, None, True, False, float('nan'), float('inf'), -0.0,
+        OddInt(71), OddStr('ascii'), '', 'plain printable', '\x7f',
+        ''.join(chr(i) for i in range(128)),
+        b'\x00\xff', {1: 'discarded', '1': 'kept', 'n': first, 's': b'x'},
+    )
+    expected = json.dumps(wire._py_ast_v2_payload(root)).encode('utf-8')
+
+    def no_payload(value):
+        raise AssertionError('private writer must not materialize the whole payload')
+
+    monkeypatch.setattr(wire, '_py_ast_v2_payload', no_payload)
+    path = tmp_path / 'direct.json'
+    wire._write_py_ast_wire_v2(str(path), root)
+    assert path.read_bytes() == expected
+
+
+def test_private_v2_writer_preserves_field_visitation_and_failure(tmp_path):
+    from pcc.frontends.python import pipeline_ast_wire as wire, py_ast as ast
+
+    visits = []
+
+    # Existing wire projection deliberately accepts a custom descriptor with
+    # a recognized name, reading its declared fields in schema order.
+    class SourceSpan:
+        @property
+        def file(self):
+            visits.append('file')
+            return 'custom.py'
+
+        @property
+        def line(self):
+            visits.append('line')
+            return 10
+
+        @property
+        def col(self):
+            visits.append('col')
+            return 'invalid'
+
+        @property
+        def end_line(self):
+            visits.append('end_line')
+            return 10
+
+        @property
+        def end_col(self):
+            visits.append('end_col')
+            return 12
+
+    path = tmp_path / 'direct.json'
+    path.write_bytes(b'previous sidecar')
+    with pytest.raises(wire.PyPipelineError, match='invalid positional py_ast source position'):
+        wire._write_py_ast_wire_v2(str(path), (ast.DynType('dyn'), SourceSpan()))
+    assert visits == ['file', 'line', 'col']
+    assert path.read_bytes() == b'previous sidecar'
+
+
+def test_private_v2_writer_defers_json_encoding_until_structural_validation(tmp_path):
+    import sys
+    from pcc.frontends.python import pipeline_ast_wire as wire
+
+    def original(path, value):
+        payload = wire._py_ast_v2_payload(value)
+        with open(path, 'w', encoding='utf-8') as stream:
+            stream.write(json.dumps(payload))
+
+    before = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(640)
+    try:
+        huge = 10**700
+        for value in ((huge, object()), ({'x': huge}, object()), huge):
+            outcomes = []
+            for n, writer in enumerate((original, wire._write_py_ast_wire_v2)):
+                path = tmp_path / str(n)
+                path.write_bytes(b'previous sidecar')
+                with pytest.raises((wire.PyPipelineError, ValueError)) as exc:
+                    writer(str(path), value)
+                outcomes.append((type(exc.value), str(exc.value), path.read_bytes()))
+            assert outcomes[0] == outcomes[1]
+    finally:
+        sys.set_int_max_str_digits(before)
