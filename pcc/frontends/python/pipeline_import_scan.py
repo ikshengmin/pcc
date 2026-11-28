@@ -116,7 +116,11 @@ def _literal_import_call_lines(source, markers, *, top_level_only):
     scope_lines = _source_module_scope_lines(_source_import_discovery_text(source))
     out = []
     continued_quote = ""
-    for raw_line, (_masked_line, at_module_scope) in zip(source.splitlines(), scope_lines):
+    # The native indexed zip lowering must see already-evaluated iterables:
+    # splitting the source inside its subscript would repeat the whole scan
+    # for every row. As in Python zip(), evaluate the input once.
+    raw_lines = source.splitlines()
+    for raw_line, (_masked_line, at_module_scope) in zip(raw_lines, scope_lines):
         remaining = raw_line
         calls = []
         if continued_quote:
@@ -147,6 +151,7 @@ def _literal_import_call_lines(source, markers, *, top_level_only):
                 continued_quote = delimiter
                 break
         out.append((raw_line, not top_level_only or at_module_scope, calls))
+    del raw_lines
     if "importlib." in source:
         # Reuse the production parser's replacement-field split. F-string
         # literal text is data; only its actual expressions execute calls.
@@ -524,7 +529,10 @@ def _without_inactive_implementation_imports(source, *, implementation="pcc"):
     guard_has_pass = False
     bracket_depth = 0
     continued_statement = False
-    for raw_line, masked_line in zip(source.splitlines(keepends=True), masked_lines):
+    # Materialize the iterable once, before indexed zip normalization.
+    # Large source files must not allocate their full line list per row.
+    raw_lines = source.splitlines(keepends=True)
+    for raw_line, masked_line in zip(raw_lines, masked_lines):
         code = masked_line.strip()
         indent = len(raw_line) - len(raw_line.lstrip())
         if "\t" in raw_line[:indent]:
@@ -576,6 +584,7 @@ def _without_inactive_implementation_imports(source, *, implementation="pcc"):
                     alias = candidate
             import_indent = indent
         out.append(raw_line)
+    del raw_lines
     result = "".join(out)
     if len(_WITHOUT_IMPLEMENTATION_CACHE) >= _SCAN_CACHE_MAX_ENTRIES:
         _WITHOUT_IMPLEMENTATION_CACHE.clear()
