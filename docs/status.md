@@ -3654,6 +3654,22 @@ in the relevant section or issue and removes the entry.
    statistics instead of four sharded atomics per object (~0.8%). The
    object lifecycle is about 800 instructions (alloc 336, free 450)
    against CPython's ~150; list append is about 230 (lock protocol 65).
+   (ao) Cycle ranking (Claude, 2026-11-28, `top h39-polls --gc 0
+   --workers 1`, 12.68 us per request): dyld's `_tlv_get_addr` is the
+   first function by sampled time (0.72 us, 5.7%; 3% of instructions),
+   then `pcc_gc_store_root` 0.70, list append 0.42, the handler's resume
+   0.39; `pcc_current_thread_id` (a TLV read) adds 0.15. The thunk inline
+   at each access is rejected: on macOS 27.2 libdyld reads the
+   descriptor's key and offset as 32-bit words at +8 and +12 (`ldr w16,
+   [x0, #0x8]` ... `ldr w16, [x0, #0xc]`, then `mrs TPIDRRO_EL0`, `and
+   #~7`, the key's TSD slot), where older dyld used 64-bit words at +8 and
+   +16, so emitted code would depend on the running dyld. One object's
+   lifetime makes about nine TLV reads (safepoint, magazine at alloc and
+   at free, thread id at track and untrack, young log, dealloc depth,
+   trash queue, tracked count); a per-thread context block read once and
+   passed down the allocation and death chains is the structural
+   candidate. Reusing the state slot from container lock to unlock saves
+   33 reads per request (about 0.5% of cycles) on its own.
    P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
    estimate): lldb single-stepped 200000 instructions of the handler's
    main thread (one worker) for the self runtime and for the clang -O2
