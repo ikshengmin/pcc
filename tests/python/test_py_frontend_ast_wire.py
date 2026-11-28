@@ -7,6 +7,8 @@ import textwrap
 
 import pytest
 
+from pcc.frontends.python.py_ast_contract import PY_AST_FIELD_NAME_OVERRIDES
+
 
 NATIVE_WIRE_CONTRACT_PROGRAM = '''import json
 from pcc.frontends.python.py_ast_contract import PY_AST_FIELD_NAME_OVERRIDES
@@ -451,3 +453,103 @@ def test_compact_native_reader_contract_model(monkeypatch):
     monkeypatch.setattr(py_ast, "IntType", broken_constructor)
     with pytest.raises(RuntimeError, match="constructor fault"):
         wire._decode_py_ast_wire(text)
+
+
+@pytest.mark.parametrize("kind", sorted(PY_AST_FIELD_NAME_OVERRIDES))
+@pytest.mark.parametrize("null_fields", [False, True])
+def test_validated_positional_constructor_matches_named_field_contract(kind, null_fields):
+    from pcc.frontends.python import pipeline_ast_wire as wire
+    from pcc.frontends.python.pipeline_modes import PyPipelineError
+
+    names = wire._PY_AST_FIELD_NAME_OVERRIDES[kind]
+    values = [None if null_fields else "field-" + str(i) for i in range(len(names))]
+    row = [kind] + values
+    named = wire._PyAstV2Fields(row, wire._py_ast_v2_field_positions()[kind])
+    if kind in ("Expr", "Stmt"):
+        # The schema contains abstract kinds not owned by the constructor.
+        # Their existing explicit error, not an inferred dataclass, remains.
+        with pytest.raises(PyPipelineError, match="unknown py_ast wire node kind"):
+            wire._py_ast_node_from_wire(kind, named)
+        with pytest.raises(PyPipelineError, match="unknown py_ast wire node kind"):
+            wire._py_ast_node_from_wire(kind, row, True)
+    else:
+        assert wire._py_ast_node_from_wire(kind, row, True) == wire._py_ast_node_from_wire(kind, named)
+
+
+def test_v2_positional_rows_are_used_only_for_canonical_layout(monkeypatch):
+    from pcc.frontends.python import pipeline_ast_wire as wire, py_ast
+
+    original = wire._py_ast_node_from_wire
+    calls = []
+    def observed(kind, fields, positional=False):
+        calls.append((kind, type(fields), positional))
+        return original(kind, fields, positional)
+    monkeypatch.setattr(wire, "_py_ast_node_from_wire", observed)
+    node = py_ast.Name(None, py_ast.DynType("dyn"), "identifier")
+    text = json.dumps(wire._py_ast_v2_payload(node))
+    assert wire._decode_py_ast_wire(text) == node
+    assert calls and all(kind is list and positional for _, kind, positional in calls)
+
+    calls.clear()
+    legacy = wire._py_ast_to_wire(node)
+    assert wire._py_ast_from_wire(legacy) == node
+    assert calls and all(kind is dict and not positional for _, kind, positional in calls)
+
+    calls.clear()
+    schema = wire._PY_AST_FIELD_NAME_OVERRIDES
+    monkeypatch.setitem(schema, "Name", ("span", "ident", "ty"))
+    assert wire._decode_py_ast_wire(json.dumps(wire._py_ast_v2_payload(node))) == node
+    assert calls and all(kind is wire._PyAstV2Fields and not positional for _, kind, positional in calls)
+
+
+def test_positional_validation_preserves_child_error_before_constructor(monkeypatch):
+    from pcc.frontends.python import pipeline_ast_wire as wire
+    from pcc.frontends.python.pipeline_modes import PyPipelineError
+
+    def should_not_construct(*args):
+        pytest.fail("constructor entered before invalid nested field was rejected")
+    monkeypatch.setattr(wire, "_py_ast_node_from_wire", should_not_construct)
+    text = json.dumps({"schema": wire._PY_AST_WIRE_SCHEMA_V2, "files": [],
+                       "module": {"n": ["Name", None, None, {"unknown": 1}]}})
+    with pytest.raises(PyPipelineError, match="unknown positional py_ast wire tag"):
+        wire._decode_py_ast_wire(text)
+
+
+def test_compact_native_generic_row_uses_shared_positional_constructor(monkeypatch):
+    """Exercise the ordinary typed generic tape materializer through its ABI model."""
+    import struct
+    from types import SimpleNamespace
+    from pcc.frontends.python import pipeline_ast_wire as wire, py_ast
+
+    text = json.dumps({"schema": wire._PY_AST_WIRE_SCHEMA_V2, "files": [],
+                       "module": {"n": ["Name", None, None, "ident"]}})
+    records = [(0, 1), (1 << 29, 6)]
+    offset = text.index('"n"')
+    for kind, token in ((3, '"Name"'), (5, 'null'), (5, 'null'), (3, '"ident"')):
+        start = text.index(token, offset)
+        records.append(((kind << 29) | start, start + len(token)))
+        offset = start + len(token)
+    # Each token record carries the authenticated original byte range; this
+    # fixture models the already decoded tape ABI, not a native scanner.
+    tape = struct.pack("<8I", 844383056, 1, len(text), 6, 0, 1, 0, 0)
+    tape += b"".join(struct.pack("<II", *r) for r in records)
+    monkeypatch.setattr(wire, "sys", SimpleNamespace(implementation=SimpleNamespace(name="pcc")))
+    monkeypatch.setattr(wire, "_owned_ast_tape_scan", lambda value: tape)
+    monkeypatch.setattr(wire, "_owned_ast_tape_u32",
+                        lambda data, offset: struct.unpack_from("<I", data, offset)[0])
+    monkeypatch.setattr(wire, "_owned_ast_tape_record",
+                        lambda data, index: struct.unpack_from("<q", data, 32+8*index)[0])
+    monkeypatch.setattr(wire, "_owned_ast_tape_text_len", len)
+    monkeypatch.setattr(wire, "_owned_ast_tape_token",
+                        lambda value, start, end, kind: json.loads(value[start:end]))
+    def forbidden_fallback(*args):
+        pytest.fail("valid compact generic tape must not fall back")
+    monkeypatch.setattr(wire, "_decode_py_ast_wire_legacy", forbidden_fallback)
+    original = wire._py_ast_node_from_wire
+    calls = []
+    def observed(kind, fields, positional=False):
+        calls.append((kind, fields, positional))
+        return original(kind, fields, positional)
+    monkeypatch.setattr(wire, "_py_ast_node_from_wire", observed)
+    assert wire._decode_py_ast_wire(text) == py_ast.Name(None, None, "ident")
+    assert calls == [("Name", ["Name", None, None, "ident"], True)]

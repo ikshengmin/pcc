@@ -600,391 +600,393 @@ def _py_ast_from_wire(value):
     return value
 
 
-def _py_ast_node_from_wire(kind: str, fields):
+def _py_ast_node_from_wire(kind: str, fields, positional: bool = False):
+    # Only fully decoded canonical v2 rows use the pinned numeric slots.
+    # V1 and alternate layouts keep the named/default reader semantics.
     from pcc.frontends.python import py_ast as _pa
 
     if kind == "SourceSpan":
         return _pa.SourceSpan(
-            _py_ast_wire_field(fields, "file", ""),
-            _py_ast_wire_field(fields, "line", 0),
-            _py_ast_wire_field(fields, "col", 0),
-            _py_ast_wire_field(fields, "end_line", 0),
-            _py_ast_wire_field(fields, "end_col", 0),
+            (fields[1] if positional else _py_ast_wire_field(fields, "file", "")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "line", 0)),
+            (fields[3] if positional else _py_ast_wire_field(fields, "col", 0)),
+            (fields[4] if positional else _py_ast_wire_field(fields, "end_line", 0)),
+            (fields[5] if positional else _py_ast_wire_field(fields, "end_col", 0)),
         )
     if kind == "Type":
-        return _pa.Type(_py_ast_wire_field(fields, "name", ""))
+        return _pa.Type((fields[1] if positional else _py_ast_wire_field(fields, "name", "")))
     if kind == "RawPointerType":
-        return _pa.RawPointerType(_py_ast_wire_field(fields, "name", "pcc.extern.c_rawptr"))
+        return _pa.RawPointerType((fields[1] if positional else _py_ast_wire_field(fields, "name", "pcc.extern.c_rawptr")))
     if kind == "IntType":
         return _pa.IntType(
-            _py_ast_wire_field(fields, "name", "int"),
-            _py_ast_wire_field(fields, "width", 64),
-            _py_ast_wire_field(fields, "signed", True),
+            (fields[1] if positional else _py_ast_wire_field(fields, "name", "int")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "width", 64)),
+            (fields[3] if positional else _py_ast_wire_field(fields, "signed", True)),
         )
     if kind == "FloatType":
         return _pa.FloatType(
-            _py_ast_wire_field(fields, "name", "float"),
-            _py_ast_wire_field(fields, "width", 64),
+            (fields[1] if positional else _py_ast_wire_field(fields, "name", "float")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "width", 64)),
         )
     if kind == "ComplexType":
-        return _pa.ComplexType(_py_ast_wire_field(fields, "name", "complex"))
+        return _pa.ComplexType((fields[1] if positional else _py_ast_wire_field(fields, "name", "complex")))
     if kind == "BoolType":
-        return _pa.BoolType(_py_ast_wire_field(fields, "name", "bool"))
+        return _pa.BoolType((fields[1] if positional else _py_ast_wire_field(fields, "name", "bool")))
     if kind == "NoneType":
-        return _pa.NoneType(_py_ast_wire_field(fields, "name", "None"))
+        return _pa.NoneType((fields[1] if positional else _py_ast_wire_field(fields, "name", "None")))
     if kind == "StrType":
-        return _pa.StrType(_py_ast_wire_field(fields, "name", "str"))
+        return _pa.StrType((fields[1] if positional else _py_ast_wire_field(fields, "name", "str")))
     if kind == "BytesType":
-        return _pa.BytesType(_py_ast_wire_field(fields, "name", "bytes"))
+        return _pa.BytesType((fields[1] if positional else _py_ast_wire_field(fields, "name", "bytes")))
     if kind == "ByteArrayType":
-        return _pa.ByteArrayType(_py_ast_wire_field(fields, "name", "bytearray"))
+        return _pa.ByteArrayType((fields[1] if positional else _py_ast_wire_field(fields, "name", "bytearray")))
     if kind == "MemoryViewType":
-        return _pa.MemoryViewType(_py_ast_wire_field(fields, "name", "memoryview"))
+        return _pa.MemoryViewType((fields[1] if positional else _py_ast_wire_field(fields, "name", "memoryview")))
     if kind == "ListType":
         return _pa.ListType(
-            _py_ast_wire_field(fields, "name", "list"),
-            _py_ast_wire_field(fields, "elem"),
+            (fields[1] if positional else _py_ast_wire_field(fields, "name", "list")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "elem")),
         )
     if kind == "SetType":
         return _pa.SetType(
-            _py_ast_wire_field(fields, "name", "set"),
-            _py_ast_wire_field(fields, "elem"),
+            (fields[1] if positional else _py_ast_wire_field(fields, "name", "set")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "elem")),
         )
     if kind == "ValueArrayType":
         return _pa.ValueArrayType(
-            _py_ast_wire_field(fields, "name", "pcc.array"),
-            _py_ast_wire_field(fields, "elem"),
-            _py_ast_wire_field(fields, "length", 0),
+            (fields[1] if positional else _py_ast_wire_field(fields, "name", "pcc.array")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "elem")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "length", 0)),
         )
     if kind == "DictType":
         return _pa.DictType(
-            _py_ast_wire_field(fields, "name", "dict"),
-            _py_ast_wire_field(fields, "key"),
-            _py_ast_wire_field(fields, "value"),
+            (fields[1] if positional else _py_ast_wire_field(fields, "name", "dict")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "key")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "value")),
         )
     if kind == "TupleType":
         return _pa.TupleType(
-            _py_ast_wire_field(fields, "name", "tuple"),
-            _py_ast_wire_field(fields, "elems", ()),
+            (fields[1] if positional else _py_ast_wire_field(fields, "name", "tuple")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "elems", ())),
         )
     if kind == "FuncType":
         return _pa.FuncType(
-            _py_ast_wire_field(fields, "name", "func"),
-            _py_ast_wire_field(fields, "params", ()),
-            _py_ast_wire_field(fields, "ret"),
+            (fields[1] if positional else _py_ast_wire_field(fields, "name", "func")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "params", ())),
+            (fields[3] if positional else _py_ast_wire_field(fields, "ret")),
         )
     if kind == "ClassType":
         return _pa.ClassType(
-            _py_ast_wire_field(fields, "name", ""),
-            _py_ast_wire_field(fields, "module", ""),
-            _py_ast_wire_tuple_field(fields, "fields"),
-            _py_ast_wire_tuple_field(fields, "bases"),
-            _py_ast_wire_tuple_field(fields, "properties"),
-            _py_ast_wire_bool_field(fields, "valueclass", False),
+            (fields[1] if positional else _py_ast_wire_field(fields, "name", "")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "module", "")),
+            ((() if fields[3] is None else fields[3]) if positional else _py_ast_wire_tuple_field(fields, "fields")),
+            ((() if fields[4] is None else fields[4]) if positional else _py_ast_wire_tuple_field(fields, "bases")),
+            ((() if fields[5] is None else fields[5]) if positional else _py_ast_wire_tuple_field(fields, "properties")),
+            ((False if fields[6] is None else fields[6]) if positional else _py_ast_wire_bool_field(fields, "valueclass", False)),
         )
     if kind == "ValueClassType":
         return _pa.ValueClassType(
-            _py_ast_wire_field(fields, "name", ""),
-            _py_ast_wire_field(fields, "module", ""),
-            _py_ast_wire_tuple_field(fields, "fields"),
-            _py_ast_wire_tuple_field(fields, "bases"),
-            _py_ast_wire_tuple_field(fields, "properties"),
-            _py_ast_wire_bool_field(fields, "valueclass", True),
-            _py_ast_wire_bool_field(fields, "flattened", True),
-            _py_ast_wire_bool_field(fields, "nullable_fields", False),
+            (fields[1] if positional else _py_ast_wire_field(fields, "name", "")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "module", "")),
+            ((() if fields[3] is None else fields[3]) if positional else _py_ast_wire_tuple_field(fields, "fields")),
+            ((() if fields[4] is None else fields[4]) if positional else _py_ast_wire_tuple_field(fields, "bases")),
+            ((() if fields[5] is None else fields[5]) if positional else _py_ast_wire_tuple_field(fields, "properties")),
+            ((True if fields[6] is None else fields[6]) if positional else _py_ast_wire_bool_field(fields, "valueclass", True)),
+            ((True if fields[7] is None else fields[7]) if positional else _py_ast_wire_bool_field(fields, "flattened", True)),
+            ((False if fields[8] is None else fields[8]) if positional else _py_ast_wire_bool_field(fields, "nullable_fields", False)),
         )
     if kind == "DynType":
-        return _pa.DynType(_py_ast_wire_field(fields, "name", "dyn"))
+        return _pa.DynType((fields[1] if positional else _py_ast_wire_field(fields, "name", "dyn")))
     if kind == "IntLit":
         return _pa.IntLit(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "ty"),
-            _py_ast_wire_field(fields, "value", 0),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "ty")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "value", 0)),
         )
     if kind == "FloatLit":
         return _pa.FloatLit(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "ty"),
-            _py_ast_wire_field(fields, "value", 0.0),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "ty")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "value", 0.0)),
         )
     if kind == "ComplexLit":
         return _pa.ComplexLit(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "ty"),
-            _py_ast_wire_field(fields, "real", 0.0),
-            _py_ast_wire_field(fields, "imag", 0.0),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "ty")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "real", 0.0)),
+            (fields[4] if positional else _py_ast_wire_field(fields, "imag", 0.0)),
         )
     if kind == "BoolLit":
         return _pa.BoolLit(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "ty"),
-            _py_ast_wire_field(fields, "value", False),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "ty")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "value", False)),
         )
     if kind == "NoneLit":
         return _pa.NoneLit(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "ty"),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "ty")),
         )
     if kind == "StrLit":
         return _pa.StrLit(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "ty"),
-            _py_ast_wire_field(fields, "value", ""),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "ty")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "value", "")),
         )
     if kind == "BytesLit":
         return _pa.BytesLit(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "ty"),
-            _py_ast_wire_field(fields, "value", b""),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "ty")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "value", b"")),
         )
     if kind == "Name":
         return _pa.Name(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "ty"),
-            _py_ast_wire_field(fields, "ident", ""),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "ty")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "ident", "")),
         )
     if kind == "BinOp":
         return _pa.BinOp(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "ty"),
-            _py_ast_wire_field(fields, "op", ""),
-            _py_ast_wire_field(fields, "lhs"),
-            _py_ast_wire_field(fields, "rhs"),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "ty")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "op", "")),
+            (fields[4] if positional else _py_ast_wire_field(fields, "lhs")),
+            (fields[5] if positional else _py_ast_wire_field(fields, "rhs")),
         )
     if kind == "UnaryOp":
         return _pa.UnaryOp(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "ty"),
-            _py_ast_wire_field(fields, "op", ""),
-            _py_ast_wire_field(fields, "operand"),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "ty")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "op", "")),
+            (fields[4] if positional else _py_ast_wire_field(fields, "operand")),
         )
     if kind == "Compare":
         return _pa.Compare(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "ty"),
-            _py_ast_wire_field(fields, "op", ""),
-            _py_ast_wire_field(fields, "lhs"),
-            _py_ast_wire_field(fields, "rhs"),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "ty")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "op", "")),
+            (fields[4] if positional else _py_ast_wire_field(fields, "lhs")),
+            (fields[5] if positional else _py_ast_wire_field(fields, "rhs")),
         )
     if kind == "BoolExpr":
         return _pa.BoolExpr(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "ty"),
-            _py_ast_wire_field(fields, "op", ""),
-            _py_ast_wire_field(fields, "left"),
-            _py_ast_wire_field(fields, "right"),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "ty")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "op", "")),
+            (fields[4] if positional else _py_ast_wire_field(fields, "left")),
+            (fields[5] if positional else _py_ast_wire_field(fields, "right")),
         )
     if kind == "Call":
         return _pa.Call(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "ty"),
-            _py_ast_wire_field(fields, "func"),
-            _py_ast_wire_field(fields, "args", ()),
-            _py_ast_wire_field(fields, "kwargs", ()),
-            _py_ast_wire_field(fields, "operand_order", ()),
-            _py_ast_wire_bool_field(fields, "is_set_literal", False),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "ty")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "func")),
+            (fields[4] if positional else _py_ast_wire_field(fields, "args", ())),
+            (fields[5] if positional else _py_ast_wire_field(fields, "kwargs", ())),
+            (fields[6] if positional else _py_ast_wire_field(fields, "operand_order", ())),
+            ((False if fields[7] is None else fields[7]) if positional else _py_ast_wire_bool_field(fields, "is_set_literal", False)),
         )
     if kind == "Attr":
         return _pa.Attr(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "ty"),
-            _py_ast_wire_field(fields, "obj"),
-            _py_ast_wire_field(fields, "name", ""),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "ty")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "obj")),
+            (fields[4] if positional else _py_ast_wire_field(fields, "name", "")),
         )
     if kind == "Subscript":
         return _pa.Subscript(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "ty"),
-            _py_ast_wire_field(fields, "obj"),
-            _py_ast_wire_field(fields, "idx"),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "ty")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "obj")),
+            (fields[4] if positional else _py_ast_wire_field(fields, "idx")),
         )
     if kind == "Slice":
         return _pa.Slice(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "ty"),
-            _py_ast_wire_field(fields, "lo"),
-            _py_ast_wire_field(fields, "hi"),
-            _py_ast_wire_field(fields, "step"),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "ty")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "lo")),
+            (fields[4] if positional else _py_ast_wire_field(fields, "hi")),
+            (fields[5] if positional else _py_ast_wire_field(fields, "step")),
         )
     if kind == "ListExpr":
         return _pa.ListExpr(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "ty"),
-            _py_ast_wire_field(fields, "elems", ()),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "ty")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "elems", ())),
         )
     if kind == "DictExpr":
         return _pa.DictExpr(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "ty"),
-            _py_ast_wire_field(fields, "pairs", ()),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "ty")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "pairs", ())),
         )
     if kind == "TupleExpr":
         return _pa.TupleExpr(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "ty"),
-            _py_ast_wire_field(fields, "elems", ()),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "ty")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "elems", ())),
         )
     if kind == "IfExpr":
         return _pa.IfExpr(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "ty"),
-            _py_ast_wire_field(fields, "cond"),
-            _py_ast_wire_field(fields, "then_e"),
-            _py_ast_wire_field(fields, "else_e"),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "ty")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "cond")),
+            (fields[4] if positional else _py_ast_wire_field(fields, "then_e")),
+            (fields[5] if positional else _py_ast_wire_field(fields, "else_e")),
         )
     if kind == "Lambda":
         return _pa.Lambda(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "ty"),
-            _py_ast_wire_field(fields, "params", ()),
-            _py_ast_wire_field(fields, "body"),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "ty")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "params", ())),
+            (fields[4] if positional else _py_ast_wire_field(fields, "body")),
         )
     if kind == "Assign":
         return _pa.Assign(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "targets", ()),
-            _py_ast_wire_field(fields, "value"),
-            _py_ast_wire_field(fields, "annotation"),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "targets", ())),
+            (fields[3] if positional else _py_ast_wire_field(fields, "value")),
+            (fields[4] if positional else _py_ast_wire_field(fields, "annotation")),
             # Older wire nodes represented every Assign as a value store.
             # Do not guess declaration-only syntax from a NoneLit value.
-            _py_ast_wire_field(fields, "has_value", True),
+            (fields[5] if positional else _py_ast_wire_field(fields, "has_value", True)),
         )
     if kind == "AugAssign":
         return _pa.AugAssign(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "target"),
-            _py_ast_wire_field(fields, "op", ""),
-            _py_ast_wire_field(fields, "value"),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "target")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "op", "")),
+            (fields[4] if positional else _py_ast_wire_field(fields, "value")),
         )
     if kind == "ExprStmt":
         return _pa.ExprStmt(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "expr"),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "expr")),
         )
     if kind == "If":
         return _pa.If(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "cond"),
-            _py_ast_wire_field(fields, "body", ()),
-            _py_ast_wire_field(fields, "else_body", ()),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "cond")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "body", ())),
+            (fields[4] if positional else _py_ast_wire_field(fields, "else_body", ())),
         )
     if kind == "While":
         return _pa.While(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "cond"),
-            _py_ast_wire_field(fields, "body", ()),
-            _py_ast_wire_field(fields, "else_body", ()),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "cond")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "body", ())),
+            (fields[4] if positional else _py_ast_wire_field(fields, "else_body", ())),
         )
     if kind == "For":
         return _pa.For(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "target"),
-            _py_ast_wire_field(fields, "iter"),
-            _py_ast_wire_field(fields, "body", ()),
-            _py_ast_wire_field(fields, "else_body", ()),
-            _py_ast_wire_field(fields, "is_async", False),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "target")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "iter")),
+            (fields[4] if positional else _py_ast_wire_field(fields, "body", ())),
+            (fields[5] if positional else _py_ast_wire_field(fields, "else_body", ())),
+            (fields[6] if positional else _py_ast_wire_field(fields, "is_async", False)),
         )
     if kind == "Return":
         return _pa.Return(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "value"),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "value")),
         )
     if kind == "Pass":
-        return _pa.Pass(_py_ast_wire_field(fields, "span"))
+        return _pa.Pass((fields[1] if positional else _py_ast_wire_field(fields, "span")))
     if kind == "Break":
-        return _pa.Break(_py_ast_wire_field(fields, "span"))
+        return _pa.Break((fields[1] if positional else _py_ast_wire_field(fields, "span")))
     if kind == "Continue":
-        return _pa.Continue(_py_ast_wire_field(fields, "span"))
+        return _pa.Continue((fields[1] if positional else _py_ast_wire_field(fields, "span")))
     if kind == "Raise":
         return _pa.Raise(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "exc"),
-            _py_ast_wire_field(fields, "cause"),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "exc")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "cause")),
         )
     if kind == "Try":
         return _pa.Try(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "body", ()),
-            _py_ast_wire_field(fields, "handlers", ()),
-            _py_ast_wire_field(fields, "else_body", ()),
-            _py_ast_wire_field(fields, "finally_body", ()),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "body", ())),
+            (fields[3] if positional else _py_ast_wire_field(fields, "handlers", ())),
+            (fields[4] if positional else _py_ast_wire_field(fields, "else_body", ())),
+            (fields[5] if positional else _py_ast_wire_field(fields, "finally_body", ())),
         )
     if kind == "ExceptHandler":
         return _pa.ExceptHandler(
-            _py_ast_wire_field(fields, "exc_type"),
-            _py_ast_wire_field(fields, "name"),
-            _py_ast_wire_field(fields, "body", ()),
-            _py_ast_wire_field(fields, "span"),
+            (fields[1] if positional else _py_ast_wire_field(fields, "exc_type")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "name")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "body", ())),
+            (fields[4] if positional else _py_ast_wire_field(fields, "span")),
         )
     if kind == "With":
         return _pa.With(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "items", ()),
-            _py_ast_wire_field(fields, "body", ()),
-            _py_ast_wire_field(fields, "is_async", False),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "items", ())),
+            (fields[3] if positional else _py_ast_wire_field(fields, "body", ())),
+            (fields[4] if positional else _py_ast_wire_field(fields, "is_async", False)),
         )
     if kind == "Import":
         return _pa.Import(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "names", ()),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "names", ())),
         )
     if kind == "ImportFrom":
         return _pa.ImportFrom(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "module", ""),
-            _py_ast_wire_field(fields, "names", ()),
-            _py_ast_wire_field(fields, "level", 0),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "module", "")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "names", ())),
+            (fields[4] if positional else _py_ast_wire_field(fields, "level", 0)),
         )
     if kind == "Global":
         return _pa.Global(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "names", ()),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "names", ())),
         )
     if kind == "Nonlocal":
         return _pa.Nonlocal(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "names", ()),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "names", ())),
         )
     if kind == "Delete":
         return _pa.Delete(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "targets", ()),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "targets", ())),
         )
     if kind == "Arg":
         return _pa.Arg(
-            _py_ast_wire_field(fields, "name", ""),
-            _py_ast_wire_field(fields, "annotation"),
-            _py_ast_wire_field(fields, "default"),
-            _py_ast_wire_field(fields, "kind", "pos"),
-            _py_ast_wire_field(fields, "has_default", False),
+            (fields[1] if positional else _py_ast_wire_field(fields, "name", "")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "annotation")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "default")),
+            (fields[4] if positional else _py_ast_wire_field(fields, "kind", "pos")),
+            (fields[5] if positional else _py_ast_wire_field(fields, "has_default", False)),
         )
     if kind == "FuncDef":
         return _pa.FuncDef(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "name", ""),
-            _py_ast_wire_field(fields, "args", ()),
-            _py_ast_wire_field(fields, "return_ty"),
-            _py_ast_wire_field(fields, "body", ()),
-            _py_ast_wire_field(fields, "decorators", ()),
-            _py_ast_wire_field(fields, "is_method", False),
-            _py_ast_wire_field(fields, "is_async", False),
-            _py_ast_wire_field(fields, "has_return_annotation", False),
-            _py_ast_wire_field(fields, "manual_pointer_abi", False),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "name", "")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "args", ())),
+            (fields[4] if positional else _py_ast_wire_field(fields, "return_ty")),
+            (fields[5] if positional else _py_ast_wire_field(fields, "body", ())),
+            (fields[6] if positional else _py_ast_wire_field(fields, "decorators", ())),
+            (fields[7] if positional else _py_ast_wire_field(fields, "is_method", False)),
+            (fields[8] if positional else _py_ast_wire_field(fields, "is_async", False)),
+            (fields[9] if positional else _py_ast_wire_field(fields, "has_return_annotation", False)),
+            (fields[10] if positional else _py_ast_wire_field(fields, "manual_pointer_abi", False)),
         )
     if kind == "ClassDef":
         return _pa.ClassDef(
-            _py_ast_wire_field(fields, "span"),
-            _py_ast_wire_field(fields, "name", ""),
-            _py_ast_wire_field(fields, "bases", ()),
-            _py_ast_wire_field(fields, "keywords", ()),
-            _py_ast_wire_field(fields, "body", ()),
-            _py_ast_wire_field(fields, "decorators", ()),
+            (fields[1] if positional else _py_ast_wire_field(fields, "span")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "name", "")),
+            (fields[3] if positional else _py_ast_wire_field(fields, "bases", ())),
+            (fields[4] if positional else _py_ast_wire_field(fields, "keywords", ())),
+            (fields[5] if positional else _py_ast_wire_field(fields, "body", ())),
+            (fields[6] if positional else _py_ast_wire_field(fields, "decorators", ())),
         )
     if kind == "Module":
         return _pa.Module(
-            _py_ast_wire_field(fields, "name", ""),
-            _py_ast_wire_field(fields, "body", ()),
-            _py_ast_wire_field(fields, "docstring"),
+            (fields[1] if positional else _py_ast_wire_field(fields, "name", "")),
+            (fields[2] if positional else _py_ast_wire_field(fields, "body", ())),
+            (fields[3] if positional else _py_ast_wire_field(fields, "docstring")),
         )
     raise PyPipelineError("unknown py_ast wire node kind " + kind)
 
@@ -1032,6 +1034,23 @@ def _py_ast_to_wire_v2(value, files: list, file_ids: dict):
     return {"n": row}
 
 
+# Preserve the version-pinned immutable field tuples independently of the
+# mutable schema mapping. A changed layout retains named constructor access.
+_PY_AST_V2_CANONICAL_FIELDS = {
+    kind: fields for kind, fields in _PY_AST_FIELD_NAME_OVERRIDES.items()
+}
+
+
+def _py_ast_v2_layout_is_canonical() -> bool:
+    if len(_PY_AST_FIELD_NAME_OVERRIDES) != len(_PY_AST_V2_CANONICAL_FIELDS):
+        return False
+    for kind, fields in _PY_AST_V2_CANONICAL_FIELDS.items():
+        if (kind not in _PY_AST_FIELD_NAME_OVERRIDES
+                or _PY_AST_FIELD_NAME_OVERRIDES[kind] is not fields):
+            return False
+    return True
+
+
 def _py_ast_v2_field_positions() -> dict:
     positions = {}
     for kind, field_names in _PY_AST_FIELD_NAME_OVERRIDES.items():
@@ -1042,7 +1061,7 @@ def _py_ast_v2_field_positions() -> dict:
     return positions
 
 
-def _py_ast_from_wire_v2(value, files: list, positions: dict):
+def _py_ast_from_wire_v2(value, files: list, positions: dict, positional: bool = False):
     if isinstance(value, dict):
         if len(value) != 1:
             raise PyPipelineError("invalid positional py_ast wire tag")
@@ -1062,7 +1081,9 @@ def _py_ast_from_wire_v2(value, files: list, positions: dict):
             # constructor normalizes or ignores. This is not a partial decode.
             decoded = [kind]
             for index in range(1, len(row)):
-                decoded.append(_py_ast_from_wire_v2(row[index], files, positions))
+                decoded.append(_py_ast_from_wire_v2(row[index], files, positions, positional))
+            if positional:
+                return _py_ast_node_from_wire(kind, decoded, True)
             return _py_ast_node_from_wire(kind, _PyAstV2Fields(decoded, field_positions))
         if "s" in value:
             from pcc.frontends.python import py_ast as _pa
@@ -1096,11 +1117,11 @@ def _py_ast_from_wire_v2(value, files: list, positions: dict):
                 raise PyPipelineError("invalid positional py_ast opaque map")
             out = {}
             for key, item in mapping.items():
-                out[str(key)] = _py_ast_from_wire_v2(item, files, positions)
+                out[str(key)] = _py_ast_from_wire_v2(item, files, positions, positional)
             return out
         raise PyPipelineError("unknown positional py_ast wire tag")
     if isinstance(value, list):
-        return tuple(_py_ast_from_wire_v2(item, files, positions) for item in value)
+        return tuple(_py_ast_from_wire_v2(item, files, positions, positional) for item in value)
     return value
 
 
@@ -1122,7 +1143,10 @@ def _decode_py_ast_v2_payload(payload):
         if not isinstance(file, str) or file in seen:
             raise PyPipelineError("invalid positional py_ast source file table")
         seen[file] = True
-    return _py_ast_from_wire_v2(payload["module"], files, _py_ast_v2_field_positions())
+    return _py_ast_from_wire_v2(
+        payload["module"], files, _py_ast_v2_field_positions(),
+        _py_ast_v2_layout_is_canonical(),
+    )
 
 
 def _write_py_ast_wire_v2(path: str, ast_mod) -> None:
@@ -1272,7 +1296,7 @@ def _owned_ast_tape_checked_leaf(text: str, packed: int, kind: int, length: int)
     return value
 
 
-def _owned_ast_tape_materialize(text: str, tape: bytes, index: int, packed: int, length: int, files: list, positions: dict):
+def _owned_ast_tape_materialize(text: str, tape: bytes, index: int, packed: int, length: int, files: list, positions: dict, positional: bool = False):
     kind = (packed >> 29) & 7
     if kind >= 3:
         return _owned_ast_tape_checked_leaf(text,packed,kind,length)
@@ -1290,37 +1314,39 @@ def _owned_ast_tape_materialize(text: str, tape: bytes, index: int, packed: int,
         j += 1
         # Exact canonical contract and arity were checked by the full
         # preflight. Retain original child order and constructor arguments.
-        if name == "IntLit" or name == "StrLit" or name == "IntType":
+        if positional and (name == "IntLit" or name == "StrLit" or name == "IntType"):
             child = _owned_ast_tape_record(tape,j)
-            first = _owned_ast_tape_materialize(text,tape,j,child,length,files,positions)
+            first = _owned_ast_tape_materialize(text,tape,j,child,length,files,positions,positional)
             j = (child >> 32) if ((child >> 29) & 7) < 3 else j+1
             child = _owned_ast_tape_record(tape,j)
-            second = _owned_ast_tape_materialize(text,tape,j,child,length,files,positions)
+            second = _owned_ast_tape_materialize(text,tape,j,child,length,files,positions,positional)
             j = (child >> 32) if ((child >> 29) & 7) < 3 else j+1
             child = _owned_ast_tape_record(tape,j)
-            third = _owned_ast_tape_materialize(text,tape,j,child,length,files,positions)
+            third = _owned_ast_tape_materialize(text,tape,j,child,length,files,positions,positional)
             if name == "IntLit":
                 return py_ast.IntLit(first,second,third)
             if name == "StrLit":
                 return py_ast.StrLit(first,second,third)
             return py_ast.IntType(first,second,third)
-        if name == "StrType" or name == "DynType":
-            value = _owned_ast_tape_materialize(text,tape,j,_owned_ast_tape_record(tape,j),length,files,positions)
+        if positional and (name == "StrType" or name == "DynType"):
+            value = _owned_ast_tape_materialize(text,tape,j,_owned_ast_tape_record(tape,j),length,files,positions,positional)
             if name == "StrType":
                 return py_ast.StrType(value)
             return py_ast.DynType(value)
         fields = [name]
         while j < end:
             child = _owned_ast_tape_record(tape,j)
-            fields.append(_owned_ast_tape_materialize(text,tape,j,child,length,files,positions))
+            fields.append(_owned_ast_tape_materialize(text,tape,j,child,length,files,positions,positional))
             j = (child >> 32) if ((child >> 29) & 7) < 3 else j+1
+        if positional:
+            return _py_ast_node_from_wire(name, fields, True)
         return _py_ast_node_from_wire(name,_PyAstV2Fields(fields,positions[name]))
     if kind != 0:
         raise PyPipelineError("invalid validated compact AST container")
     values = []
     while j < end:
         child = _owned_ast_tape_record(tape,j)
-        values.append(_owned_ast_tape_materialize(text,tape,j,child,length,files,positions))
+        values.append(_owned_ast_tape_materialize(text,tape,j,child,length,files,positions,positional))
         j = (child >> 32) if ((child >> 29) & 7) < 3 else j+1
     return tuple(values)
 
@@ -1341,6 +1367,7 @@ def _decode_py_ast_wire(text: str, path: str = ""):
                 return _owned_ast_tape_materialize(
                     text, tape, root, _owned_ast_tape_record(tape, root),
                     _owned_ast_tape_text_len(text), files, positions,
+                    _py_ast_v2_layout_is_canonical(),
                 )
             # Release unsupported tape before allocating the old raw graph.
             tape = None
